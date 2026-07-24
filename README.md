@@ -61,21 +61,23 @@ API). Use AWS S3 when you are AWS-native or want lifecycle/replication
 features. The API server speaks the S3 API to either; only
 `S3_ENDPOINT_URL`/credentials differ.
 
-## Kubernetes runbook
+## Standalone Kubernetes runbook
+
+Use this only for a self-hosted cluster with no ORES `k8s-cluster`. For the
+production deploy, follow [docs/wiring-k8s-cluster.md](docs/wiring-k8s-cluster.md)
+instead — there the manifests are owned by the app repos, not these overlays.
 
 ```sh
 # preview what the overlays render
 kubectl kustomize k8s/manifests/zed-api-server/overlays/prod
 kubectl kustomize k8s/manifests/zed-web-server/overlays/prod
 
-# bootstrap via Argo CD (once the cluster is wired — see docs/)
+# bootstrap a standalone Argo CD app-of-apps
 kubectl apply -f k8s/bootstrap/zed.yaml
 ```
 
-See [docs/wiring-k8s-cluster.md](docs/wiring-k8s-cluster.md) for attaching
-this to the `~/codes/ores/k8s-cluster` app-of-apps root via the
-`zed-monorepo` submodule, building images (parent-dir build context), and
-creating secrets.
+Building images uses a parent-dir build context (the services path-depend on
+`../zed-interfaces`); see the wiring doc for the exact commands.
 
 ## License
 
