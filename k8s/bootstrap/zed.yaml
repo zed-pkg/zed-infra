@@ -1,0 +1,26 @@
+# Root Application of the zed-pkg app-of-apps. THIS is the file the user's
+# cluster repo (~/codes/ores/k8s-cluster) references to pull in all of
+# zed-pkg. It points Argo CD at k8s/apps, which holds one child Application
+# per service. See docs/wiring-k8s-cluster.md.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: zed
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/zed-pkg/zed-infra.git
+    targetRevision: main
+    path: k8s/apps
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

@@ -1,0 +1,7 @@
+cloudflare_api_token = "REPLACE-ME"
+account_id           = "REPLACE-ME-account-id"
+zone_id              = "REPLACE-ME-zone-id"
+r2_location          = "wnam"
+registry_origin      = "origin.zpkg.tech"
+web_origin           = "origin.zpkg.tech"
+marketing_origin     = "zed-pkg.github.io"

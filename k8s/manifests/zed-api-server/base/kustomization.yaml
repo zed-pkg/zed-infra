@@ -1,0 +1,9 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - deployment.yaml
+  - service.yaml
+  - ingress.yaml
+  - configmap.yaml
+  # secret.example.yaml is a template; the real secret is created out-of-band
+  # (SOPS/External Secrets). Kustomize does not apply it.

@@ -1,0 +1,21 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: zed-api-server
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/zed-pkg/zed-infra.git
+    targetRevision: main
+    # Change overlays/prod -> overlays/dev for a dev cluster.
+    path: k8s/manifests/zed-api-server/overlays/prod
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: zed
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

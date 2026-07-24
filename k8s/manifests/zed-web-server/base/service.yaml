@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: zed-web-server
+spec:
+  selector:
+    app: zed-web-server
+  ports:
+    - port: 80
+      targetPort: 8081
