@@ -10,14 +10,30 @@ terraform/
   aws/          S3 artifact bucket + least-priv IAM    (alternative)
   gcp/          planned (GCS + GKE)
 k8s/
-  bootstrap/zed.yaml         root Application (app-of-apps entrypoint)
+  bootstrap/zed.yaml         root Application (standalone app-of-apps entrypoint)
   apps/                      child Applications (one per service)
   manifests/
     zed-api-server/          kustomize base + overlays/{dev,prod}
     zed-web-server/          kustomize base + overlays/{dev,prod}
     postgres/                production guidance + dev StatefulSet
-docs/wiring-k8s-cluster.md   how to attach this to ~/codes/ores/k8s-cluster
+docs/wiring-k8s-cluster.md   attach to ~/codes/ores/k8s-cluster (canonical prod)
 ```
+
+## Two deployment paths
+
+1. **Canonical / production — the ORES k8s-cluster app-of-apps.** The
+   namespace-scoped manifests are owned by each **app repo**
+   (`zed-api-server.rs/k8s`, `zed-web-server.rs/k8s`); `k8s-cluster` owns the
+   `zed` tenant + `AppProject` + `Application` pointers. This is the source of
+   truth for the running backend. See
+   [docs/wiring-k8s-cluster.md](docs/wiring-k8s-cluster.md).
+2. **Standalone / dev self-host — this repo's `k8s/`.** A self-contained
+   Argo CD app-of-apps (`k8s/bootstrap/zed.yaml`) for a personal or air-gapped
+   cluster with no dependency on the ORES platform. Its `overlays/dev` adds an
+   in-cluster Postgres and local artifact storage that have no place in the
+   contract-bound app-repo manifests.
+
+The Terraform (DNS/edge/buckets) is shared by both paths.
 
 ## Prerequisites
 
@@ -45,21 +61,23 @@ API). Use AWS S3 when you are AWS-native or want lifecycle/replication
 features. The API server speaks the S3 API to either; only
 `S3_ENDPOINT_URL`/credentials differ.
 
-## Kubernetes runbook
+## Standalone Kubernetes runbook
+
+Use this only for a self-hosted cluster with no ORES `k8s-cluster`. For the
+production deploy, follow [docs/wiring-k8s-cluster.md](docs/wiring-k8s-cluster.md)
+instead — there the manifests are owned by the app repos, not these overlays.
 
 ```sh
 # preview what the overlays render
 kubectl kustomize k8s/manifests/zed-api-server/overlays/prod
 kubectl kustomize k8s/manifests/zed-web-server/overlays/prod
 
-# bootstrap via Argo CD (once the cluster is wired — see docs/)
+# bootstrap a standalone Argo CD app-of-apps
 kubectl apply -f k8s/bootstrap/zed.yaml
 ```
 
-See [docs/wiring-k8s-cluster.md](docs/wiring-k8s-cluster.md) for attaching
-this to the `~/codes/ores/k8s-cluster` app-of-apps root via the
-`zed-monorepo` submodule, building images (parent-dir build context), and
-creating secrets.
+Building images uses a parent-dir build context (the services path-depend on
+`../zed-interfaces`); see the wiring doc for the exact commands.
 
 ## License
 
