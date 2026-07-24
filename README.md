@@ -10,14 +10,30 @@ terraform/
   aws/          S3 artifact bucket + least-priv IAM    (alternative)
   gcp/          planned (GCS + GKE)
 k8s/
-  bootstrap/zed.yaml         root Application (app-of-apps entrypoint)
+  bootstrap/zed.yaml         root Application (standalone app-of-apps entrypoint)
   apps/                      child Applications (one per service)
   manifests/
     zed-api-server/          kustomize base + overlays/{dev,prod}
     zed-web-server/          kustomize base + overlays/{dev,prod}
     postgres/                production guidance + dev StatefulSet
-docs/wiring-k8s-cluster.md   how to attach this to ~/codes/ores/k8s-cluster
+docs/wiring-k8s-cluster.md   attach to ~/codes/ores/k8s-cluster (canonical prod)
 ```
+
+## Two deployment paths
+
+1. **Canonical / production — the ORES k8s-cluster app-of-apps.** The
+   namespace-scoped manifests are owned by each **app repo**
+   (`zed-api-server.rs/k8s`, `zed-web-server.rs/k8s`); `k8s-cluster` owns the
+   `zed` tenant + `AppProject` + `Application` pointers. This is the source of
+   truth for the running backend. See
+   [docs/wiring-k8s-cluster.md](docs/wiring-k8s-cluster.md).
+2. **Standalone / dev self-host — this repo's `k8s/`.** A self-contained
+   Argo CD app-of-apps (`k8s/bootstrap/zed.yaml`) for a personal or air-gapped
+   cluster with no dependency on the ORES platform. Its `overlays/dev` adds an
+   in-cluster Postgres and local artifact storage that have no place in the
+   contract-bound app-repo manifests.
+
+The Terraform (DNS/edge/buckets) is shared by both paths.
 
 ## Prerequisites
 
