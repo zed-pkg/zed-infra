@@ -12,6 +12,19 @@ patches:
       - op: replace
         path: /spec/replicas
         value: 1
+      # STORAGE_BACKEND=local writes to STORAGE_LOCAL_DIR (/data/artifacts), but
+      # the base sets readOnlyRootFilesystem: true. Back that path with a
+      # writable emptyDir so artifact writes succeed in dev.
+      - op: add
+        path: /spec/template/spec/volumes
+        value:
+          - name: artifacts
+            emptyDir: {}
+      - op: add
+        path: /spec/template/spec/containers/0/volumeMounts
+        value:
+          - name: artifacts
+            mountPath: /data/artifacts
 configMapGenerator:
   - name: zed-api-server-config
     behavior: merge
