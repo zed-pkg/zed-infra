@@ -74,6 +74,13 @@ resource "aws_iam_user_policy" "api" {
   })
 }
 
+# SECURITY: This mints a long-lived static IAM access key whose secret is stored
+# in plaintext in Terraform state (no encrypted remote backend is configured
+# above). For production, prefer IRSA / OIDC: bind the zed-api-server Kubernetes
+# ServiceAccount to an IAM role via an OIDC trust policy (EKS Pod Identity or
+# IRSA) so pods receive short-lived, auto-rotated credentials and no static
+# secret is ever created or persisted to state. Keep this key only for local/dev
+# or non-EKS deployments, and rotate it regularly.
 resource "aws_iam_access_key" "api" {
   user = aws_iam_user.api.name
 }
