@@ -6,6 +6,17 @@ terraform {
       version = "~> 5.0"
     }
   }
+
+  # Local state by default; switch to an S3 remote backend with DynamoDB state
+  # locking for teams. Remote state is encrypted at rest and versioned, which
+  # matters here because IAM access-key secrets land in state (see below).
+  # backend "s3" {
+  #   bucket         = "zed-tfstate"
+  #   key            = "aws/terraform.tfstate"
+  #   region         = "us-east-1"
+  #   dynamodb_table = "zed-tfstate-lock"
+  #   encrypt        = true
+  # }
 }
 
 provider "aws" {
