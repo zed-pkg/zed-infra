@@ -4,17 +4,15 @@ namespace: zed
 resources:
   - ../../base
 
-# Pin the deployed revision by DIGEST here. The base tracks the mutable `main`
-# tag (fine for dev), but prod should deploy a declared, reviewable, and
-# rollback-able revision — a digest is the only identifier a registry cannot
-# re-point. Uncomment and let CI bump `digest` on release:
+# The base pins a release tag (v0.1.0), which is the right default. For prod,
+# prefer a DIGEST: a tag is a mutable pointer the registry can re-target, so
+# only a digest guarantees every replica — and every future rollout — runs the
+# byte-identical image that was reviewed. Uncomment and let the release
+# workflow bump it:
 #
 # images:
 #   - name: ghcr.io/zed-pkg/zed-api-server
-#     digest: sha256:<image digest published by the release workflow>
-#
-# Until that is wired up the base's imagePullPolicy: Always at least keeps all
-# replicas converged on the same current `main` build.
+#     digest: sha256:<digest published by the release workflow>
 patches:
   - target:
       kind: Deployment
