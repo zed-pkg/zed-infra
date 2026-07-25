@@ -3,6 +3,16 @@ kind: Kustomization
 namespace: zed
 resources:
   - ../../base
+
+# The base pins a release tag (v0.1.0), which is the right default. For prod,
+# prefer a DIGEST: a tag is a mutable pointer the registry can re-target, so
+# only a digest guarantees every replica — and every future rollout — runs the
+# byte-identical image that was reviewed. Uncomment and let the release
+# workflow bump it:
+#
+# images:
+#   - name: ghcr.io/zed-pkg/zed-api-server
+#     digest: sha256:<digest published by the release workflow>
 patches:
   - target:
       kind: Deployment
