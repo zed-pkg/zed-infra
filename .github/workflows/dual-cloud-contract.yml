@@ -90,7 +90,7 @@ jobs:
           grep -q 'host: aws.zpkg.tech' /tmp/web-aws.yaml
           grep -q 'host: hetzner.zpkg.tech' /tmp/web-hetzner.yaml
 
-      - name: Ratchet deployment workflow safety
+      - name: Ratchet deployment, volatile-store consistency, and package certification
         shell: bash
         working-directory: zed-infra
         run: |
@@ -98,14 +98,25 @@ jobs:
           workflow=.github/workflows/deploy-zed-cloud.yml
           grep -q 'cloud: \[aws, hetzner\]' "$workflow"
           grep -Fq 'environment: ${{ matrix.cloud }}' "$workflow"
+          grep -q 'timeout-minutes: 60' "$workflow"
           grep -q 'KUBECONFIG_B64' "$workflow"
           grep -q 'ZED_GHCR_USERNAME' "$workflow"
           grep -q 'ZED_GHCR_TOKEN' "$workflow"
           grep -q 'persist-credentials: false' "$workflow"
           grep -q 'zed-postgres-pgvector.yaml' "$workflow"
           grep -q 'pgvector/pgvector:0.8.5-pg16' "$workflow"
+          grep -q 'rollout restart deployment/zed-postgres' "$workflow"
           grep -q 'rollout restart deployment/dd-zed-api-server deployment/dd-zed-web-server' "$workflow"
+          grep -q 'service/dd-zed-api-server 48080:8080' "$workflow"
+          grep -q 'zed publish --allow-dirty --skip-vcs-checks' "$workflow" || \
+            grep -q 'publish --allow-dirty --skip-vcs-checks' "$workflow"
+          grep -q 'install --install-mode copy' "$workflow"
+          grep -q 'install --frozen --install-mode copy' "$workflow"
+          grep -q 'opto-sync/opto-sync-e2e' "$workflow"
+          grep -q 'opto-sync/opto-sync-clients' "$workflow"
+          grep -q 'opto-sync/syncer' "$workflow"
+          grep -q '7795ce2d1342e17d934d2faafff5c8ed4322609e' "$workflow"
+          grep -q '54874e9f7df6009fccd9034fce39306daef2c043' "$workflow"
+          grep -q '1d47bd46cf3785416295daf6af84afb8053f1cfd' "$workflow"
           grep -q 'medium: Memory' "$workflow"
-          grep -q 'registry.aws.zpkg.tech' "$workflow"
-          grep -q 'registry.hetzner.zpkg.tech' "$workflow"
           ! grep -Eq '(kubeconfig|docker-password):[[:space:]]+[^$]' "$workflow"
