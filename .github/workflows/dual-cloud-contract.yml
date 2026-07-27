@@ -1,0 +1,111 @@
+name: dual cloud contract
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/deploy-zed-cloud.yml'
+      - '.github/workflows/dual-cloud-contract.yml'
+      - 'k8s/bootstrap/**'
+      - 'docs/dual-cloud-bootstrap.md'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/deploy-zed-cloud.yml'
+      - '.github/workflows/dual-cloud-contract.yml'
+      - 'k8s/bootstrap/**'
+      - 'docs/dual-cloud-bootstrap.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout deployment controller
+        uses: actions/checkout@v4
+        with:
+          path: zed-infra
+          persist-credentials: false
+
+      - name: Checkout canonical cluster bootstrap
+        uses: actions/checkout@v4
+        with:
+          repository: ORESoftware/k8s-cluster
+          ref: fe85db4942e2cdd6eef79f32f001f652cbcf72de
+          path: k8s-cluster
+          persist-credentials: false
+
+      - name: Checkout registry API manifests
+        uses: actions/checkout@v4
+        with:
+          repository: zed-pkg/zed-api-server.rs
+          ref: main
+          path: zed-api-server.rs
+          persist-credentials: false
+
+      - name: Checkout registry web manifests
+        uses: actions/checkout@v4
+        with:
+          repository: zed-pkg/zed-web-server.rs
+          ref: main
+          path: zed-web-server.rs
+          persist-credentials: false
+
+      - name: Render both application stacks
+        shell: bash
+        run: |
+          set -euo pipefail
+          for cloud in aws hetzner; do
+            kubectl kustomize "zed-api-server.rs/k8s/overlays/$cloud" > "/tmp/api-$cloud.yaml"
+            kubectl kustomize "zed-web-server.rs/k8s/overlays/$cloud" > "/tmp/web-$cloud.yaml"
+          done
+
+      - name: Verify bootstrap resource ownership and memory stores
+        shell: bash
+        run: |
+          set -euo pipefail
+          tenant=k8s-cluster/remote/argocd/projects/zed.tenant.yaml
+          postgres=zed-infra/k8s/bootstrap/zed-postgres-pgvector.yaml
+          grep -q 'name: zed' "$tenant"
+          grep -q 'podSelector: {}' "$tenant"
+          grep -q 'image: pgvector/pgvector:0.8.5-pg16' "$postgres"
+          grep -q 'medium: Memory' "$postgres"
+          grep -q 'sizeLimit: 512Mi' "$postgres"
+          grep -q 'replicas: 1' "$postgres"
+          for cloud in aws hetzner; do
+            api="/tmp/api-$cloud.yaml"
+            web="/tmp/web-$cloud.yaml"
+            grep -q 'replicas: 1' "$api"
+            grep -q 'medium: Memory' "$api"
+            grep -q 'sizeLimit: 512Mi' "$api"
+            grep -q 'value: local' "$api"
+            grep -q "registry.$cloud.zpkg.tech" "$api"
+            grep -q 'image: ghcr.io/zed-pkg/zed-api-server:main' "$api"
+            grep -q 'replicas: 2' "$web"
+            grep -q "registry.$cloud.zpkg.tech" "$web"
+            grep -q 'image: ghcr.io/zed-pkg/zed-web-server:main' "$web"
+          done
+          grep -q 'host: aws.zpkg.tech' /tmp/web-aws.yaml
+          grep -q 'host: hetzner.zpkg.tech' /tmp/web-hetzner.yaml
+
+      - name: Ratchet deployment workflow safety
+        shell: bash
+        working-directory: zed-infra
+        run: |
+          set -euo pipefail
+          workflow=.github/workflows/deploy-zed-cloud.yml
+          grep -q 'cloud: \[aws, hetzner\]' "$workflow"
+          grep -Fq 'environment: ${{ matrix.cloud }}' "$workflow"
+          grep -q 'KUBECONFIG_B64' "$workflow"
+          grep -q 'ZED_GHCR_USERNAME' "$workflow"
+          grep -q 'ZED_GHCR_TOKEN' "$workflow"
+          grep -q 'persist-credentials: false' "$workflow"
+          grep -q 'zed-postgres-pgvector.yaml' "$workflow"
+          grep -q 'pgvector/pgvector:0.8.5-pg16' "$workflow"
+          grep -q 'rollout restart deployment/dd-zed-api-server deployment/dd-zed-web-server' "$workflow"
+          grep -q 'medium: Memory' "$workflow"
+          grep -q 'registry.aws.zpkg.tech' "$workflow"
+          grep -q 'registry.hetzner.zpkg.tech' "$workflow"
+          ! grep -Eq '(kubeconfig|docker-password):[[:space:]]+[^$]' "$workflow"
