@@ -12,10 +12,6 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: zed-cloud-${{ matrix.cloud }}
-  cancel-in-progress: false
-
 jobs:
   deploy:
     name: deploy ${{ matrix.cloud }}
@@ -26,6 +22,9 @@ jobs:
       matrix:
         cloud: [aws, hetzner]
     environment: ${{ matrix.cloud }}
+    concurrency:
+      group: zed-cloud-${{ matrix.cloud }}
+      cancel-in-progress: false
     env:
       KUBECONFIG: ${{ github.workspace }}/.kube/config
       KUBECONFIG_B64: ${{ secrets.KUBECONFIG_B64 }}
@@ -148,6 +147,7 @@ jobs:
           set -euo pipefail
           kubectl -n zed run "zed-health-${{ matrix.cloud }}-${GITHUB_RUN_ID}" \
             --image=curlimages/curl:8.10.1 \
+            --labels=app.kubernetes.io/part-of=zed \
             --restart=Never \
             --rm --attach \
             --command -- sh -ceu '
