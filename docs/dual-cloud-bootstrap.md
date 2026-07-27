@@ -19,10 +19,17 @@ This profile is intentionally disposable but complete enough for real
 `zed publish` and `zed install` transactions:
 
 - one API replica owns a 512 MiB memory-backed `emptyDir` artifact store;
-- one Postgres replica owns a 512 MiB memory-backed `emptyDir` metadata store;
+- one `pgvector/pgvector:0.8.5-pg16` replica owns a 512 MiB memory-backed
+  `emptyDir` metadata store;
 - two read-only web replicas share that metadata service;
 - automatic migrations, authentication bypass, tag-verification bypass, and
   rate-limit bypass are enabled only for this bootstrap phase.
+
+The pgvector image is load-bearing: registry migration
+`m20260726_000007_embeddings_and_tags` creates the PostgreSQL `vector`
+extension. Plain PostgreSQL 16 cannot satisfy the complete schema. The deploy
+workflow verifies that the migration installed a `0.8.x` vector extension
+before testing the registry endpoints.
 
 The API must remain at one replica while storage is pod-local. Scaling it before
 moving artifacts to R2/S3 would make downloads intermittently miss depending on
@@ -35,15 +42,16 @@ which replica receives the request.
 | AWS | `https://registry.aws.zpkg.tech` | `https://aws.zpkg.tech` |
 | Hetzner | `https://registry.hetzner.zpkg.tech` | `https://hetzner.zpkg.tech` |
 
-The deployment waits for Postgres, API, and web rollouts, verifies the rendered
-memory-storage contract, checks both Services from a labeled in-cluster curl pod,
-and finally probes both public TLS endpoints.
+The deployment waits for pgvector/Postgres, API, and web rollouts, verifies both
+memory-storage contracts, checks the installed `vector` extension, checks both
+Services from a labeled in-cluster curl pod, and finally probes both public TLS
+endpoints.
 
 ## Production transition
 
 Before accepting untrusted public publishers:
 
-1. move metadata to durable Postgres/Supabase;
+1. move metadata to durable PostgreSQL/Supabase with pgvector enabled;
 2. move artifacts to R2/S3 and raise the API replica count;
 3. restore authentication, tag verification, and rate limiting;
 4. pin images by digest instead of the bootstrap `main` tag;
