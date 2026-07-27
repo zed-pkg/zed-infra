@@ -12,12 +12,13 @@ on:
 
 permissions:
   contents: read
+  packages: read
 
 jobs:
   deploy:
-    name: deploy ${{ matrix.cloud }}
+    name: deploy and certify ${{ matrix.cloud }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -32,6 +33,13 @@ jobs:
       ZED_GHCR_USERNAME: ${{ secrets.ZED_GHCR_USERNAME }}
       ZED_GHCR_TOKEN: ${{ secrets.ZED_GHCR_TOKEN }}
       K8S_CLUSTER_REF: fe85db4942e2cdd6eef79f32f001f652cbcf72de
+      ZED_CLI_REF: c636fb8f6b08695c6b4fe94e2481f4d57270b2d7
+      ZED_INTERFACES_REF: 415e871b1fb3dd97744c134351408a3224805dfb
+      SYNCER_REF: 7795ce2d1342e17d934d2faafff5c8ed4322609e
+      CLIENTS_REF: 54874e9f7df6009fccd9034fce39306daef2c043
+      OPTO_E2E_REF: 1d47bd46cf3785416295daf6af84afb8053f1cfd
+      ZED_PKG_HOME: ${{ github.workspace }}/.zed-home-${{ matrix.cloud }}
+      ZED_PKG_TOKEN: bootstrap-opto-sync-e2e
     steps:
       - name: Checkout deployment controller
         uses: actions/checkout@v4
@@ -63,6 +71,58 @@ jobs:
           path: zed-web-server.rs
           persist-credentials: false
 
+      - name: Checkout pinned Zed CLI
+        uses: actions/checkout@v4
+        with:
+          repository: zed-pkg/zed-cli
+          ref: ${{ env.ZED_CLI_REF }}
+          path: zed-cli
+          persist-credentials: false
+
+      - name: Checkout pinned Zed interfaces
+        uses: actions/checkout@v4
+        with:
+          repository: zed-pkg/zed-interfaces
+          ref: ${{ env.ZED_INTERFACES_REF }}
+          path: zed-interfaces
+          persist-credentials: false
+
+      - name: Checkout certified syncer release source
+        uses: actions/checkout@v4
+        with:
+          repository: opto-sync/syncer.c
+          ref: ${{ env.SYNCER_REF }}
+          path: syncer.c
+          persist-credentials: false
+
+      - name: Checkout certified clients and nested core
+        uses: actions/checkout@v4
+        with:
+          repository: opto-sync/opto-sync-clients
+          ref: ${{ env.CLIENTS_REF }}
+          path: opto-sync-clients
+          fetch-depth: 0
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Checkout certified opto-sync E2E package
+        uses: actions/checkout@v4
+        with:
+          repository: opto-sync/opto-sync-e2e
+          ref: ${{ env.OPTO_E2E_REF }}
+          path: opto-sync-e2e
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: zed-cli
+
+      - name: Build the pinned Zed CLI
+        working-directory: zed-cli
+        run: cargo build --release --locked
+
       - name: Materialize the selected cluster credential
         shell: bash
         run: |
@@ -73,22 +133,6 @@ jobs:
           chmod 600 "$KUBECONFIG"
           kubectl config current-context
           kubectl get nodes -o wide
-
-      - name: Select cloud-local public endpoints
-        shell: bash
-        run: |
-          set -euo pipefail
-          case '${{ matrix.cloud }}' in
-            aws)
-              echo 'REGISTRY_URL=https://registry.aws.zpkg.tech' >> "$GITHUB_ENV"
-              echo 'WEB_URL=https://aws.zpkg.tech' >> "$GITHUB_ENV"
-              ;;
-            hetzner)
-              echo 'REGISTRY_URL=https://registry.hetzner.zpkg.tech' >> "$GITHUB_ENV"
-              echo 'WEB_URL=https://hetzner.zpkg.tech' >> "$GITHUB_ENV"
-              ;;
-            *) exit 2 ;;
-          esac
 
       - name: Apply the disposable tenant and pgvector metadata store
         shell: bash
@@ -111,22 +155,23 @@ jobs:
             --docker-email=zed-cloud@users.noreply.github.com \
             --dry-run=client -o yaml | kubectl apply -f -
 
-      - name: Apply the cloud-specific registry and web overlays
+      - name: Reset both volatile storage tiers together
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The registry metadata and artifact bytes are both intentionally
+          # volatile. Resetting only one produces metadata that points to missing
+          # artifacts, so each certification starts both stores from zero.
+          kubectl -n zed rollout restart deployment/zed-postgres
+          kubectl -n zed rollout status deployment/zed-postgres --timeout=180s
+
+      - name: Apply and restart the cloud-local registry and web workloads
         shell: bash
         run: |
           set -euo pipefail
           kubectl apply -k "zed-api-server.rs/k8s/overlays/${{ matrix.cloud }}"
           kubectl apply -k "zed-web-server.rs/k8s/overlays/${{ matrix.cloud }}"
-          # The workloads intentionally use the mutable bootstrap :main tag.
-          # Force new pods so imagePullPolicy=Always actually observes the image
-          # just published by each service repository.
           kubectl -n zed rollout restart deployment/dd-zed-api-server deployment/dd-zed-web-server
-
-      - name: Wait for the RAM-backed stack
-        shell: bash
-        run: |
-          set -euo pipefail
-          kubectl -n zed rollout status deployment/zed-postgres --timeout=180s
           kubectl -n zed rollout status deployment/dd-zed-api-server --timeout=300s
           kubectl -n zed rollout status deployment/dd-zed-web-server --timeout=300s
           kubectl -n zed get pods,service,ingress -o wide
@@ -148,7 +193,7 @@ jobs:
           kubectl -n zed exec deployment/zed-postgres -- \
             psql -U zed -d zed -Atc "select extversion from pg_extension where extname = 'vector'" | grep -Eq '^0\.8\.'
 
-      - name: Verify cluster-local and public health
+      - name: Verify cluster-local API and web health
         shell: bash
         run: |
           set -euo pipefail
@@ -161,5 +206,102 @@ jobs:
               curl -fsS http://dd-zed-api-server:8080/healthz
               curl -fsS http://dd-zed-web-server:8081/healthz
             '
-          curl --fail --silent --show-error --retry 30 --retry-delay 5 --retry-all-errors "$REGISTRY_URL/healthz"
-          curl --fail --silent --show-error --retry 30 --retry-delay 5 --retry-all-errors "$WEB_URL/healthz"
+
+      - name: Publish, install, erase, and frozen-reinstall through the live Service
+        shell: bash
+        env:
+          ZED: ${{ github.workspace }}/zed-cli/target/release/zed
+          ZED_PKG_REGISTRY: http://127.0.0.1:48080
+        run: |
+          set -euo pipefail
+          mkdir -p "zed-infra/certification/${{ matrix.cloud }}"
+          kubectl -n zed port-forward service/dd-zed-api-server 48080:8080 \
+            > "zed-infra/certification/${{ matrix.cloud }}/port-forward.log" 2>&1 &
+          pf_pid=$!
+          cleanup() {
+            kill "$pf_pid" >/dev/null 2>&1 || true
+            wait "$pf_pid" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          for _ in $(seq 1 60); do
+            if ! kill -0 "$pf_pid" 2>/dev/null; then
+              cat "zed-infra/certification/${{ matrix.cloud }}/port-forward.log" >&2
+              exit 1
+            fi
+            if curl -fsS "$ZED_PKG_REGISTRY/healthz"; then
+              break
+            fi
+            sleep 1
+          done
+          curl -fsS "$ZED_PKG_REGISTRY/healthz"
+
+          for package in syncer.c opto-sync-clients opto-sync-e2e; do
+            echo "== publishing ${package} to ${{ matrix.cloud }} =="
+            (cd "$package" && "$ZED" publish --allow-dirty --skip-vcs-checks)
+          done
+
+          curl -fsS "$ZED_PKG_REGISTRY/v1/packages/opto-sync/syncer/versions/0.2.1" \
+            > "zed-infra/certification/${{ matrix.cloud }}/syncer.json"
+          curl -fsS "$ZED_PKG_REGISTRY/v1/packages/opto-sync/opto-sync-clients/versions/0.2.0" \
+            > "zed-infra/certification/${{ matrix.cloud }}/clients.json"
+          curl -fsS "$ZED_PKG_REGISTRY/v1/packages/opto-sync/opto-sync-e2e/versions/0.1.0" \
+            > "zed-infra/certification/${{ matrix.cloud }}/e2e.json"
+
+          consumer="consumer-${{ matrix.cloud }}"
+          mkdir "$consumer"
+          cat > "$consumer/.zpkg.toml" <<'TOML'
+          [package]
+          org = "zed-cloud-smoke"
+          name = "opto-sync-consumer"
+          version = "0.0.0"
+          description = "Live cluster transitive installation smoke test"
+          license = "MIT"
+
+          [package.repository]
+          vcs = "git"
+          url = "https://github.com/zed-pkg/zed-infra"
+
+          [dependencies]
+          "opto-sync/opto-sync-e2e" = "^0.1.0"
+          TOML
+
+          (cd "$consumer" && "$ZED" install --install-mode copy)
+          test -f "$consumer/zed_modules/opto-sync/opto-sync-e2e/.zpkg.toml"
+          test -f "$consumer/zed_modules/opto-sync/opto-sync-clients/.zpkg.toml"
+          test -f "$consumer/zed_modules/opto-sync/syncer/.zpkg.toml"
+          cp "$consumer/.zpkg.lock" "zed-infra/certification/${{ matrix.cloud }}/first.lock"
+
+          rm -rf "$consumer/zed_modules" "$ZED_PKG_HOME"
+          mkdir -p "$ZED_PKG_HOME"
+          (cd "$consumer" && "$ZED" install --frozen --install-mode copy)
+          cmp "zed-infra/certification/${{ matrix.cloud }}/first.lock" "$consumer/.zpkg.lock"
+          test -f "$consumer/zed_modules/opto-sync/opto-sync-e2e/.zpkg.toml"
+          test -f "$consumer/zed_modules/opto-sync/opto-sync-clients/.zpkg.toml"
+          test -f "$consumer/zed_modules/opto-sync/syncer/.zpkg.toml"
+          cp "$consumer/.zpkg.lock" "zed-infra/certification/${{ matrix.cloud }}/frozen.lock"
+
+      - name: Upload the cluster certification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zed-${{ matrix.cloud }}-publish-install-certification
+          path: zed-infra/certification/${{ matrix.cloud }}/
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Report pending public DNS without failing cluster certification
+        shell: bash
+        run: |
+          set +e
+          case '${{ matrix.cloud }}' in
+            aws) hosts='registry.aws.zpkg.tech aws.zpkg.tech' ;;
+            hetzner) hosts='registry.hetzner.zpkg.tech hetzner.zpkg.tech' ;;
+          esac
+          for host in $hosts; do
+            if getent ahosts "$host" >/dev/null; then
+              echo "$host resolves"
+            else
+              echo "::warning title=public DNS pending::$host does not resolve yet; cluster-local certification is unaffected"
+            fi
+          done
