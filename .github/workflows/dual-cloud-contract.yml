@@ -5,12 +5,14 @@ on:
     paths:
       - '.github/workflows/deploy-zed-cloud.yml'
       - '.github/workflows/dual-cloud-contract.yml'
+      - 'k8s/bootstrap/**'
       - 'docs/dual-cloud-bootstrap.md'
   push:
     branches: [main]
     paths:
       - '.github/workflows/deploy-zed-cloud.yml'
       - '.github/workflows/dual-cloud-contract.yml'
+      - 'k8s/bootstrap/**'
       - 'docs/dual-cloud-bootstrap.md'
   workflow_dispatch:
 
@@ -65,11 +67,13 @@ jobs:
         run: |
           set -euo pipefail
           tenant=k8s-cluster/remote/argocd/projects/zed.tenant.yaml
-          postgres=k8s-cluster/remote/argocd/projects/zed.bootstrap-postgres.yaml
+          postgres=zed-infra/k8s/bootstrap/zed-postgres-pgvector.yaml
           grep -q 'name: zed' "$tenant"
           grep -q 'podSelector: {}' "$tenant"
+          grep -q 'image: pgvector/pgvector:0.8.5-pg16' "$postgres"
           grep -q 'medium: Memory' "$postgres"
           grep -q 'sizeLimit: 512Mi' "$postgres"
+          grep -q 'replicas: 1' "$postgres"
           for cloud in aws hetzner; do
             api="/tmp/api-$cloud.yaml"
             web="/tmp/web-$cloud.yaml"
@@ -98,6 +102,8 @@ jobs:
           grep -q 'ZED_GHCR_USERNAME' "$workflow"
           grep -q 'ZED_GHCR_TOKEN' "$workflow"
           grep -q 'persist-credentials: false' "$workflow"
+          grep -q 'zed-postgres-pgvector.yaml' "$workflow"
+          grep -q 'pgvector/pgvector:0.8.5-pg16' "$workflow"
           grep -q 'rollout restart deployment/dd-zed-api-server deployment/dd-zed-web-server' "$workflow"
           grep -q 'medium: Memory' "$workflow"
           grep -q 'registry.aws.zpkg.tech' "$workflow"
