@@ -1,0 +1,158 @@
+name: deploy zed cloud
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/deploy-zed-cloud.yml'
+      - '.github/workflows/dual-cloud-contract.yml'
+      - 'docs/dual-cloud-bootstrap.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: zed-cloud-${{ matrix.cloud }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: deploy ${{ matrix.cloud }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        cloud: [aws, hetzner]
+    environment: ${{ matrix.cloud }}
+    env:
+      KUBECONFIG: ${{ github.workspace }}/.kube/config
+      KUBECONFIG_B64: ${{ secrets.KUBECONFIG_B64 }}
+      ZED_GHCR_USERNAME: ${{ secrets.ZED_GHCR_USERNAME }}
+      ZED_GHCR_TOKEN: ${{ secrets.ZED_GHCR_TOKEN }}
+      K8S_CLUSTER_REF: fe85db4942e2cdd6eef79f32f001f652cbcf72de
+    steps:
+      - name: Checkout deployment controller
+        uses: actions/checkout@v4
+        with:
+          path: zed-infra
+          persist-credentials: false
+
+      - name: Checkout canonical cluster bootstrap
+        uses: actions/checkout@v4
+        with:
+          repository: ORESoftware/k8s-cluster
+          ref: ${{ env.K8S_CLUSTER_REF }}
+          path: k8s-cluster
+          persist-credentials: false
+
+      - name: Checkout registry API manifests
+        uses: actions/checkout@v4
+        with:
+          repository: zed-pkg/zed-api-server.rs
+          ref: main
+          path: zed-api-server.rs
+          persist-credentials: false
+
+      - name: Checkout registry web manifests
+        uses: actions/checkout@v4
+        with:
+          repository: zed-pkg/zed-web-server.rs
+          ref: main
+          path: zed-web-server.rs
+          persist-credentials: false
+
+      - name: Materialize the selected cluster credential
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${KUBECONFIG_B64:-}" || { echo 'KUBECONFIG_B64 is required in the GitHub Environment' >&2; exit 1; }
+          mkdir -p "$(dirname "$KUBECONFIG")"
+          printf '%s' "$KUBECONFIG_B64" | base64 --decode > "$KUBECONFIG"
+          chmod 600 "$KUBECONFIG"
+          kubectl config current-context
+          kubectl get nodes -o wide
+
+      - name: Select cloud-local public endpoints
+        shell: bash
+        run: |
+          set -euo pipefail
+          case '${{ matrix.cloud }}' in
+            aws)
+              echo 'REGISTRY_URL=https://registry.aws.zpkg.tech' >> "$GITHUB_ENV"
+              echo 'WEB_URL=https://aws.zpkg.tech' >> "$GITHUB_ENV"
+              ;;
+            hetzner)
+              echo 'REGISTRY_URL=https://registry.hetzner.zpkg.tech' >> "$GITHUB_ENV"
+              echo 'WEB_URL=https://hetzner.zpkg.tech' >> "$GITHUB_ENV"
+              ;;
+            *) exit 2 ;;
+          esac
+
+      - name: Apply the disposable tenant and metadata store
+        shell: bash
+        run: |
+          set -euo pipefail
+          kubectl apply -f k8s-cluster/remote/argocd/projects/zed.tenant.yaml
+          kubectl apply -f k8s-cluster/remote/argocd/projects/zed.appproject.yaml
+          kubectl apply -f k8s-cluster/remote/argocd/projects/zed.bootstrap-postgres.yaml
+
+      - name: Provision the namespace-local GHCR pull secret
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${ZED_GHCR_USERNAME:-}" || { echo 'ZED_GHCR_USERNAME is required in the GitHub Environment' >&2; exit 1; }
+          test -n "${ZED_GHCR_TOKEN:-}" || { echo 'ZED_GHCR_TOKEN is required in the GitHub Environment' >&2; exit 1; }
+          kubectl -n zed create secret docker-registry zed-ghcr \
+            --docker-server=ghcr.io \
+            --docker-username="$ZED_GHCR_USERNAME" \
+            --docker-password="$ZED_GHCR_TOKEN" \
+            --docker-email=zed-cloud@users.noreply.github.com \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Apply the cloud-specific registry and web overlays
+        shell: bash
+        run: |
+          set -euo pipefail
+          kubectl apply -k "zed-api-server.rs/k8s/overlays/${{ matrix.cloud }}"
+          kubectl apply -k "zed-web-server.rs/k8s/overlays/${{ matrix.cloud }}"
+          # The workloads intentionally use the mutable bootstrap :main tag.
+          # Force new pods so imagePullPolicy=Always actually observes the image
+          # just published by each service repository.
+          kubectl -n zed rollout restart deployment/dd-zed-api-server deployment/dd-zed-web-server
+
+      - name: Wait for the RAM-backed stack
+        shell: bash
+        run: |
+          set -euo pipefail
+          kubectl -n zed rollout status deployment/zed-postgres --timeout=180s
+          kubectl -n zed rollout status deployment/dd-zed-api-server --timeout=300s
+          kubectl -n zed rollout status deployment/dd-zed-web-server --timeout=300s
+          kubectl -n zed get pods,service,ingress -o wide
+
+      - name: Prove memory-backed storage and singleton artifact ownership
+        shell: bash
+        run: |
+          set -euo pipefail
+          rendered="$(kubectl kustomize "zed-api-server.rs/k8s/overlays/${{ matrix.cloud }}")"
+          grep -q 'medium: Memory' <<<"$rendered"
+          grep -q 'sizeLimit: 512Mi' <<<"$rendered"
+          grep -q 'replicas: 1' <<<"$rendered"
+          grep -q 'name: STORAGE_BACKEND' <<<"$rendered"
+          grep -q 'value: local' <<<"$rendered"
+
+      - name: Verify cluster-local and public health
+        shell: bash
+        run: |
+          set -euo pipefail
+          kubectl -n zed run "zed-health-${{ matrix.cloud }}-${GITHUB_RUN_ID}" \
+            --image=curlimages/curl:8.10.1 \
+            --restart=Never \
+            --rm --attach \
+            --command -- sh -ceu '
+              curl -fsS http://dd-zed-api-server:8080/healthz
+              curl -fsS http://dd-zed-web-server:8081/healthz
+            '
+          curl --fail --silent --show-error --retry 30 --retry-delay 5 --retry-all-errors "$REGISTRY_URL/healthz"
+          curl --fail --silent --show-error --retry 30 --retry-delay 5 --retry-all-errors "$WEB_URL/healthz"
