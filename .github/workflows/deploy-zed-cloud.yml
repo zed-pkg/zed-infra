@@ -6,6 +6,7 @@ on:
     paths:
       - '.github/workflows/deploy-zed-cloud.yml'
       - '.github/workflows/dual-cloud-contract.yml'
+      - 'k8s/bootstrap/**'
       - 'docs/dual-cloud-bootstrap.md'
   workflow_dispatch:
 
@@ -89,13 +90,13 @@ jobs:
             *) exit 2 ;;
           esac
 
-      - name: Apply the disposable tenant and metadata store
+      - name: Apply the disposable tenant and pgvector metadata store
         shell: bash
         run: |
           set -euo pipefail
           kubectl apply -f k8s-cluster/remote/argocd/projects/zed.tenant.yaml
           kubectl apply -f k8s-cluster/remote/argocd/projects/zed.appproject.yaml
-          kubectl apply -f k8s-cluster/remote/argocd/projects/zed.bootstrap-postgres.yaml
+          kubectl apply -f zed-infra/k8s/bootstrap/zed-postgres-pgvector.yaml
 
       - name: Provision the namespace-local GHCR pull secret
         shell: bash
@@ -130,16 +131,22 @@ jobs:
           kubectl -n zed rollout status deployment/dd-zed-web-server --timeout=300s
           kubectl -n zed get pods,service,ingress -o wide
 
-      - name: Prove memory-backed storage and singleton artifact ownership
+      - name: Prove pgvector and memory-backed storage contracts
         shell: bash
         run: |
           set -euo pipefail
-          rendered="$(kubectl kustomize "zed-api-server.rs/k8s/overlays/${{ matrix.cloud }}")"
-          grep -q 'medium: Memory' <<<"$rendered"
-          grep -q 'sizeLimit: 512Mi' <<<"$rendered"
-          grep -q 'replicas: 1' <<<"$rendered"
-          grep -q 'name: STORAGE_BACKEND' <<<"$rendered"
-          grep -q 'value: local' <<<"$rendered"
+          database="$(cat zed-infra/k8s/bootstrap/zed-postgres-pgvector.yaml)"
+          api="$(kubectl kustomize "zed-api-server.rs/k8s/overlays/${{ matrix.cloud }}")"
+          grep -q 'image: pgvector/pgvector:0.8.5-pg16' <<<"$database"
+          grep -q 'medium: Memory' <<<"$database"
+          grep -q 'sizeLimit: 512Mi' <<<"$database"
+          grep -q 'medium: Memory' <<<"$api"
+          grep -q 'sizeLimit: 512Mi' <<<"$api"
+          grep -q 'replicas: 1' <<<"$api"
+          grep -q 'name: STORAGE_BACKEND' <<<"$api"
+          grep -q 'value: local' <<<"$api"
+          kubectl -n zed exec deployment/zed-postgres -- \
+            psql -U zed -d zed -Atc "select extversion from pg_extension where extname = 'vector'" | grep -Eq '^0\.8\.'
 
       - name: Verify cluster-local and public health
         shell: bash
