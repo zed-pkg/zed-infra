@@ -63,13 +63,13 @@ jobs:
           export ZED_GHCR_TOKEN='contract-token-must-not-leak'
           export GITHUB_STEP_SUMMARY="$RUNNER_TEMP/summary.md"
 
-          scripts/zed-cloud-preflight.sh aws
+          bash scripts/zed-cloud-preflight.sh aws
           grep -q 'Zed cloud preflight: aws' "$GITHUB_STEP_SUMMARY"
           grep -q 'Reachable nodes: 2' "$GITHUB_STEP_SUMMARY"
           ! grep -Fq "$ZED_GHCR_TOKEN" "$GITHUB_STEP_SUMMARY"
 
           unset ZED_GHCR_TOKEN
-          if scripts/zed-cloud-preflight.sh hetzner 2>"$RUNNER_TEMP/missing.err"; then
+          if bash scripts/zed-cloud-preflight.sh hetzner 2>"$RUNNER_TEMP/missing.err"; then
             echo 'preflight unexpectedly accepted a missing secret' >&2
             exit 1
           fi
@@ -100,4 +100,4 @@ jobs:
           persist-credentials: false
 
       - name: Verify protected credentials and cluster reachability
-        run: scripts/zed-cloud-preflight.sh '${{ matrix.cloud }}'
+        run: bash scripts/zed-cloud-preflight.sh '${{ matrix.cloud }}'
