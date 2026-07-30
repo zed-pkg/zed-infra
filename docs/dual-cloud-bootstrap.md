@@ -6,79 +6,119 @@ two independent Kubernetes clusters through protected GitHub Environments named
 
 Each environment must provide:
 
-- `KUBECONFIG_B64`: base64-encoded kubeconfig for that cluster;
-- `ZED_GHCR_USERNAME`: account permitted to pull the Zed server packages;
-- `ZED_GHCR_TOKEN`: read-only GHCR token for those packages.
+- `KUBECONFIG_B64`: a current least-privilege kubeconfig for that cluster;
+- `ZED_GHCR_USERNAME`: an account permitted to pull both Zed server packages;
+- `ZED_GHCR_TOKEN`: a read-only GHCR token for those packages.
 
-The workflow creates only the namespace-local `zed-ghcr` pull secret. It does
-not persist kubeconfig or registry credentials in Git.
+The workflow first runs the non-mutating cloud preflight. It rejects missing or
+invalid credentials, non-HTTPS Kubernetes endpoints, missing deployment RBAC,
+and GHCR credentials that can log in but cannot read both images. This happens
+before the Zed CLI or any application repository is checked out and built.
+Decoded kubeconfigs, Docker configs, and the Zed download store are removed on
+every exit path.
 
-## Bootstrap storage contract
+## Immutable image promotion
+
+The API and web source commits and the shared `zed-interfaces` commit are pinned
+in the workflow. Each source repository publishes a commit-tagged image with OCI
+labels recording both its own source revision and the interface revision.
+
+Before touching the cluster, the deploy job:
+
+1. pulls those exact commit tags with the protected GHCR credential;
+2. validates the embedded source labels and `linux/amd64` platform;
+3. resolves each tag to a registry digest;
+4. saves the digest/source mapping as certification evidence; and
+5. replaces the render-time `:main` placeholders with those digests.
+
+Only the digest-pinned manifests are applied. The workflow then proves the
+Deployment specs and running pod `imageID` values contain the expected digests.
+
+## Bootstrap storage and network contract
 
 This profile is intentionally disposable but complete enough for real
 `zed publish` and `zed install` transactions:
 
 - one API replica owns a 512 MiB memory-backed `emptyDir` artifact store;
-- one `pgvector/pgvector:0.8.5-pg16` replica owns a 512 MiB memory-backed
-  `emptyDir` metadata store;
+- the API uses `strategy: Recreate`, so two unrelated RAM stores cannot overlap
+  during promotion;
+- one `pgvector/pgvector:0.8.5-pg16` replica owns a separate 512 MiB
+  memory-backed `emptyDir` metadata store;
 - two read-only web replicas share that metadata service;
 - automatic migrations, authentication bypass, tag-verification bypass, and
   rate-limit bypass are enabled only for this bootstrap phase.
 
+Because those controls are bypassed, the API is structurally cluster-local:
+
+- no API Ingress is rendered or retained from an older deployment;
+- the Service is `ClusterIP` only;
+- ingress-nginx is not allowed by the API NetworkPolicy;
+- ingress is limited to observability and labeled Zed workloads; and
+- egress is limited to cluster DNS and namespace-local pgvector/Postgres.
+
 The pgvector image is load-bearing: registry migration
 `m20260726_000007_embeddings_and_tags` creates the PostgreSQL `vector`
-extension. Plain PostgreSQL 16 cannot satisfy the complete schema. The deploy
-workflow verifies that the migration installed a `0.8.x` vector extension
-before testing the registry.
+extension. The workflow verifies that migration installed a `0.8.x` extension.
 
-Metadata and artifact bytes must be reset together. Restarting only the API
-would erase its pod-local artifacts while leaving version rows in Postgres. The
-certification therefore restarts the volatile Postgres deployment first, then
-restarts the API and web workloads, yielding a consistent empty registry.
-
-The API must remain at one replica while storage is pod-local. Scaling it before
-moving artifacts to R2/S3 would make downloads intermittently miss depending on
-which replica receives the request.
+Metadata and artifact bytes are reset together. Postgres is restarted first;
+then the Recreate API and web workloads are restarted, yielding a consistent
+empty registry before package certification begins.
 
 ## Package interdependency certification
 
-Each cloud job builds a pinned Zed CLI and checks out the exact release-source
+Each cloud job builds a pinned Zed CLI and checks out exact release-source
 revisions for:
 
 1. `opto-sync/syncer@0.2.1`;
 2. `opto-sync/opto-sync-clients@0.2.0`;
 3. `opto-sync/opto-sync-e2e@0.1.0`.
 
-After the cluster rollouts become healthy, the GitHub runner opens a
-`kubectl port-forward` to the live `dd-zed-api-server` Service. It publishes the
-three packages in dependency order, verifies their live metadata, and creates a
-blank consumer that declares only `opto-sync/opto-sync-e2e`.
+After the cluster is healthy, the runner opens a `kubectl port-forward` to the
+live cluster-local API Service. It publishes the three packages in dependency
+order, verifies registry metadata and SHA-256 identities, and creates a blank
+consumer declaring only `opto-sync/opto-sync-e2e`.
 
-A passing normal install must materialize all three packages under
+A normal install must materialize all three packages under
 `zed_modules/opto-sync/`. The job then removes both `zed_modules` and the entire
 Zed download store and repeats with `zed install --frozen`. The first and frozen
-lockfiles must be byte-identical. Metadata JSON, port-forward diagnostics, and
-both lockfiles are retained as 30-day workflow artifacts for each cloud.
+lockfiles must be byte-identical.
 
-The CLI deliberately rewrites ordinary `/v1/artifacts/<sha>` download URLs
-through the configured registry base, so port-forward certification exercises
-the real cluster Service without changing the server's canonical public URL.
+The retained 30-day evidence includes:
+
+- source-to-digest image identities;
+- digest-pinned rendered manifests;
+- running pod image IDs and deployment specs;
+- the effective API NetworkPolicy;
+- package metadata JSON;
+- port-forward diagnostics; and
+- both lockfiles.
+
+Evidence is scanned for the kubeconfig payload and GHCR token before upload.
 
 ## Public endpoints
 
-The intended public names are:
+The intended public names remain:
 
 | Cloud | Registry API | Web UI |
 | --- | --- | --- |
 | AWS | `https://registry.aws.zpkg.tech` | `https://aws.zpkg.tech` |
 | Hetzner | `https://registry.hetzner.zpkg.tech` | `https://hetzner.zpkg.tech` |
 
-These custom records are a separate edge/DNS concern. Cluster certification is
-blocking; unresolved public DNS is emitted as an Actions warning rather than
-being confused with a failed Kubernetes deployment or failed package store.
-AWS also uses the existing hostPort gateway rather than nginx Ingress, whereas
-Hetzner has ingress-nginx and cert-manager. Public edge integration should
-preserve that cloud-specific split.
+The web UI may be promoted through each cloud's read-only edge. The registry API
+must not be exposed while bootstrap bypasses are active. Public API promotion is
+separate work under DEN-534 and DEN-535 and requires authentication, tag
+verification, rate limiting, durable storage, and a replacement NetworkPolicy.
+AWS uses the existing hostPort gateway; Hetzner uses ingress-nginx and
+cert-manager. Those architectures must remain distinct.
+
+## GitOps transition
+
+The direct protected workflow is the current deployment controller. The AWS and
+Hetzner Argo application catalogs do not yet instantiate the Zed bootstrap. The
+GitOps transition must preserve all current invariants: pinned source revisions,
+digest-only images, Recreate ownership, cluster-local API policy, simultaneous
+volatile-tier reset, and package certification evidence. This is related to the
+cross-cluster application-registry work in DEN-630.
 
 ## Production transition
 
@@ -87,8 +127,8 @@ Before accepting untrusted public publishers:
 1. move metadata to durable PostgreSQL/Supabase with pgvector enabled;
 2. move artifacts to R2/S3 and raise the API replica count;
 3. restore authentication, tag verification, and rate limiting;
-4. pin images by digest instead of the bootstrap `main` tag;
-5. add the AWS gateway route and Cloudflare DNS records, while keeping Hetzner
-   on its nginx/cert-manager ingress path;
-6. replace direct deployment with matching Argo applications once the
-   `ORESoftware/k8s-cluster` installation can accept the GitOps branch.
+4. create authenticated cloud-specific API overlays and NetworkPolicies;
+5. add AWS gateway and Hetzner ingress routes only after direct-origin tests;
+6. add Cloudflare DNS and enforce the public readiness canary; and
+7. replace direct deployment with pinned Argo applications without weakening
+   the digest or certification contracts.
