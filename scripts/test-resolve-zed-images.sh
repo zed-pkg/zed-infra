@@ -43,7 +43,7 @@ export ZED_GHCR_USERNAME=contract-user
 export ZED_GHCR_TOKEN=contract-token-must-not-leak
 export ZED_IMAGE_EVIDENCE="$work/evidence.txt"
 export GITHUB_ENV="$work/github.env"
-export GITHUB_ACTIONS=true
+unset GITHUB_ACTIONS || true
 
 bash "$script" > "$work/stdout.txt"
 grep -q '^api_source_revision=api-ref$' "$ZED_IMAGE_EVIDENCE"
