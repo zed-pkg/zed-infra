@@ -5,12 +5,14 @@ on:
     paths:
       - '.github/workflows/zed-cloud-preflight.yml'
       - 'scripts/zed-cloud-preflight.sh'
+      - 'scripts/test-zed-cloud-preflight.sh'
       - 'docs/zed-cloud-preflight.md'
   push:
     branches: [main]
     paths:
       - '.github/workflows/zed-cloud-preflight.yml'
       - 'scripts/zed-cloud-preflight.sh'
+      - 'scripts/test-zed-cloud-preflight.sh'
       - 'docs/zed-cloud-preflight.md'
   workflow_dispatch:
 
@@ -21,66 +23,21 @@ jobs:
   contract:
     name: preflight script contract
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
 
-      - name: Validate shell syntax
-        run: bash -n scripts/zed-cloud-preflight.sh
-
-      - name: Exercise success and fail-closed paths
-        shell: bash
-        run: |
-          set -euo pipefail
-          fake_bin="$RUNNER_TEMP/fake-bin"
-          mkdir -p "$fake_bin"
-          cat > "$fake_bin/kubectl" <<'SH'
-          #!/usr/bin/env bash
-          set -euo pipefail
-          case "$*" in
-            *'config current-context'*) echo 'zed-contract' ;;
-            *'config view'*) echo 'https://kubernetes.example.invalid' ;;
-            *'get --raw=/readyz'*) echo 'ok' ;;
-            *'get nodes -o name'*) printf 'node/one\nnode/two\n' ;;
-            *'create secret docker-registry'*) echo 'secret/zed-ghcr' ;;
-            *) echo "unexpected kubectl invocation: $*" >&2; exit 90 ;;
-          esac
-          SH
-          cat > "$fake_bin/docker" <<'SH'
-          #!/usr/bin/env bash
-          set -euo pipefail
-          cat >/dev/null
-          [[ "$*" == *'login ghcr.io'* ]]
-          SH
-          chmod +x "$fake_bin/kubectl" "$fake_bin/docker"
-
-          kubeconfig='apiVersion: v1'
-          export PATH="$fake_bin:$PATH"
-          export KUBECONFIG="$RUNNER_TEMP/contract.kubeconfig"
-          export KUBECONFIG_B64="$(printf '%s' "$kubeconfig" | base64 -w0)"
-          export ZED_GHCR_USERNAME='contract-user'
-          export ZED_GHCR_TOKEN='contract-token-must-not-leak'
-          export GITHUB_STEP_SUMMARY="$RUNNER_TEMP/summary.md"
-
-          bash scripts/zed-cloud-preflight.sh aws
-          grep -q 'Zed cloud preflight: aws' "$GITHUB_STEP_SUMMARY"
-          grep -q 'Reachable nodes: 2' "$GITHUB_STEP_SUMMARY"
-          ! grep -Fq "$ZED_GHCR_TOKEN" "$GITHUB_STEP_SUMMARY"
-
-          unset ZED_GHCR_TOKEN
-          if bash scripts/zed-cloud-preflight.sh hetzner 2>"$RUNNER_TEMP/missing.err"; then
-            echo 'preflight unexpectedly accepted a missing secret' >&2
-            exit 1
-          fi
-          grep -q 'ZED_GHCR_TOKEN' "$RUNNER_TEMP/missing.err"
+      - name: Exercise success, denied-RBAC, cleanup, and fail-closed paths
+        run: bash scripts/test-zed-cloud-preflight.sh
 
   live-preflight:
     name: validate ${{ matrix.cloud }} environment
     if: github.event_name == 'workflow_dispatch' && needs.contract.result == 'success'
     needs: contract
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -95,9 +52,9 @@ jobs:
       ZED_GHCR_USERNAME: ${{ secrets.ZED_GHCR_USERNAME }}
       ZED_GHCR_TOKEN: ${{ secrets.ZED_GHCR_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
 
-      - name: Verify protected credentials and cluster reachability
+      - name: Verify protected credentials, deploy RBAC, and image access
         run: bash scripts/zed-cloud-preflight.sh '${{ matrix.cloud }}'
