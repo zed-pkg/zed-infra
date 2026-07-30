@@ -5,6 +5,9 @@ on:
     paths:
       - '.github/workflows/deploy-zed-cloud.yml'
       - '.github/workflows/dual-cloud-contract.yml'
+      - 'scripts/zed-cloud-preflight.sh'
+      - 'scripts/resolve-zed-images.sh'
+      - 'scripts/test-resolve-zed-images.sh'
       - 'k8s/bootstrap/**'
       - 'docs/dual-cloud-bootstrap.md'
   push:
@@ -12,6 +15,9 @@ on:
     paths:
       - '.github/workflows/deploy-zed-cloud.yml'
       - '.github/workflows/dual-cloud-contract.yml'
+      - 'scripts/zed-cloud-preflight.sh'
+      - 'scripts/resolve-zed-images.sh'
+      - 'scripts/test-resolve-zed-images.sh'
       - 'k8s/bootstrap/**'
       - 'docs/dual-cloud-bootstrap.md'
   workflow_dispatch:
@@ -19,39 +25,59 @@ on:
 permissions:
   contents: read
 
+env:
+  K8S_CLUSTER_REF: d7001b22caf793497c3e461a62346dcc3ab8beb3
+  ZED_API_REF: 3e9becdb23afe8f7b5b3412a20b2c2d74998ab3d
+  ZED_WEB_REF: 75f5ac4e35e121485af75588ce453f350e0cabbc
+
 jobs:
   contract:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout deployment controller
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           path: zed-infra
           persist-credentials: false
 
-      - name: Checkout canonical cluster bootstrap
-        uses: actions/checkout@v4
+      - name: Checkout pinned cluster tenancy
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: ORESoftware/k8s-cluster
-          ref: fe85db4942e2cdd6eef79f32f001f652cbcf72de
+          ref: ${{ env.K8S_CLUSTER_REF }}
           path: k8s-cluster
           persist-credentials: false
 
-      - name: Checkout registry API manifests
-        uses: actions/checkout@v4
+      - name: Checkout pinned registry API manifests
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: zed-pkg/zed-api-server.rs
-          ref: main
+          ref: ${{ env.ZED_API_REF }}
           path: zed-api-server.rs
           persist-credentials: false
 
-      - name: Checkout registry web manifests
-        uses: actions/checkout@v4
+      - name: Checkout pinned registry web manifests
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: zed-pkg/zed-web-server.rs
-          ref: main
+          ref: ${{ env.ZED_WEB_REF }}
           path: zed-web-server.rs
           persist-credentials: false
+
+      - name: Verify pinned source identities
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C k8s-cluster rev-parse HEAD)" = "$K8S_CLUSTER_REF"
+          test "$(git -C zed-api-server.rs rev-parse HEAD)" = "$ZED_API_REF"
+          test "$(git -C zed-web-server.rs rev-parse HEAD)" = "$ZED_WEB_REF"
+
+      - name: Exercise credential and immutable-image contracts
+        working-directory: zed-infra
+        run: |
+          bash scripts/test-zed-cloud-preflight.sh
+          bash scripts/test-resolve-zed-images.sh
 
       - name: Render both application stacks
         shell: bash
@@ -62,35 +88,44 @@ jobs:
             kubectl kustomize "zed-web-server.rs/k8s/overlays/$cloud" > "/tmp/web-$cloud.yaml"
           done
 
-      - name: Verify bootstrap resource ownership and memory stores
+      - name: Verify volatile storage and fail-closed API ownership
         shell: bash
         run: |
           set -euo pipefail
           tenant=k8s-cluster/remote/argocd/projects/zed.tenant.yaml
+          project=k8s-cluster/remote/argocd/projects/zed.appproject.yaml
           postgres=zed-infra/k8s/bootstrap/zed-postgres-pgvector.yaml
           grep -q 'name: zed' "$tenant"
           grep -q 'podSelector: {}' "$tenant"
+          grep -q 'clusterResourceWhitelist: \[\]' "$project"
           grep -q 'image: pgvector/pgvector:0.8.5-pg16' "$postgres"
           grep -q 'medium: Memory' "$postgres"
           grep -q 'sizeLimit: 512Mi' "$postgres"
           grep -q 'replicas: 1' "$postgres"
+
           for cloud in aws hetzner; do
             api="/tmp/api-$cloud.yaml"
             web="/tmp/web-$cloud.yaml"
             grep -q 'replicas: 1' "$api"
+            grep -q 'type: Recreate' "$api"
             grep -q 'medium: Memory' "$api"
             grep -q 'sizeLimit: 512Mi' "$api"
             grep -q 'value: local' "$api"
-            grep -q "registry.$cloud.zpkg.tech" "$api"
-            grep -q 'image: ghcr.io/zed-pkg/zed-api-server:main' "$api"
+            grep -q 'name: ZED_AUTH_DISABLED' "$api"
+            grep -q 'name: ZED_RATE_LIMIT_DISABLED' "$api"
+            grep -q 'name: ZED_VERIFY_TAGS' "$api"
+            ! grep -q '^kind: Ingress$' "$api"
+            ! grep -q 'kubernetes.io/metadata.name: ingress-nginx' "$api"
+            ! grep -q 'cidr: 0.0.0.0/0' "$api"
+            ! grep -q 'port: 443' "$api"
+            ! grep -q 'port: 6543' "$api"
             grep -q 'replicas: 2' "$web"
             grep -q "registry.$cloud.zpkg.tech" "$web"
-            grep -q 'image: ghcr.io/zed-pkg/zed-web-server:main' "$web"
           done
           grep -q 'host: aws.zpkg.tech' /tmp/web-aws.yaml
           grep -q 'host: hetzner.zpkg.tech' /tmp/web-hetzner.yaml
 
-      - name: Ratchet deployment, volatile-store consistency, and package certification
+      - name: Ratchet three-digest deployment and package certification
         shell: bash
         working-directory: zed-infra
         run: |
@@ -98,25 +133,46 @@ jobs:
           workflow=.github/workflows/deploy-zed-cloud.yml
           grep -q 'cloud: \[aws, hetzner\]' "$workflow"
           grep -Fq 'environment: ${{ matrix.cloud }}' "$workflow"
-          grep -q 'timeout-minutes: 60' "$workflow"
-          grep -q 'KUBECONFIG_B64' "$workflow"
-          grep -q 'ZED_GHCR_USERNAME' "$workflow"
-          grep -q 'ZED_GHCR_TOKEN' "$workflow"
-          grep -q 'persist-credentials: false' "$workflow"
-          grep -q 'zed-postgres-pgvector.yaml' "$workflow"
-          grep -q 'pgvector/pgvector:0.8.5-pg16' "$workflow"
-          grep -q 'rollout restart deployment/zed-postgres' "$workflow"
-          grep -q 'rollout restart deployment/dd-zed-api-server deployment/dd-zed-web-server' "$workflow"
-          grep -q 'service/dd-zed-api-server 48080:8080' "$workflow"
-          grep -q 'zed publish --allow-dirty --skip-vcs-checks' "$workflow" || \
-            grep -q 'publish --allow-dirty --skip-vcs-checks' "$workflow"
+          grep -q 'timeout-minutes: 75' "$workflow"
+          grep -q "K8S_CLUSTER_REF: $K8S_CLUSTER_REF" "$workflow"
+          grep -q "ZED_API_REF: $ZED_API_REF" "$workflow"
+          grep -q "ZED_WEB_REF: $ZED_WEB_REF" "$workflow"
+          grep -q 'ZED_CLI_REF: a6c1fefad78f9daeaaa73122733217e11b6cf81a' "$workflow"
+          grep -q 'ZED_INTERFACES_REF: 07d01604461d00e237c7d86ad3855464167574ec' "$workflow"
+          grep -q 'zed-cloud-preflight.sh' "$workflow"
+          grep -q 'resolve-zed-images.sh' "$workflow"
+          grep -q 'ZED_PREFLIGHT_KEEP_KUBECONFIG' "$workflow"
+          grep -q 'ZED_API_IMAGE' "$workflow"
+          grep -q 'ZED_WEB_IMAGE' "$workflow"
+          grep -q 'ZED_POSTGRES_IMAGE' "$workflow"
+          grep -q 'postgres-rendered.yaml' "$workflow"
+          grep -q 'delete ingress dd-zed-api-server --ignore-not-found=true' "$workflow"
+          grep -q 'type: Recreate' "$workflow"
           grep -q 'install --install-mode copy' "$workflow"
           grep -q 'install --frozen --install-mode copy' "$workflow"
-          grep -q 'opto-sync/opto-sync-e2e' "$workflow"
-          grep -q 'opto-sync/opto-sync-clients' "$workflow"
-          grep -q 'opto-sync/syncer' "$workflow"
-          grep -q '7795ce2d1342e17d934d2faafff5c8ed4322609e' "$workflow"
-          grep -q '54874e9f7df6009fccd9034fce39306daef2c043' "$workflow"
-          grep -q '1d47bd46cf3785416295daf6af84afb8053f1cfd' "$workflow"
-          grep -q 'medium: Memory' "$workflow"
-          ! grep -Eq '(kubeconfig|docker-password):[[:space:]]+[^$]' "$workflow"
+          grep -q 'cmp "$evidence/first.lock"' "$workflow"
+          grep -q 'runtime-images.txt' "$workflow"
+          grep -q 'Verify evidence contains no protected values' "$workflow"
+          grep -q 'rm -f "$KUBECONFIG"' "$workflow"
+          grep -q 'rm -rf "$ZED_PKG_HOME"' "$workflow"
+          ! grep -q 'kubectl apply -k' "$workflow"
+          ! grep -Eq 'uses: [^[:space:]]+@(main|master|v[0-9]+|stable|latest)$' "$workflow"
+
+          python3 - "$workflow" <<'PY'
+          import pathlib, sys
+          text = pathlib.Path(sys.argv[1]).read_text(encoding='utf-8')
+          order = [
+              'Fail fast on credentials, deployment RBAC, and package access',
+              'Resolve and attest immutable deployment image digests',
+              'Build the pinned Zed CLI',
+              'Apply tenant and AppProject boundaries',
+              'Apply and reset digest-pinned RAM-backed pgvector',
+              'Render and apply exact API and web image digests',
+              'Publish, install, erase, and frozen-reinstall through the live Service',
+              'Verify evidence contains no protected values',
+              'Scrub decoded and downloaded credentials',
+          ]
+          positions = [text.index(item) for item in order]
+          if positions != sorted(positions):
+              raise SystemExit(f'unsafe workflow order: {list(zip(order, positions))}')
+          PY

@@ -6,6 +6,9 @@ on:
     paths:
       - '.github/workflows/deploy-zed-cloud.yml'
       - '.github/workflows/dual-cloud-contract.yml'
+      - 'scripts/zed-cloud-preflight.sh'
+      - 'scripts/resolve-zed-images.sh'
+      - 'scripts/test-resolve-zed-images.sh'
       - 'k8s/bootstrap/**'
       - 'docs/dual-cloud-bootstrap.md'
   workflow_dispatch:
@@ -19,7 +22,7 @@ jobs:
   deploy:
     name: deploy and certify ${{ matrix.cloud }}
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 75
     strategy:
       fail-fast: false
       matrix:
@@ -29,59 +32,71 @@ jobs:
       group: zed-cloud-${{ matrix.cloud }}
       cancel-in-progress: false
     env:
-      KUBECONFIG: ${{ github.workspace }}/.kube/config
+      KUBECONFIG: ${{ runner.temp }}/zed-${{ matrix.cloud }}.kubeconfig
       KUBECONFIG_B64: ${{ secrets.KUBECONFIG_B64 }}
       ZED_GHCR_USERNAME: ${{ secrets.ZED_GHCR_USERNAME }}
       ZED_GHCR_TOKEN: ${{ secrets.ZED_GHCR_TOKEN }}
-      K8S_CLUSTER_REF: fe85db4942e2cdd6eef79f32f001f652cbcf72de
-      ZED_CLI_REF: c636fb8f6b08695c6b4fe94e2481f4d57270b2d7
-      ZED_INTERFACES_REF: 415e871b1fb3dd97744c134351408a3224805dfb
+      K8S_CLUSTER_REF: d7001b22caf793497c3e461a62346dcc3ab8beb3
+      ZED_CLI_REF: a6c1fefad78f9daeaaa73122733217e11b6cf81a
+      ZED_INTERFACES_REF: 07d01604461d00e237c7d86ad3855464167574ec
+      ZED_API_REF: 3e9becdb23afe8f7b5b3412a20b2c2d74998ab3d
+      ZED_WEB_REF: 75f5ac4e35e121485af75588ce453f350e0cabbc
       SYNCER_REF: 7795ce2d1342e17d934d2faafff5c8ed4322609e
       CLIENTS_REF: 54874e9f7df6009fccd9034fce39306daef2c043
       OPTO_E2E_REF: 1d47bd46cf3785416295daf6af84afb8053f1cfd
-      ZED_PKG_HOME: ${{ github.workspace }}/.zed-home-${{ matrix.cloud }}
+      ZED_PKG_HOME: ${{ runner.temp }}/zed-home-${{ matrix.cloud }}
       ZED_PKG_TOKEN: bootstrap-opto-sync-e2e
     steps:
       - name: Checkout deployment controller
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           path: zed-infra
           persist-credentials: false
 
-      - name: Checkout canonical cluster bootstrap
-        uses: actions/checkout@v4
+      - name: Fail fast on credentials, deployment RBAC, and package access
+        env:
+          ZED_PREFLIGHT_KEEP_KUBECONFIG: '1'
+        run: bash zed-infra/scripts/zed-cloud-preflight.sh '${{ matrix.cloud }}'
+
+      - name: Resolve and attest immutable deployment image digests
+        env:
+          ZED_IMAGE_EVIDENCE: ${{ github.workspace }}/zed-infra/certification/${{ matrix.cloud }}/images.txt
+        run: bash zed-infra/scripts/resolve-zed-images.sh
+
+      - name: Checkout canonical cluster tenancy
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: ORESoftware/k8s-cluster
           ref: ${{ env.K8S_CLUSTER_REF }}
           path: k8s-cluster
           persist-credentials: false
 
-      - name: Checkout registry API manifests
-        uses: actions/checkout@v4
+      - name: Checkout pinned registry API manifests
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: zed-pkg/zed-api-server.rs
-          ref: main
+          ref: ${{ env.ZED_API_REF }}
           path: zed-api-server.rs
           persist-credentials: false
 
-      - name: Checkout registry web manifests
-        uses: actions/checkout@v4
+      - name: Checkout pinned registry web manifests
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: zed-pkg/zed-web-server.rs
-          ref: main
+          ref: ${{ env.ZED_WEB_REF }}
           path: zed-web-server.rs
           persist-credentials: false
 
       - name: Checkout pinned Zed CLI
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: zed-pkg/zed-cli
           ref: ${{ env.ZED_CLI_REF }}
           path: zed-cli
           persist-credentials: false
 
-      - name: Checkout pinned Zed interfaces
-        uses: actions/checkout@v4
+      - name: Checkout matching Zed interfaces
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: zed-pkg/zed-interfaces
           ref: ${{ env.ZED_INTERFACES_REF }}
@@ -89,7 +104,7 @@ jobs:
           persist-credentials: false
 
       - name: Checkout certified syncer release source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: opto-sync/syncer.c
           ref: ${{ env.SYNCER_REF }}
@@ -97,7 +112,7 @@ jobs:
           persist-credentials: false
 
       - name: Checkout certified clients and nested core
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: opto-sync/opto-sync-clients
           ref: ${{ env.CLIENTS_REF }}
@@ -107,48 +122,49 @@ jobs:
           persist-credentials: false
 
       - name: Checkout certified opto-sync E2E package
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: opto-sync/opto-sync-e2e
           ref: ${{ env.OPTO_E2E_REF }}
           path: opto-sync-e2e
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Verify every pinned source checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C k8s-cluster rev-parse HEAD)" = "$K8S_CLUSTER_REF"
+          test "$(git -C zed-api-server.rs rev-parse HEAD)" = "$ZED_API_REF"
+          test "$(git -C zed-web-server.rs rev-parse HEAD)" = "$ZED_WEB_REF"
+          test "$(git -C zed-cli rev-parse HEAD)" = "$ZED_CLI_REF"
+          test "$(git -C zed-interfaces rev-parse HEAD)" = "$ZED_INTERFACES_REF"
+          test "$(git -C syncer.c rev-parse HEAD)" = "$SYNCER_REF"
+          test "$(git -C opto-sync-clients rev-parse HEAD)" = "$CLIENTS_REF"
+          test "$(git -C opto-sync-clients rev-parse HEAD:syncer.c)" = "$SYNCER_REF"
+          test "$(git -C opto-sync-clients/syncer.c rev-parse HEAD)" = "$SYNCER_REF"
+          test "$(git -C opto-sync-e2e rev-parse HEAD)" = "$OPTO_E2E_REF"
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: zed-cli
 
       - name: Build the pinned Zed CLI
         working-directory: zed-cli
-        run: cargo build --release --locked
+        run: cargo build --release --locked --bin zed
 
-      - name: Materialize the selected cluster credential
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -n "${KUBECONFIG_B64:-}" || { echo 'KUBECONFIG_B64 is required in the GitHub Environment' >&2; exit 1; }
-          mkdir -p "$(dirname "$KUBECONFIG")"
-          printf '%s' "$KUBECONFIG_B64" | base64 --decode > "$KUBECONFIG"
-          chmod 600 "$KUBECONFIG"
-          kubectl config current-context
-          kubectl get nodes -o wide
-
-      - name: Apply the disposable tenant and pgvector metadata store
+      - name: Apply tenant and AppProject boundaries
         shell: bash
         run: |
           set -euo pipefail
           kubectl apply -f k8s-cluster/remote/argocd/projects/zed.tenant.yaml
           kubectl apply -f k8s-cluster/remote/argocd/projects/zed.appproject.yaml
-          kubectl apply -f zed-infra/k8s/bootstrap/zed-postgres-pgvector.yaml
 
       - name: Provision the namespace-local GHCR pull secret
         shell: bash
         run: |
           set -euo pipefail
-          test -n "${ZED_GHCR_USERNAME:-}" || { echo 'ZED_GHCR_USERNAME is required in the GitHub Environment' >&2; exit 1; }
-          test -n "${ZED_GHCR_TOKEN:-}" || { echo 'ZED_GHCR_TOKEN is required in the GitHub Environment' >&2; exit 1; }
           kubectl -n zed create secret docker-registry zed-ghcr \
             --docker-server=ghcr.io \
             --docker-username="$ZED_GHCR_USERNAME" \
@@ -156,57 +172,116 @@ jobs:
             --docker-email=zed-cloud@users.noreply.github.com \
             --dry-run=client -o yaml | kubectl apply -f -
 
-      - name: Reset both volatile storage tiers together
+      - name: Apply and reset digest-pinned RAM-backed pgvector
         shell: bash
         run: |
           set -euo pipefail
-          # The registry metadata and artifact bytes are both intentionally
-          # volatile. Resetting only one produces metadata that points to missing
-          # artifacts, so each certification starts both stores from zero.
+          evidence="zed-infra/certification/${{ matrix.cloud }}"
+          mkdir -p "$evidence"
+          postgres="$evidence/postgres-rendered.yaml"
+          cp zed-infra/k8s/bootstrap/zed-postgres-pgvector.yaml "$postgres"
+          python3 - "$postgres" 'pgvector/pgvector:0.8.5-pg16' "$ZED_POSTGRES_IMAGE" <<'PY'
+          import pathlib, sys
+          path, old, new = sys.argv[1:]
+          target = pathlib.Path(path)
+          text = target.read_text(encoding='utf-8')
+          if text.count(old) != 1:
+              raise SystemExit(f'{path}: expected exactly one {old!r}, found {text.count(old)}')
+          target.write_text(text.replace(old, new), encoding='utf-8')
+          PY
+          ! grep -q 'pgvector/pgvector:0.8.5-pg16' "$postgres"
+          kubectl apply -f "$postgres"
           kubectl -n zed rollout restart deployment/zed-postgres
           kubectl -n zed rollout status deployment/zed-postgres --timeout=180s
 
-      - name: Apply and restart the cloud-local registry and web workloads
+      - name: Render and apply exact API and web image digests
         shell: bash
         run: |
           set -euo pipefail
-          kubectl apply -k "zed-api-server.rs/k8s/overlays/${{ matrix.cloud }}"
-          kubectl apply -k "zed-web-server.rs/k8s/overlays/${{ matrix.cloud }}"
+          evidence="zed-infra/certification/${{ matrix.cloud }}"
+          api="$evidence/api-rendered.yaml"
+          web="$evidence/web-rendered.yaml"
+          kubectl kustomize "zed-api-server.rs/k8s/overlays/${{ matrix.cloud }}" > "$api"
+          kubectl kustomize "zed-web-server.rs/k8s/overlays/${{ matrix.cloud }}" > "$web"
+
+          python3 - "$api" 'ghcr.io/zed-pkg/zed-api-server:main' "$ZED_API_IMAGE" <<'PY'
+          import pathlib, sys
+          path, old, new = sys.argv[1:]
+          target = pathlib.Path(path)
+          text = target.read_text(encoding='utf-8')
+          if text.count(old) != 1:
+              raise SystemExit(f'{path}: expected exactly one {old!r}, found {text.count(old)}')
+          target.write_text(text.replace(old, new), encoding='utf-8')
+          PY
+          python3 - "$web" 'ghcr.io/zed-pkg/zed-web-server:main' "$ZED_WEB_IMAGE" <<'PY'
+          import pathlib, sys
+          path, old, new = sys.argv[1:]
+          target = pathlib.Path(path)
+          text = target.read_text(encoding='utf-8')
+          if text.count(old) != 1:
+              raise SystemExit(f'{path}: expected exactly one {old!r}, found {text.count(old)}')
+          target.write_text(text.replace(old, new), encoding='utf-8')
+          PY
+
+          ! grep -q 'zed-api-server:main' "$api"
+          ! grep -q 'zed-web-server:main' "$web"
+          ! grep -q '^kind: Ingress$' "$api"
+          ! grep -q 'kubernetes.io/metadata.name: ingress-nginx' "$api"
+          ! grep -q 'cidr: 0.0.0.0/0' "$api"
+          grep -q 'type: Recreate' "$api"
+
+          kubectl -n zed delete ingress dd-zed-api-server --ignore-not-found=true
+          kubectl apply -f "$api"
+          kubectl apply -f "$web"
           kubectl -n zed rollout restart deployment/dd-zed-api-server deployment/dd-zed-web-server
           kubectl -n zed rollout status deployment/dd-zed-api-server --timeout=300s
           kubectl -n zed rollout status deployment/dd-zed-web-server --timeout=300s
-          kubectl -n zed get pods,service,ingress -o wide
 
-      - name: Prove pgvector and memory-backed storage contracts
+      - name: Prove storage, network, and runtime image identities
         shell: bash
         run: |
           set -euo pipefail
-          database="$(cat zed-infra/k8s/bootstrap/zed-postgres-pgvector.yaml)"
-          api="$(kubectl kustomize "zed-api-server.rs/k8s/overlays/${{ matrix.cloud }}")"
-          grep -q 'image: pgvector/pgvector:0.8.5-pg16' <<<"$database"
-          grep -q 'medium: Memory' <<<"$database"
-          grep -q 'sizeLimit: 512Mi' <<<"$database"
-          grep -q 'medium: Memory' <<<"$api"
-          grep -q 'sizeLimit: 512Mi' <<<"$api"
-          grep -q 'replicas: 1' <<<"$api"
-          grep -q 'name: STORAGE_BACKEND' <<<"$api"
-          grep -q 'value: local' <<<"$api"
+          evidence="zed-infra/certification/${{ matrix.cloud }}"
+
+          test "$(kubectl -n zed get deployment zed-postgres -o jsonpath='{.spec.template.spec.containers[0].image}')" = "$ZED_POSTGRES_IMAGE"
+          test "$(kubectl -n zed get deployment dd-zed-api-server -o jsonpath='{.spec.template.spec.containers[0].image}')" = "$ZED_API_IMAGE"
+          test "$(kubectl -n zed get deployment dd-zed-web-server -o jsonpath='{.spec.template.spec.containers[0].image}')" = "$ZED_WEB_IMAGE"
+          test "$(kubectl -n zed get deployment dd-zed-api-server -o jsonpath='{.spec.strategy.type}')" = 'Recreate'
+          test "$(kubectl -n zed get deployment zed-postgres -o jsonpath='{.status.readyReplicas}')" = '1'
+          test "$(kubectl -n zed get deployment dd-zed-api-server -o jsonpath='{.status.readyReplicas}')" = '1'
+          test "$(kubectl -n zed get deployment dd-zed-web-server -o jsonpath='{.status.readyReplicas}')" = '2'
+          if kubectl -n zed get ingress dd-zed-api-server >/dev/null 2>&1; then
+            echo 'bootstrap API unexpectedly has a public Ingress' >&2
+            exit 1
+          fi
+
+          postgres_sha="${ZED_POSTGRES_IMAGE##*@}"
+          api_sha="${ZED_API_IMAGE##*@}"
+          web_sha="${ZED_WEB_IMAGE##*@}"
+          postgres_ids="$(kubectl -n zed get pods -l app=zed-postgres -o jsonpath='{range .items[*].status.containerStatuses[*]}{.imageID}{"\n"}{end}')"
+          api_ids="$(kubectl -n zed get pods -l app=dd-zed-api-server -o jsonpath='{range .items[*].status.containerStatuses[*]}{.imageID}{"\n"}{end}')"
+          web_ids="$(kubectl -n zed get pods -l app=dd-zed-web-server -o jsonpath='{range .items[*].status.containerStatuses[*]}{.imageID}{"\n"}{end}')"
+          grep -q "$postgres_sha" <<<"$postgres_ids"
+          grep -q "$api_sha" <<<"$api_ids"
+          grep -q "$web_sha" <<<"$web_ids"
+
           kubectl -n zed exec deployment/zed-postgres -- \
             psql -U zed -d zed -Atc "select extversion from pg_extension where extname = 'vector'" | grep -Eq '^0\.8\.'
+
+          kubectl -n zed get deployment,pod,service,ingress,networkpolicy -o wide > "$evidence/runtime.txt"
+          kubectl -n zed get deployment zed-postgres dd-zed-api-server dd-zed-web-server -o yaml > "$evidence/deployments.yaml"
+          kubectl -n zed get networkpolicy dd-zed-api-server -o yaml > "$evidence/api-networkpolicy.yaml"
+          printf 'postgres_image_ids=%s\napi_image_ids=%s\nweb_image_ids=%s\n' \
+            "$postgres_ids" "$api_ids" "$web_ids" > "$evidence/runtime-images.txt"
 
       - name: Verify cluster-local API and web health
         shell: bash
         run: |
           set -euo pipefail
-          kubectl -n zed run "zed-health-${{ matrix.cloud }}-${GITHUB_RUN_ID}" \
-            --image=curlimages/curl:8.10.1 \
-            --labels=app.kubernetes.io/part-of=zed \
-            --restart=Never \
-            --rm --attach \
-            --command -- sh -ceu '
-              curl -fsS http://dd-zed-api-server:8080/healthz
-              curl -fsS http://dd-zed-web-server:8081/healthz
-            '
+          web_pod="$(kubectl -n zed get pods -l app=dd-zed-web-server -o jsonpath='{.items[0].metadata.name}')"
+          test -n "$web_pod"
+          kubectl -n zed exec "$web_pod" -- curl -fsS http://127.0.0.1:8081/healthz
+          kubectl -n zed exec "$web_pod" -- curl -fsS http://dd-zed-api-server:8080/healthz
 
       - name: Publish, install, erase, and frozen-reinstall through the live Service
         shell: bash
@@ -215,22 +290,22 @@ jobs:
           ZED_PKG_REGISTRY: http://127.0.0.1:48080
         run: |
           set -euo pipefail
-          mkdir -p "zed-infra/certification/${{ matrix.cloud }}"
+          evidence="zed-infra/certification/${{ matrix.cloud }}"
           kubectl -n zed port-forward service/dd-zed-api-server 48080:8080 \
-            > "zed-infra/certification/${{ matrix.cloud }}/port-forward.log" 2>&1 &
+            > "$evidence/port-forward.log" 2>&1 &
           pf_pid=$!
           cleanup() {
             kill "$pf_pid" >/dev/null 2>&1 || true
             wait "$pf_pid" >/dev/null 2>&1 || true
           }
-          trap cleanup EXIT
+          trap cleanup EXIT HUP INT TERM
 
           for _ in $(seq 1 60); do
             if ! kill -0 "$pf_pid" 2>/dev/null; then
-              cat "zed-infra/certification/${{ matrix.cloud }}/port-forward.log" >&2
+              cat "$evidence/port-forward.log" >&2
               exit 1
             fi
-            if curl -fsS "$ZED_PKG_REGISTRY/healthz"; then
+            if curl -fsS "$ZED_PKG_REGISTRY/healthz" >/dev/null; then
               break
             fi
             sleep 1
@@ -242,14 +317,27 @@ jobs:
             (cd "$package" && "$ZED" publish --allow-dirty --skip-vcs-checks)
           done
 
-          curl -fsS "$ZED_PKG_REGISTRY/v1/packages/opto-sync/syncer/versions/0.2.1" \
-            > "zed-infra/certification/${{ matrix.cloud }}/syncer.json"
-          curl -fsS "$ZED_PKG_REGISTRY/v1/packages/opto-sync/opto-sync-clients/versions/0.2.0" \
-            > "zed-infra/certification/${{ matrix.cloud }}/clients.json"
-          curl -fsS "$ZED_PKG_REGISTRY/v1/packages/opto-sync/opto-sync-e2e/versions/0.1.0" \
-            > "zed-infra/certification/${{ matrix.cloud }}/e2e.json"
+          curl -fsS "$ZED_PKG_REGISTRY/v1/packages/opto-sync/syncer/versions/0.2.1" > "$evidence/syncer.json"
+          curl -fsS "$ZED_PKG_REGISTRY/v1/packages/opto-sync/opto-sync-clients/versions/0.2.0" > "$evidence/clients.json"
+          curl -fsS "$ZED_PKG_REGISTRY/v1/packages/opto-sync/opto-sync-e2e/versions/0.1.0" > "$evidence/e2e.json"
+          python3 - "$evidence" <<'PY'
+          import json, pathlib, sys
+          root = pathlib.Path(sys.argv[1])
+          expected = {
+              'syncer.json': ('syncer', '0.2.1'),
+              'clients.json': ('opto-sync-clients', '0.2.0'),
+              'e2e.json': ('opto-sync-e2e', '0.1.0'),
+          }
+          for filename, (name, version) in expected.items():
+              value = json.loads((root / filename).read_text(encoding='utf-8'))
+              assert value['org'] == 'opto-sync'
+              assert value['name'] == name
+              assert value['version'] == version
+              assert len(value['sha256']) == 64
+          PY
 
           consumer="consumer-${{ matrix.cloud }}"
+          rm -rf "$consumer"
           mkdir "$consumer"
           cat > "$consumer/.zpkg.toml" <<'TOML'
           [package]
@@ -271,41 +359,60 @@ jobs:
           test -f "$consumer/zed_modules/opto-sync/opto-sync-e2e/.zpkg.toml"
           test -f "$consumer/zed_modules/opto-sync/opto-sync-clients/.zpkg.toml"
           test -f "$consumer/zed_modules/opto-sync/syncer/.zpkg.toml"
-          cp "$consumer/.zpkg.lock" "zed-infra/certification/${{ matrix.cloud }}/first.lock"
+          cp "$consumer/.zpkg.lock" "$evidence/first.lock"
 
           rm -rf "$consumer/zed_modules" "$ZED_PKG_HOME"
           mkdir -p "$ZED_PKG_HOME"
           (cd "$consumer" && "$ZED" install --frozen --install-mode copy)
-          cmp "zed-infra/certification/${{ matrix.cloud }}/first.lock" "$consumer/.zpkg.lock"
+          cmp "$evidence/first.lock" "$consumer/.zpkg.lock"
           test -f "$consumer/zed_modules/opto-sync/opto-sync-e2e/.zpkg.toml"
           test -f "$consumer/zed_modules/opto-sync/opto-sync-clients/.zpkg.toml"
           test -f "$consumer/zed_modules/opto-sync/syncer/.zpkg.toml"
-          cp "$consumer/.zpkg.lock" "zed-infra/certification/${{ matrix.cloud }}/frozen.lock"
+          cp "$consumer/.zpkg.lock" "$evidence/frozen.lock"
 
-      - name: Upload the cluster certification evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: zed-${{ matrix.cloud }}-publish-install-certification
-          path: zed-infra/certification/${{ matrix.cloud }}/
-          if-no-files-found: warn
-          retention-days: 30
-
-      - name: Report pending public DNS without failing cluster certification
+      - name: Collect bounded failure diagnostics
+        if: failure()
         shell: bash
         run: |
           set +e
-          case '${{ matrix.cloud }}' in
-            aws) hosts='registry.aws.zpkg.tech aws.zpkg.tech' ;;
-            hetzner) hosts='registry.hetzner.zpkg.tech hetzner.zpkg.tech' ;;
-          esac
-          for host in $hosts; do
-            if getent ahosts "$host" >/dev/null; then
-              echo "$host resolves"
-            else
-              echo "::warning title=public DNS pending::$host does not resolve yet; cluster-local certification is unaffected"
+          evidence="zed-infra/certification/${{ matrix.cloud }}"
+          mkdir -p "$evidence"
+          kubectl -n zed get deployment,pod,service,ingress,networkpolicy -o wide > "$evidence/failure-runtime.txt" 2>&1
+          kubectl -n zed describe deployment dd-zed-api-server dd-zed-web-server zed-postgres > "$evidence/failure-describe.txt" 2>&1
+          kubectl -n zed logs deployment/dd-zed-api-server --tail=500 > "$evidence/failure-api.log" 2>&1
+          kubectl -n zed logs deployment/dd-zed-web-server --all-pods=true --tail=300 > "$evidence/failure-web.log" 2>&1
+          kubectl -n zed logs deployment/zed-postgres --tail=300 > "$evidence/failure-postgres.log" 2>&1
+
+      - name: Verify evidence contains no protected values
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="zed-infra/certification/${{ matrix.cloud }}"
+          test -d "$evidence"
+          for protected in "$ZED_GHCR_TOKEN" "$KUBECONFIG_B64"; do
+            [[ -z "$protected" ]] && continue
+            if grep -R -Fq "$protected" "$evidence"; then
+              echo 'protected value found in certification evidence' >&2
+              exit 1
             fi
           done
+
+      - name: Upload cluster certification evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: zed-${{ matrix.cloud }}-publish-install-certification
+          path: zed-infra/certification/${{ matrix.cloud }}/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Scrub decoded and downloaded credentials
+        if: always()
+        shell: bash
+        run: |
+          rm -f "$KUBECONFIG"
+          rm -rf "$ZED_PKG_HOME"
 
       - name: Publish queryable cloud certification status
         if: always()
@@ -323,5 +430,5 @@ jobs:
           gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
             -f state="$state" \
             -f context="zed-cloud/${{ matrix.cloud }}" \
-            -f description="${{ matrix.cloud }} deploy + publish/install certification: $JOB_STATUS" \
+            -f description="${{ matrix.cloud }} deploy + three-digest + package certification: $JOB_STATUS" \
             -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
