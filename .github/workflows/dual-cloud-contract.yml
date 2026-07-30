@@ -27,12 +27,13 @@ permissions:
 
 env:
   K8S_CLUSTER_REF: d7001b22caf793497c3e461a62346dcc3ab8beb3
-  ZED_API_REF: 479b305c45f93db22c8cbde125c5ee7f9967e5e3
+  ZED_API_REF: 3e9becdb23afe8f7b5b3412a20b2c2d74998ab3d
   ZED_WEB_REF: 75f5ac4e35e121485af75588ce453f350e0cabbc
 
 jobs:
   contract:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout deployment controller
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -124,7 +125,7 @@ jobs:
           grep -q 'host: aws.zpkg.tech' /tmp/web-aws.yaml
           grep -q 'host: hetzner.zpkg.tech' /tmp/web-hetzner.yaml
 
-      - name: Ratchet deployment provenance and certification order
+      - name: Ratchet three-digest deployment and package certification
         shell: bash
         working-directory: zed-infra
         run: |
@@ -143,6 +144,8 @@ jobs:
           grep -q 'ZED_PREFLIGHT_KEEP_KUBECONFIG' "$workflow"
           grep -q 'ZED_API_IMAGE' "$workflow"
           grep -q 'ZED_WEB_IMAGE' "$workflow"
+          grep -q 'ZED_POSTGRES_IMAGE' "$workflow"
+          grep -q 'postgres-rendered.yaml' "$workflow"
           grep -q 'delete ingress dd-zed-api-server --ignore-not-found=true' "$workflow"
           grep -q 'type: Recreate' "$workflow"
           grep -q 'install --install-mode copy' "$workflow"
@@ -159,11 +162,12 @@ jobs:
           import pathlib, sys
           text = pathlib.Path(sys.argv[1]).read_text(encoding='utf-8')
           order = [
-              'Fail fast on credentials, deployment RBAC, and exact image tags',
+              'Fail fast on credentials, deployment RBAC, and package access',
               'Resolve and attest immutable deployment image digests',
               'Build the pinned Zed CLI',
-              'Apply tenant, AppProject, and RAM-backed pgvector metadata',
-              'Render and apply exact image digests',
+              'Apply tenant and AppProject boundaries',
+              'Apply and reset digest-pinned RAM-backed pgvector',
+              'Render and apply exact API and web image digests',
               'Publish, install, erase, and frozen-reinstall through the live Service',
               'Verify evidence contains no protected values',
               'Scrub decoded and downloaded credentials',
