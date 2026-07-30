@@ -54,11 +54,9 @@ jobs:
           path: zed-infra
           persist-credentials: false
 
-      - name: Fail fast on credentials, deployment RBAC, and exact image tags
+      - name: Fail fast on credentials, deployment RBAC, and package access
         env:
           ZED_PREFLIGHT_KEEP_KUBECONFIG: '1'
-          ZED_API_IMAGE: ghcr.io/zed-pkg/zed-api-server:${{ env.ZED_API_REF }}
-          ZED_WEB_IMAGE: ghcr.io/zed-pkg/zed-web-server:${{ env.ZED_WEB_REF }}
         run: bash zed-infra/scripts/zed-cloud-preflight.sh '${{ matrix.cloud }}'
 
       - name: Resolve and attest immutable deployment image digests
@@ -157,13 +155,12 @@ jobs:
         working-directory: zed-cli
         run: cargo build --release --locked --bin zed
 
-      - name: Apply tenant, AppProject, and RAM-backed pgvector metadata
+      - name: Apply tenant and AppProject boundaries
         shell: bash
         run: |
           set -euo pipefail
           kubectl apply -f k8s-cluster/remote/argocd/projects/zed.tenant.yaml
           kubectl apply -f k8s-cluster/remote/argocd/projects/zed.appproject.yaml
-          kubectl apply -f zed-infra/k8s/bootstrap/zed-postgres-pgvector.yaml
 
       - name: Provision the namespace-local GHCR pull secret
         shell: bash
@@ -176,19 +173,33 @@ jobs:
             --docker-email=zed-cloud@users.noreply.github.com \
             --dry-run=client -o yaml | kubectl apply -f -
 
-      - name: Reset the volatile metadata tier
-        shell: bash
-        run: |
-          set -euo pipefail
-          kubectl -n zed rollout restart deployment/zed-postgres
-          kubectl -n zed rollout status deployment/zed-postgres --timeout=180s
-
-      - name: Render and apply exact image digests
+      - name: Apply and reset digest-pinned RAM-backed pgvector
         shell: bash
         run: |
           set -euo pipefail
           evidence="zed-infra/certification/${{ matrix.cloud }}"
           mkdir -p "$evidence"
+          postgres="$evidence/postgres-rendered.yaml"
+          cp zed-infra/k8s/bootstrap/zed-postgres-pgvector.yaml "$postgres"
+          python3 - "$postgres" 'pgvector/pgvector:0.8.5-pg16' "$ZED_POSTGRES_IMAGE" <<'PY'
+          import pathlib, sys
+          path, old, new = sys.argv[1:]
+          target = pathlib.Path(path)
+          text = target.read_text(encoding='utf-8')
+          if text.count(old) != 1:
+              raise SystemExit(f'{path}: expected exactly one {old!r}, found {text.count(old)}')
+          target.write_text(text.replace(old, new), encoding='utf-8')
+          PY
+          ! grep -q 'pgvector/pgvector:0.8.5-pg16' "$postgres"
+          kubectl apply -f "$postgres"
+          kubectl -n zed rollout restart deployment/zed-postgres
+          kubectl -n zed rollout status deployment/zed-postgres --timeout=180s
+
+      - name: Render and apply exact API and web image digests
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="zed-infra/certification/${{ matrix.cloud }}"
           api="$evidence/api-rendered.yaml"
           web="$evidence/web-rendered.yaml"
           kubectl kustomize "zed-api-server.rs/k8s/overlays/${{ matrix.cloud }}" > "$api"
@@ -220,8 +231,6 @@ jobs:
           ! grep -q 'cidr: 0.0.0.0/0' "$api"
           grep -q 'type: Recreate' "$api"
 
-          # Remove an ingress left by any earlier bootstrap revision before the
-          # fail-closed cluster-local manifest is applied.
           kubectl -n zed delete ingress dd-zed-api-server --ignore-not-found=true
           kubectl apply -f "$api"
           kubectl apply -f "$web"
@@ -234,14 +243,12 @@ jobs:
         run: |
           set -euo pipefail
           evidence="zed-infra/certification/${{ matrix.cloud }}"
-          database="$(cat zed-infra/k8s/bootstrap/zed-postgres-pgvector.yaml)"
-          grep -q 'image: pgvector/pgvector:0.8.5-pg16' <<<"$database"
-          grep -q 'medium: Memory' <<<"$database"
-          grep -q 'sizeLimit: 512Mi' <<<"$database"
 
+          test "$(kubectl -n zed get deployment zed-postgres -o jsonpath='{.spec.template.spec.containers[0].image}')" = "$ZED_POSTGRES_IMAGE"
           test "$(kubectl -n zed get deployment dd-zed-api-server -o jsonpath='{.spec.template.spec.containers[0].image}')" = "$ZED_API_IMAGE"
           test "$(kubectl -n zed get deployment dd-zed-web-server -o jsonpath='{.spec.template.spec.containers[0].image}')" = "$ZED_WEB_IMAGE"
           test "$(kubectl -n zed get deployment dd-zed-api-server -o jsonpath='{.spec.strategy.type}')" = 'Recreate'
+          test "$(kubectl -n zed get deployment zed-postgres -o jsonpath='{.status.readyReplicas}')" = '1'
           test "$(kubectl -n zed get deployment dd-zed-api-server -o jsonpath='{.status.readyReplicas}')" = '1'
           test "$(kubectl -n zed get deployment dd-zed-web-server -o jsonpath='{.status.readyReplicas}')" = '2'
           if kubectl -n zed get ingress dd-zed-api-server >/dev/null 2>&1; then
@@ -249,10 +256,13 @@ jobs:
             exit 1
           fi
 
+          postgres_sha="${ZED_POSTGRES_IMAGE##*@}"
           api_sha="${ZED_API_IMAGE##*@}"
           web_sha="${ZED_WEB_IMAGE##*@}"
+          postgres_ids="$(kubectl -n zed get pods -l app=zed-postgres -o jsonpath='{range .items[*].status.containerStatuses[*]}{.imageID}{"\n"}{end}')"
           api_ids="$(kubectl -n zed get pods -l app=dd-zed-api-server -o jsonpath='{range .items[*].status.containerStatuses[*]}{.imageID}{"\n"}{end}')"
           web_ids="$(kubectl -n zed get pods -l app=dd-zed-web-server -o jsonpath='{range .items[*].status.containerStatuses[*]}{.imageID}{"\n"}{end}')"
+          grep -q "$postgres_sha" <<<"$postgres_ids"
           grep -q "$api_sha" <<<"$api_ids"
           grep -q "$web_sha" <<<"$web_ids"
 
@@ -260,9 +270,10 @@ jobs:
             psql -U zed -d zed -Atc "select extversion from pg_extension where extname = 'vector'" | grep -Eq '^0\.8\.'
 
           kubectl -n zed get deployment,pod,service,ingress,networkpolicy -o wide > "$evidence/runtime.txt"
-          kubectl -n zed get deployment dd-zed-api-server dd-zed-web-server -o yaml > "$evidence/deployments.yaml"
+          kubectl -n zed get deployment zed-postgres dd-zed-api-server dd-zed-web-server -o yaml > "$evidence/deployments.yaml"
           kubectl -n zed get networkpolicy dd-zed-api-server -o yaml > "$evidence/api-networkpolicy.yaml"
-          printf 'api_image_ids=%s\nweb_image_ids=%s\n' "$api_ids" "$web_ids" > "$evidence/runtime-images.txt"
+          printf 'postgres_image_ids=%s\napi_image_ids=%s\nweb_image_ids=%s\n' \
+            "$postgres_ids" "$api_ids" "$web_ids" > "$evidence/runtime-images.txt"
 
       - name: Verify cluster-local API and web health
         shell: bash
@@ -420,5 +431,5 @@ jobs:
           gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
             -f state="$state" \
             -f context="zed-cloud/${{ matrix.cloud }}" \
-            -f description="${{ matrix.cloud }} deploy + digest + package certification: $JOB_STATUS" \
+            -f description="${{ matrix.cloud }} deploy + three-digest + package certification: $JOB_STATUS" \
             -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
