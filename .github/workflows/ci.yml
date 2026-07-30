@@ -70,3 +70,12 @@ jobs:
           persist-credentials: false
       - name: Test Zed cloud preflight failure and cleanup paths
         run: bash scripts/test-zed-cloud-preflight.sh
+
+  image-resolver-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Test immutable image label, digest, and token contracts
+        run: bash scripts/test-resolve-zed-images.sh
