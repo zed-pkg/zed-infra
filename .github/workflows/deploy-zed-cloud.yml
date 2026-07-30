@@ -39,8 +39,7 @@ jobs:
       K8S_CLUSTER_REF: d7001b22caf793497c3e461a62346dcc3ab8beb3
       ZED_CLI_REF: a6c1fefad78f9daeaaa73122733217e11b6cf81a
       ZED_INTERFACES_REF: 07d01604461d00e237c7d86ad3855464167574ec
-      # Updated to the final squash commit before this PR is merged.
-      ZED_API_REF: 479b305c45f93db22c8cbde125c5ee7f9967e5e3
+      ZED_API_REF: 3e9becdb23afe8f7b5b3412a20b2c2d74998ab3d
       ZED_WEB_REF: 75f5ac4e35e121485af75588ce453f350e0cabbc
       SYNCER_REF: 7795ce2d1342e17d934d2faafff5c8ed4322609e
       CLIENTS_REF: 54874e9f7df6009fccd9034fce39306daef2c043
