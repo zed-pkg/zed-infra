@@ -23,8 +23,6 @@ if ((${#missing[@]})); then
   exit 2
 fi
 
-# GitHub already masks values sourced from `secrets`, but an explicit mask also
-# protects callers that inject the token through another approved mechanism.
 if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
   printf '::add-mask::%s\n' "$ZED_GHCR_TOKEN"
 fi
@@ -81,9 +79,6 @@ if [[ -z "$nodes" ]]; then
 fi
 node_count="$(printf '%s\n' "$nodes" | sed '/^$/d' | wc -l | tr -d ' ')"
 
-# `kubectl apply`, rollout certification, health probes, exec, and port-forward
-# need more than simple cluster reachability. Check the exact capability classes
-# before any mutating deployment workflow starts.
 rbac_checks=(
   'get|nodes|'
   'get|namespaces|'
@@ -144,7 +139,6 @@ if ((${#denied[@]})); then
   exit 6
 fi
 
-# Validate the exact namespace-local secret shape without persisting it.
 "${kubectl_cmd[@]}" -n zed create secret docker-registry zed-ghcr \
   --docker-server=ghcr.io \
   --docker-username="$ZED_GHCR_USERNAME" \
@@ -168,8 +162,8 @@ if [[ "${ZED_PREFLIGHT_SKIP_GHCR_LOGIN:-0}" != 1 ]]; then
   fi
 
   images=(
-    'ghcr.io/zed-pkg/zed-api-server:main'
-    'ghcr.io/zed-pkg/zed-web-server:main'
+    "${ZED_API_IMAGE:-ghcr.io/zed-pkg/zed-api-server:main}"
+    "${ZED_WEB_IMAGE:-ghcr.io/zed-pkg/zed-web-server:main}"
   )
   for image in "${images[@]}"; do
     if ! DOCKER_CONFIG="$docker_config" docker manifest inspect "$image" >/dev/null 2>&1; then
