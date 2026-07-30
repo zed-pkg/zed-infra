@@ -9,8 +9,11 @@ set -euo pipefail
 
 api_repo="${ZED_API_IMAGE_REPO:-ghcr.io/zed-pkg/zed-api-server}"
 web_repo="${ZED_WEB_IMAGE_REPO:-ghcr.io/zed-pkg/zed-web-server}"
+postgres_repo="${ZED_POSTGRES_IMAGE_REPO:-pgvector/pgvector}"
+postgres_tag_name="${ZED_POSTGRES_TAG:-0.8.5-pg16}"
 api_tag="${api_repo}:${ZED_API_REF}"
 web_tag="${web_repo}:${ZED_WEB_REF}"
+postgres_tag="${postgres_repo}:${postgres_tag_name}"
 evidence="${ZED_IMAGE_EVIDENCE:-${RUNNER_TEMP:-/tmp}/zed-image-provenance.txt}"
 docker_config="$(mktemp -d "${RUNNER_TEMP:-/tmp}/zed-docker.XXXXXX")"
 work="$(mktemp -d "${RUNNER_TEMP:-/tmp}/zed-images.XXXXXX")"
@@ -48,11 +51,15 @@ pull_with_retry() {
 
 pull_with_retry "$api_tag"
 pull_with_retry "$web_tag"
+pull_with_retry "$postgres_tag"
 DOCKER_CONFIG="$docker_config" docker image inspect "$api_tag" > "$work/api.json"
 DOCKER_CONFIG="$docker_config" docker image inspect "$web_tag" > "$work/web.json"
+DOCKER_CONFIG="$docker_config" docker image inspect "$postgres_tag" > "$work/postgres.json"
 
-python3 - "$work/api.json" "$work/web.json" "$api_repo" "$web_repo" \
-  "$ZED_API_REF" "$ZED_WEB_REF" "$ZED_INTERFACES_REF" "$evidence" <<'PY'
+python3 - "$work/api.json" "$work/web.json" "$work/postgres.json" \
+  "$api_repo" "$web_repo" "$postgres_repo" \
+  "$ZED_API_REF" "$ZED_WEB_REF" "$ZED_INTERFACES_REF" \
+  "$postgres_tag_name" "$evidence" <<'PY'
 import json
 import pathlib
 import sys
@@ -60,20 +67,46 @@ import sys
 (
     api_path,
     web_path,
+    postgres_path,
     api_repo,
     web_repo,
+    postgres_repo,
     api_ref,
     web_ref,
     interfaces_ref,
+    postgres_tag,
     evidence_path,
 ) = sys.argv[1:]
 
 
-def validate(path: str, repo: str, source_ref: str, kind: str) -> str:
+def load_one(path: str, kind: str) -> dict:
     values = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
     if len(values) != 1:
         raise SystemExit(f"expected one {kind} image inspection, got {len(values)}")
     value = values[0]
+    if value.get("Architecture") != "amd64" or value.get("Os") != "linux":
+        raise SystemExit(
+            f"{kind} image must be linux/amd64, got {value.get('Os')}/{value.get('Architecture')}"
+        )
+    return value
+
+
+def unique_digest(value: dict, repo: str, kind: str) -> str:
+    matches = []
+    for item in value.get("RepoDigests", []):
+        name, separator, digest = item.partition("@")
+        if not separator or not digest.startswith("sha256:"):
+            continue
+        if name == repo or name.endswith("/" + repo):
+            matches.append(item)
+    matches = sorted(set(matches))
+    if len(matches) != 1:
+        raise SystemExit(f"{kind} image has no unique digest for {repo}: {matches!r}")
+    return matches[0]
+
+
+def validate_zed(path: str, repo: str, source_ref: str, kind: str) -> str:
+    value = load_one(path, kind)
     labels = value.get("Config", {}).get("Labels") or {}
     revision = labels.get("org.opencontainers.image.revision")
     interface_revision = labels.get("io.zpkg.interfaces.revision")
@@ -85,18 +118,12 @@ def validate(path: str, repo: str, source_ref: str, kind: str) -> str:
         raise SystemExit(
             f"{kind} interfaces label mismatch: expected {interfaces_ref}, got {interface_revision}"
         )
-    if value.get("Architecture") != "amd64" or value.get("Os") != "linux":
-        raise SystemExit(
-            f"{kind} image must be linux/amd64, got {value.get('Os')}/{value.get('Architecture')}"
-        )
-    digests = [item for item in value.get("RepoDigests", []) if item.startswith(repo + "@sha256:")]
-    if len(digests) != 1:
-        raise SystemExit(f"{kind} image has no unique digest for {repo}: {digests!r}")
-    return digests[0]
+    return unique_digest(value, repo, kind)
 
 
-api_digest = validate(api_path, api_repo, api_ref, "api")
-web_digest = validate(web_path, web_repo, web_ref, "web")
+api_digest = validate_zed(api_path, api_repo, api_ref, "api")
+web_digest = validate_zed(web_path, web_repo, web_ref, "web")
+postgres_digest = unique_digest(load_one(postgres_path, "postgres"), postgres_repo, "postgres")
 
 path = pathlib.Path(evidence_path)
 path.parent.mkdir(parents=True, exist_ok=True)
@@ -108,6 +135,8 @@ path.write_text(
             f"web_source_revision={web_ref}",
             f"web_image={web_digest}",
             f"interfaces_revision={interfaces_ref}",
+            f"postgres_tag={postgres_repo}:{postgres_tag}",
+            f"postgres_image={postgres_digest}",
             "platform=linux/amd64",
             "",
         ]
@@ -116,15 +145,20 @@ path.write_text(
 )
 print(f"ZED_API_IMAGE={api_digest}")
 print(f"ZED_WEB_IMAGE={web_digest}")
+print(f"ZED_POSTGRES_IMAGE={postgres_digest}")
 PY
 
 api_image="$(sed -n 's/^api_image=//p' "$evidence")"
 web_image="$(sed -n 's/^web_image=//p' "$evidence")"
+postgres_image="$(sed -n 's/^postgres_image=//p' "$evidence")"
 [[ "$api_image" == "$api_repo@sha256:"* ]]
 [[ "$web_image" == "$web_repo@sha256:"* ]]
+[[ "$postgres_image" == "$postgres_repo@sha256:"* || "$postgres_image" == "docker.io/$postgres_repo@sha256:"* ]]
 
 if [[ -n "${GITHUB_ENV:-}" ]]; then
-  printf 'ZED_API_IMAGE=%s\nZED_WEB_IMAGE=%s\n' "$api_image" "$web_image" >> "$GITHUB_ENV"
+  printf 'ZED_API_IMAGE=%s\nZED_WEB_IMAGE=%s\nZED_POSTGRES_IMAGE=%s\n' \
+    "$api_image" "$web_image" "$postgres_image" >> "$GITHUB_ENV"
 fi
 
-printf 'resolved immutable Zed images: api=%s web=%s\n' "$api_image" "$web_image"
+printf 'resolved immutable images: api=%s web=%s postgres=%s\n' \
+  "$api_image" "$web_image" "$postgres_image"
