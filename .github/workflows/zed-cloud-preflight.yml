@@ -5,12 +5,14 @@ on:
     paths:
       - '.github/workflows/zed-cloud-preflight.yml'
       - 'scripts/zed-cloud-preflight.sh'
+      - 'scripts/test-zed-cloud-preflight.sh'
       - 'docs/zed-cloud-preflight.md'
   push:
     branches: [main]
     paths:
       - '.github/workflows/zed-cloud-preflight.yml'
       - 'scripts/zed-cloud-preflight.sh'
+      - 'scripts/test-zed-cloud-preflight.sh'
       - 'docs/zed-cloud-preflight.md'
   workflow_dispatch:
 
@@ -27,78 +29,8 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Validate shell syntax
-        run: bash -n scripts/zed-cloud-preflight.sh
-
-      - name: Exercise success, denied-RBAC, and fail-closed paths
-        shell: bash
-        run: |
-          set -euo pipefail
-          fake_bin="$RUNNER_TEMP/fake-bin"
-          mkdir -p "$fake_bin"
-          cat > "$fake_bin/kubectl" <<'SH'
-          #!/usr/bin/env bash
-          set -euo pipefail
-          case "$*" in
-            *'config current-context'*) echo 'zed-contract' ;;
-            *'config view'*) echo 'https://kubernetes.example.invalid' ;;
-            *'get --raw=/readyz'*) echo 'ok' ;;
-            *'get nodes -o name'*) printf 'node/one\nnode/two\n' ;;
-            *'auth can-i'*)
-              if [[ -n "${FAKE_DENY:-}" && "$*" == *"$FAKE_DENY"* ]]; then
-                echo 'no'
-              else
-                echo 'yes'
-              fi
-              ;;
-            *'create secret docker-registry'*) echo 'secret/zed-ghcr' ;;
-            *) echo "unexpected kubectl invocation: $*" >&2; exit 90 ;;
-          esac
-          SH
-          cat > "$fake_bin/docker" <<'SH'
-          #!/usr/bin/env bash
-          set -euo pipefail
-          case "$*" in
-            *'login ghcr.io'*) cat >/dev/null ;;
-            *'manifest inspect ghcr.io/zed-pkg/zed-api-server:main'*) ;;
-            *'manifest inspect ghcr.io/zed-pkg/zed-web-server:main'*) ;;
-            *) echo "unexpected docker invocation: $*" >&2; exit 91 ;;
-          esac
-          SH
-          chmod +x "$fake_bin/kubectl" "$fake_bin/docker"
-
-          kubeconfig='apiVersion: v1'
-          export PATH="$fake_bin:$PATH"
-          export KUBECONFIG="$RUNNER_TEMP/contract.kubeconfig"
-          export KUBECONFIG_B64="$(printf '%s' "$kubeconfig" | base64 -w0)"
-          export ZED_GHCR_USERNAME='contract-user'
-          export ZED_GHCR_TOKEN='contract-token-must-not-leak'
-          export GITHUB_STEP_SUMMARY="$RUNNER_TEMP/summary.md"
-          export GITHUB_ACTIONS='true'
-
-          bash scripts/zed-cloud-preflight.sh aws
-          grep -q 'Zed cloud preflight: aws' "$GITHUB_STEP_SUMMARY"
-          grep -q 'Reachable nodes: 2' "$GITHUB_STEP_SUMMARY"
-          grep -q 'Deployment RBAC checks: 35 passed' "$GITHUB_STEP_SUMMARY"
-          grep -q '2 image manifests readable' "$GITHUB_STEP_SUMMARY"
-          ! grep -Fq "$ZED_GHCR_TOKEN" "$GITHUB_STEP_SUMMARY"
-          test ! -e "$KUBECONFIG"
-
-          export FAKE_DENY='patch deployments.apps'
-          if bash scripts/zed-cloud-preflight.sh aws 2>"$RUNNER_TEMP/rbac.err"; then
-            echo 'preflight unexpectedly accepted denied deployment RBAC' >&2
-            exit 1
-          fi
-          grep -q 'patch deployments.apps -n zed' "$RUNNER_TEMP/rbac.err"
-          test ! -e "$KUBECONFIG"
-          unset FAKE_DENY
-
-          unset ZED_GHCR_TOKEN
-          if bash scripts/zed-cloud-preflight.sh hetzner 2>"$RUNNER_TEMP/missing.err"; then
-            echo 'preflight unexpectedly accepted a missing secret' >&2
-            exit 1
-          fi
-          grep -q 'ZED_GHCR_TOKEN' "$RUNNER_TEMP/missing.err"
+      - name: Exercise success, denied-RBAC, cleanup, and fail-closed paths
+        run: bash scripts/test-zed-cloud-preflight.sh
 
   live-preflight:
     name: validate ${{ matrix.cloud }} environment
