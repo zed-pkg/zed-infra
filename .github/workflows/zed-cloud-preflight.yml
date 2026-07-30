@@ -79,7 +79,7 @@ jobs:
           bash scripts/zed-cloud-preflight.sh aws
           grep -q 'Zed cloud preflight: aws' "$GITHUB_STEP_SUMMARY"
           grep -q 'Reachable nodes: 2' "$GITHUB_STEP_SUMMARY"
-          grep -q 'Deployment RBAC checks: 33 passed' "$GITHUB_STEP_SUMMARY"
+          grep -q 'Deployment RBAC checks: 35 passed' "$GITHUB_STEP_SUMMARY"
           grep -q '2 image manifests readable' "$GITHUB_STEP_SUMMARY"
           ! grep -Fq "$ZED_GHCR_TOKEN" "$GITHUB_STEP_SUMMARY"
           test ! -e "$KUBECONFIG"
