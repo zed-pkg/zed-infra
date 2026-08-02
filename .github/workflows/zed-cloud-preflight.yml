@@ -47,7 +47,6 @@ jobs:
       group: zed-cloud-preflight-${{ matrix.cloud }}
       cancel-in-progress: false
     env:
-      KUBECONFIG: ${{ runner.temp }}/zed-${{ matrix.cloud }}.kubeconfig
       KUBECONFIG_B64: ${{ secrets.KUBECONFIG_B64 }}
       ZED_GHCR_USERNAME: ${{ secrets.ZED_GHCR_USERNAME }}
       ZED_GHCR_TOKEN: ${{ secrets.ZED_GHCR_TOKEN }}
@@ -57,4 +56,9 @@ jobs:
           persist-credentials: false
 
       - name: Verify protected credentials, deploy RBAC, and image access
+        # KUBECONFIG lives here, not in the job-level env: the `runner`
+        # context is only available to steps, and referencing it above makes
+        # the whole workflow fail to start (no jobs, no logs).
+        env:
+          KUBECONFIG: ${{ runner.temp }}/zed-${{ matrix.cloud }}.kubeconfig
         run: bash scripts/zed-cloud-preflight.sh '${{ matrix.cloud }}'

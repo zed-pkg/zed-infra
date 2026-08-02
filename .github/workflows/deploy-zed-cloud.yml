@@ -32,7 +32,6 @@ jobs:
       group: zed-cloud-${{ matrix.cloud }}
       cancel-in-progress: false
     env:
-      KUBECONFIG: ${{ runner.temp }}/zed-${{ matrix.cloud }}.kubeconfig
       KUBECONFIG_B64: ${{ secrets.KUBECONFIG_B64 }}
       ZED_GHCR_USERNAME: ${{ secrets.ZED_GHCR_USERNAME }}
       ZED_GHCR_TOKEN: ${{ secrets.ZED_GHCR_TOKEN }}
@@ -44,9 +43,18 @@ jobs:
       SYNCER_REF: 7795ce2d1342e17d934d2faafff5c8ed4322609e
       CLIENTS_REF: 54874e9f7df6009fccd9034fce39306daef2c043
       OPTO_E2E_REF: 1d47bd46cf3785416295daf6af84afb8053f1cfd
-      ZED_PKG_HOME: ${{ runner.temp }}/zed-home-${{ matrix.cloud }}
       ZED_PKG_TOKEN: bootstrap-opto-sync-e2e
     steps:
+      # Both paths live under the runner temp dir, but the `runner` context is
+      # not available in a job-level env: block — using it there makes the
+      # workflow fail to start, with no jobs and no logs to explain why.
+      # $RUNNER_TEMP is a plain environment variable at step runtime, so
+      # exporting through $GITHUB_ENV keeps these job-wide and valid.
+      - name: Resolve runner-scoped paths
+        run: |
+          echo "KUBECONFIG=$RUNNER_TEMP/zed-${{ matrix.cloud }}.kubeconfig" >> "$GITHUB_ENV"
+          echo "ZED_PKG_HOME=$RUNNER_TEMP/zed-home-${{ matrix.cloud }}" >> "$GITHUB_ENV"
+
       - name: Checkout deployment controller
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:

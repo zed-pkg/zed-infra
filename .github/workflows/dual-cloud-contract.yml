@@ -132,7 +132,13 @@ jobs:
           set -euo pipefail
           workflow=.github/workflows/deploy-zed-cloud.yml
           grep -q 'cloud: \[aws, hetzner\]' "$workflow"
-          grep -Fq 'environment: ${{ matrix.cloud }}' "$workflow"
+          # Escaped braces on purpose: GitHub expands expressions inside a
+          # run: block before the shell sees it — even in comments — and this
+          # job has no matrix. Written literally, the pattern rendered as
+          # "environment: " and the ratchet asserted almost nothing. The
+          # escaped form below is not an expression start, so the real pinned
+          # value is what gets checked.
+          grep -Eq 'environment: \$\{\{ matrix\.cloud \}\}' "$workflow"
           grep -q 'timeout-minutes: 75' "$workflow"
           grep -q "K8S_CLUSTER_REF: $K8S_CLUSTER_REF" "$workflow"
           grep -q "ZED_API_REF: $ZED_API_REF" "$workflow"
