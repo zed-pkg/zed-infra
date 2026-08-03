@@ -1,0 +1,127 @@
+name: agent wire r2g cloud certification
+
+on:
+  push:
+    branches: [agent/certify-rust-memory-dual-cloud]
+    paths:
+      - '.github/workflows/agent-wire-r2g-cloud.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: agent/certify-rust-memory-dual-cloud
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Apply reviewed stacked update
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: Path, old: str, new: str) -> None:
+              text = path.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one occurrence of {old!r}, found {count}")
+              path.write_text(text.replace(old, new), encoding="utf-8")
+
+          deploy = Path('.github/workflows/deploy-zed-cloud.yml')
+          replace_once(
+              deploy,
+              '      ZED_CLI_REF: 8929a58c6591c7a964d7f91412665d7c8a4afdf3',
+              '      # Stacked on zed-pkg/zed-cli#54 for explicit server-backed R2G.\n'
+              '      # Replace with its merge commit before promoting this workflow.\n'
+              '      ZED_CLI_REF: 48b149a12892f381b1d0c7ac3a0a0cab54a3e57f',
+          )
+          replace_once(
+              deploy,
+              '      - name: Publish, install, erase, and frozen-reinstall through the live Service',
+              '      - name: Publish dependencies, R2G, install, erase, and frozen-reinstall through the live Service',
+          )
+          replace_once(
+              deploy,
+              '          for package in syncer.c opto-sync-clients opto-sync-e2e; do',
+              '          for package in syncer.c opto-sync-clients; do',
+          )
+          replace_once(
+              deploy,
+              '          done\n\n          curl -fsS "$ZED_PKG_REGISTRY/v1/packages/opto-sync/syncer/versions/0.2.1" > "$evidence/syncer.json"',
+              '          done\n\n'
+              '          echo "== R2G certifying opto-sync-e2e on the live process-memory registry =="\n'
+              '          (\n'
+              '            cd opto-sync-e2e\n'
+              '            "$ZED" r2g --registry-mode server --clean\n'
+              '          ) | tee "$evidence/r2g-opto-sync-e2e.log"\n\n'
+              '          curl -fsS "$ZED_PKG_REGISTRY/v1/packages/opto-sync/syncer/versions/0.2.1" > "$evidence/syncer.json"',
+          )
+
+          contract = Path('.github/workflows/dual-cloud-contract.yml')
+          replace_once(
+              contract,
+              "          grep -q 'ZED_CLI_REF: 8929a58c6591c7a964d7f91412665d7c8a4afdf3' \"$workflow\"",
+              "          grep -q 'ZED_CLI_REF: 48b149a12892f381b1d0c7ac3a0a0cab54a3e57f' \"$workflow\"",
+          )
+          replace_once(
+              contract,
+              "          grep -q 'install --install-mode copy' \"$workflow\"",
+              "          grep -q 'r2g --registry-mode server --clean' \"$workflow\"\n"
+              "          grep -q 'r2g-opto-sync-e2e.log' \"$workflow\"\n"
+              "          grep -q 'install --install-mode copy' \"$workflow\"",
+          )
+          replace_once(
+              contract,
+              "              'Publish, install, erase, and frozen-reinstall through the live Service',",
+              "              'Publish dependencies, R2G, install, erase, and frozen-reinstall through the live Service',",
+          )
+
+          docs = Path('docs/dual-cloud-bootstrap.md')
+          replace_once(
+              docs,
+              'After the cluster is healthy, the runner opens a `kubectl port-forward` to the\n'
+              'live cluster-local API Service. It publishes the three packages in dependency\n'
+              'order, verifies registry metadata and SHA-256 identities, and creates a blank\n'
+              'consumer declaring only `opto-sync/opto-sync-e2e`.\n\n'
+              'This is deliberately distinct from `zed r2g`: r2g remains the fast hermetic\n'
+              'pre-publish check against an isolated `file://` registry, while this workflow is\n'
+              'the server-backed acceptance gate against the deployed Rust process-memory\n'
+              'registry on each cloud.',
+              'After the cluster is healthy, the runner opens a `kubectl port-forward` to the\n'
+              'live cluster-local API Service. It publishes `syncer` and `opto-sync-clients` in\n'
+              'dependency order, then runs `zed r2g --registry-mode server --clean` from the\n'
+              '`opto-sync-e2e` release source. R2G packs and publishes that exact artifact,\n'
+              'installs it through the deployed Rust API into a fresh consumer, and runs the\n'
+              'declared `publish.smoke_test`. The workflow then verifies all three registry\n'
+              'metadata/SHA-256 identities and retains the independent transitive install and\n'
+              'frozen-reinstall contract.\n\n'
+              'The ordinary developer `zed r2g` path remains the fast hermetic pre-publish\n'
+              'check against an isolated `file://` registry. Explicit server mode is the\n'
+              'acceptance gate against the deployed Rust process-memory registry on each cloud.',
+          )
+          replace_once(
+              docs,
+              '- package metadata JSON;\n- port-forward diagnostics; and',
+              '- package metadata JSON;\n- the server-backed R2G transcript;\n- port-forward diagnostics; and',
+          )
+          PY
+
+          rm .github/workflows/agent-wire-r2g-cloud.yml
+          git config user.name 'chatgpt-agent'
+          git config user.email 'chatgpt-agent@users.noreply.github.com'
+          git add .github/workflows/deploy-zed-cloud.yml \
+            .github/workflows/dual-cloud-contract.yml \
+            docs/dual-cloud-bootstrap.md \
+            .github/workflows/agent-wire-r2g-cloud.yml
+          git diff --cached --check
+          git commit -m 'ci: certify R2G through the live cloud registry'
+          git push origin HEAD:agent/certify-rust-memory-dual-cloud
