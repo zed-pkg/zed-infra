@@ -34,7 +34,7 @@ jobs:
 
   live-preflight:
     name: validate ${{ matrix.cloud }} environment
-    if: github.event_name == 'workflow_dispatch' && needs.contract.result == 'success'
+    if: (github.event_name == 'workflow_dispatch' || github.event_name == 'push') && needs.contract.result == 'success'
     needs: contract
     runs-on: ubuntu-latest
     timeout-minutes: 15
