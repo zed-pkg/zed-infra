@@ -38,6 +38,12 @@ variable "aws_gateway_ip" {
   default     = "98.90.186.114"
 }
 
+variable "registry_origin" {
+  description = "Transitional override for registry.zpkg.net's target. Today the record is a CNAME to the zpkg-registry-local tunnel (a laptop origin — see DEN-2760); set this to that tunnel hostname to keep the registry serving until DEN-534/DEN-535 promote the cluster API, then clear it. Empty = primary_origin."
+  type        = string
+  default     = ""
+}
+
 variable "proxy_app_records" {
   description = "Proxy registry.zpkg.net / web.zpkg.net through Cloudflare. Keep false until cert-manager has issued the HTTP-01 certs on the cluster, or issuance deadlocks."
   type        = bool

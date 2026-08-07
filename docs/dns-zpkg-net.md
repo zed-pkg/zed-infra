@@ -30,10 +30,19 @@ Defaults that already point here: `zed-cli` ships with
 2. **tfvars.** `cp terraform.tfvars.example terraform.tfvars`, fill
    `account_id` and the `zpkg.net` `zone_id`
    (`https://dash.cloudflare.com` → zpkg.net → Overview, right rail).
-3. **Import the stray record.** A manually created, proxied
-   `registry.zpkg.net` record already exists (left over from a
-   `zpkg-registry-local` tunnel experiment; it serves an empty 404). Import it
-   so the first plan is a no-op-or-update rather than a create conflict:
+3. **Import the existing registry record — it is LIVE, not stray.** The
+   manually created, proxied `registry.zpkg.net` record is a CNAME to the
+   `zpkg-registry-local` Cloudflare tunnel, which serves the real registry
+   (with published packages) off a laptop's `localhost:8080` (DEN-2760;
+   zed-cli's shipped default resolves through it). Applying with defaults
+   repoints it at the cluster, which serves nothing until DEN-534/DEN-535
+   promote the public API — so either accept that gap, or set
+   `registry_origin` in tfvars to the tunnel hostname
+   (`<tunnel-id>.cfargotunnel.com`, visible in the record you import) to
+   keep the tunnel serving through the transition, and clear it at
+   promotion. While the override is set, the drift check reports the
+   registry record as DIFFERS — that is the expected transitional state.
+   Import so the first plan is an update rather than a create conflict:
 
    ```sh
    # list records to get <record_id>

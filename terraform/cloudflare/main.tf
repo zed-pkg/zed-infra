@@ -114,7 +114,7 @@ resource "cloudflare_dns_record" "registry" {
   zone_id = var.zone_id
   name    = "registry.zpkg.net"
   type    = "CNAME"
-  content = var.primary_origin
+  content = var.registry_origin != "" ? var.registry_origin : var.primary_origin
   proxied = var.proxy_app_records
   ttl     = 1
 }
