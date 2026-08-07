@@ -9,9 +9,10 @@ and must not accumulate app records. Both zones are on Cloudflare
 | Hostname | Serves | Backed by |
 | --- | --- | --- |
 | `zpkg.net` (+ `www`) | Marketing site | GitHub Pages (`zed-pkg/zed-pkg.github.io`) |
-| `registry.zpkg.net` | Registry REST API | `zed-api-server` on k8s (port 8080) |
+| `api.zpkg.net` | API server root | `zed-api-server` on k8s (port 8080) |
+| `registry.zpkg.net` | Registry REST API | Same root as `api.zpkg.net` today; later a sub-path of the API server (ingress path route or edge rewrite — DNS unchanged) |
 | `web.zpkg.net` | Read-only registry UI | `zed-web-server` on k8s (port 8081) |
-| `registry.<cloud>.zpkg.net`, `web.<cloud>.zpkg.net` | Per-cloud canary/debug | `k8s/overlays/{aws,hetzner}` in the app repos |
+| `api./registry./web.<cloud>.zpkg.net` | Per-cloud canary/debug | `k8s/overlays/{aws,hetzner}` in the app repos |
 | `origin-hetzner.zpkg.net`, `origin-aws.zpkg.net` | Origin A records, never proxied | Cluster edge nodes (ORESoftware/k8s-cluster) |
 
 Defaults that already point here: `zed-cli` ships with
@@ -91,7 +92,8 @@ dig +short zpkg.net            # GitHub Pages IPs (185.199.108-111.153)
 dig +short web.zpkg.net        # origin-hetzner (or CF proxy IPs once flipped)
 curl -sI https://zpkg.net | head -3
 curl -s https://web.zpkg.net/healthz
-curl -s https://registry.zpkg.net/healthz   # only after DEN-534/535 promotion
+curl -s https://api.zpkg.net/healthz        # only after DEN-534/535 promotion
+curl -s https://registry.zpkg.net/healthz   # same root as api.zpkg.net today
 ```
 
 As of 2026-08-07 the Hetzner edge (95.217.171.250) did not answer on 80/443

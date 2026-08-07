@@ -21,6 +21,9 @@ zpkg.net|CNAME|zed-pkg.github.io|false
 www.zpkg.net|CNAME|zed-pkg.github.io|false
 origin-hetzner.zpkg.net|A|95.217.171.250|false
 origin-aws.zpkg.net|A|98.90.186.114|false
+api.zpkg.net|CNAME|origin-hetzner.zpkg.net|false
+api.aws.zpkg.net|CNAME|origin-aws.zpkg.net|false
+api.hetzner.zpkg.net|CNAME|origin-hetzner.zpkg.net|false
 registry.zpkg.net|CNAME|origin-hetzner.zpkg.net|false
 web.zpkg.net|CNAME|origin-hetzner.zpkg.net|false
 registry.aws.zpkg.net|CNAME|origin-aws.zpkg.net|false
@@ -50,11 +53,11 @@ while IFS='|' read -r name type content proxied; do
     echo "MISSING  ${name} ${type} -> ${content}"
     drift=1
   elif [ "$match" != "${name}|${type}|${content}|${proxied}" ]; then
-    # registry.zpkg.net/web.zpkg.net may legitimately be proxied after the
+    # api/registry/web.zpkg.net may legitimately be proxied after the
     # post-cert flip (proxy_app_records=true); only content counts for them.
     live_content="$(cut -d'|' -f3 <<<"$match")"
     case "$name" in
-      registry.zpkg.net|web.zpkg.net)
+      api.zpkg.net|registry.zpkg.net|web.zpkg.net)
         if [ "$live_content" != "$content" ]; then
           echo "DIFFERS  ${name}: live '${match}' want content '${content}'"
           drift=1
