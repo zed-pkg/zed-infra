@@ -6,7 +6,7 @@ that runs the backend.
 
 ```
 terraform/
-  cloudflare/   R2 artifact buckets + zpkg.tech DNS   (primary)
+  cloudflare/   R2 artifact buckets + zpkg.net DNS    (primary)
   aws/          S3 artifact bucket + least-priv IAM    (alternative)
   gcp/          planned (GCS + GKE)
 k8s/
