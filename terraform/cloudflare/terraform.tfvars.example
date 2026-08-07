@@ -1,7 +1,9 @@
-cloudflare_api_token = "REPLACE-ME"
-account_id           = "REPLACE-ME-account-id"
-zone_id              = "REPLACE-ME-zone-id"
-r2_location          = "wnam"
-registry_origin      = "origin.zpkg.tech"
-web_origin           = "origin.zpkg.tech"
-marketing_origin     = "zed-pkg.github.io"
+# Token is NOT a tfvar: export CLOUDFLARE_API_TOKEN in the shell instead
+# (Zone:DNS:Edit on zpkg.net + account R2 write).
+account_id = "REPLACE-ME-account-id"
+zone_id    = "REPLACE-ME-zpkg-net-zone-id"
+
+# Optional overrides (defaults in variables.tf):
+# r2_location        = "wnam"
+# primary_origin     = "origin-hetzner.zpkg.net"
+# proxy_app_records  = false  # flip to true only after certs are issued

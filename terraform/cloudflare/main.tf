@@ -19,9 +19,10 @@ terraform {
   # }
 }
 
-provider "cloudflare" {
-  api_token = var.cloudflare_api_token
-}
+# Token comes from the CLOUDFLARE_API_TOKEN environment variable (house
+# convention: never a tf variable — it leaks into tfvars and plan files).
+# Needs Zone:DNS:Edit on zpkg.net plus account R2 write for the buckets.
+provider "cloudflare" {}
 
 # Artifact storage: zed-pkg is the primary host of package tarballs/zips.
 resource "cloudflare_r2_bucket" "artifacts" {
@@ -36,33 +37,109 @@ resource "cloudflare_r2_bucket" "artifacts_dev" {
   location   = var.r2_location
 }
 
-# DNS for the registry API and the zpkg.tech apex/www (proxied). Targets are
-# placeholders: point them at your ingress/load balancer or Pages project.
-resource "cloudflare_dns_record" "registry" {
-  zone_id = var.zone_id
-  name    = "registry.zpkg.tech"
-  type    = "CNAME"
-  content = var.registry_origin
-  proxied = true
-  ttl     = 1
-}
+# ---------------------------------------------------------------------------
+# zpkg.net — the public domain. (zpkg.tech is parked for a future purpose and
+# intentionally has no records here.)
+#
+#   zpkg.net / www.zpkg.net  -> GitHub Pages marketing site (zed-pkg.github.io)
+#   registry.zpkg.net        -> zed-api-server  (registry REST API, k8s)
+#   web.zpkg.net             -> zed-web-server  (read-only registry UI, k8s)
+#
+# Ordering rule (see docs/wiring-k8s-cluster.md and the canonical.plus runbook
+# in ORESoftware/k8s-cluster): app records stay DNS-only until cert-manager
+# has issued the HTTP-01 certs on the cluster, then flip proxy_app_records.
+# The Pages records stay DNS-only permanently so GitHub can provision and
+# renew its own certificate for the custom domain.
+# ---------------------------------------------------------------------------
 
-resource "cloudflare_dns_record" "www" {
-  zone_id = var.zone_id
-  name    = "www.zpkg.tech"
-  type    = "CNAME"
-  content = var.web_origin
-  proxied = true
-  ttl     = 1
-}
-
-# The marketing site is GitHub Pages (Astro). Point the apex at Pages, or set
-# a custom domain in the Pages project and add the record there instead.
+# Apex -> GitHub Pages. Cloudflare flattens the apex CNAME automatically.
 resource "cloudflare_dns_record" "apex" {
   zone_id = var.zone_id
-  name    = "zpkg.tech"
+  name    = "zpkg.net"
   type    = "CNAME"
   content = var.marketing_origin
-  proxied = true
+  proxied = false
   ttl     = 1
+}
+
+# GitHub Pages redirects www -> apex once the custom domain is set.
+resource "cloudflare_dns_record" "www" {
+  zone_id = var.zone_id
+  name    = "www.zpkg.net"
+  type    = "CNAME"
+  content = var.marketing_origin
+  proxied = false
+  ttl     = 1
+}
+
+# Origin hosts: one per cluster, always DNS-only (cert-manager HTTP-01 and
+# direct origin reachability depend on it). IPs are the cluster edge nodes
+# documented in ORESoftware/k8s-cluster (Hetzner ingress-nginx hostNetwork
+# node; AWS dd-remote-gateway EIP).
+resource "cloudflare_dns_record" "origin_hetzner" {
+  zone_id = var.zone_id
+  name    = "origin-hetzner.zpkg.net"
+  type    = "A"
+  content = var.hetzner_ingress_ip
+  proxied = false
+  ttl     = 300
+}
+
+resource "cloudflare_dns_record" "origin_aws" {
+  zone_id = var.zone_id
+  name    = "origin-aws.zpkg.net"
+  type    = "A"
+  content = var.aws_gateway_ip
+  proxied = false
+  ttl     = 300
+}
+
+# Primary public hostnames. Hetzner is the serving cluster today; repoint
+# primary_origin when that changes.
+resource "cloudflare_dns_record" "registry" {
+  zone_id = var.zone_id
+  name    = "registry.zpkg.net"
+  type    = "CNAME"
+  content = var.primary_origin
+  proxied = var.proxy_app_records
+  ttl     = 1
+}
+
+resource "cloudflare_dns_record" "web" {
+  zone_id = var.zone_id
+  name    = "web.zpkg.net"
+  type    = "CNAME"
+  content = var.primary_origin
+  proxied = var.proxy_app_records
+  ttl     = 1
+}
+
+# Per-cloud hostnames asserted by the dual-cloud deploy contract
+# (registry.<cloud>.zpkg.net / web.<cloud>.zpkg.net). Always DNS-only:
+# they exist for cert issuance, canaries, and direct-to-cluster debugging.
+resource "cloudflare_dns_record" "registry_per_cloud" {
+  for_each = local.cloud_origins
+  zone_id  = var.zone_id
+  name     = "registry.${each.key}.zpkg.net"
+  type     = "CNAME"
+  content  = each.value
+  proxied  = false
+  ttl      = 300
+}
+
+resource "cloudflare_dns_record" "web_per_cloud" {
+  for_each = local.cloud_origins
+  zone_id  = var.zone_id
+  name     = "web.${each.key}.zpkg.net"
+  type     = "CNAME"
+  content  = each.value
+  proxied  = false
+  ttl      = 300
+}
+
+locals {
+  cloud_origins = {
+    aws     = "origin-aws.zpkg.net"
+    hetzner = "origin-hetzner.zpkg.net"
+  }
 }

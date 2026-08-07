@@ -1,16 +1,10 @@
-variable "cloudflare_api_token" {
-  description = "Cloudflare API token with R2 + DNS edit permissions"
-  type        = string
-  sensitive   = true
-}
-
 variable "account_id" {
   description = "Cloudflare account id (also the R2 S3 endpoint host prefix)"
   type        = string
 }
 
 variable "zone_id" {
-  description = "Cloudflare zone id for zpkg.tech"
+  description = "Cloudflare zone id for zpkg.net"
   type        = string
 }
 
@@ -20,20 +14,32 @@ variable "r2_location" {
   default     = "wnam"
 }
 
-variable "registry_origin" {
-  description = "Origin hostname the registry API CNAME points at"
-  type        = string
-  default     = "origin.zpkg.tech"
-}
-
-variable "web_origin" {
-  description = "Origin hostname the registry web UI CNAME points at"
-  type        = string
-  default     = "origin.zpkg.tech"
-}
-
 variable "marketing_origin" {
   description = "Origin for the marketing site (GitHub Pages)"
   type        = string
   default     = "zed-pkg.github.io"
+}
+
+variable "primary_origin" {
+  description = "Origin hostname registry.zpkg.net / web.zpkg.net point at"
+  type        = string
+  default     = "origin-hetzner.zpkg.net"
+}
+
+variable "hetzner_ingress_ip" {
+  description = "Hetzner cluster edge node (ingress-nginx hostNetwork; see ORESoftware/k8s-cluster remote/hetzner)"
+  type        = string
+  default     = "95.217.171.250"
+}
+
+variable "aws_gateway_ip" {
+  description = "AWS cluster gateway EIP (dd-remote-gateway hostPort; see ORESoftware/k8s-cluster remote/ec2)"
+  type        = string
+  default     = "98.90.186.114"
+}
+
+variable "proxy_app_records" {
+  description = "Proxy registry.zpkg.net / web.zpkg.net through Cloudflare. Keep false until cert-manager has issued the HTTP-01 certs on the cluster, or issuance deadlocks."
+  type        = bool
+  default     = false
 }

@@ -97,9 +97,10 @@ kubectl apply -f remote/argocd/apps/zed.applications.yaml
   `terraform/cloudflare` outputs.
 - **DB migrated** once — `AUTO_MIGRATE` is `false` in-cluster so two replicas
   don't race the migrator. Run the migration as a one-off Job or exec.
-- **DNS** applied via `terraform/cloudflare` so `registry.zpkg.tech` /
-  `www.zpkg.tech` resolve to the ingress. Keep records DNS-only until the
-  cert-manager certificate is issued (ACME HTTP-01 ordering).
+- **DNS** applied via `terraform/cloudflare` so `registry.zpkg.net` /
+  `web.zpkg.net` resolve to the ingress. Keep records DNS-only until the
+  cert-manager certificate is issued (ACME HTTP-01 ordering); see
+  `docs/dns-zpkg-net.md` for the full cutover runbook.
 
 ## Promotion
 
