@@ -120,10 +120,10 @@ jobs:
             ! grep -q 'port: 443' "$api"
             ! grep -q 'port: 6543' "$api"
             grep -q 'replicas: 2' "$web"
-            grep -q "registry.$cloud.zpkg.tech" "$web"
+            grep -q "registry.$cloud.zpkg.net" "$web"
           done
-          grep -q 'host: aws.zpkg.tech' /tmp/web-aws.yaml
-          grep -q 'host: hetzner.zpkg.tech' /tmp/web-hetzner.yaml
+          grep -q 'host: web.aws.zpkg.net' /tmp/web-aws.yaml
+          grep -q 'host: web.hetzner.zpkg.net' /tmp/web-hetzner.yaml
 
       - name: Ratchet three-digest deployment and package certification
         shell: bash
