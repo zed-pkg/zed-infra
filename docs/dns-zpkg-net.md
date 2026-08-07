@@ -92,7 +92,8 @@ dig +short zpkg.net            # GitHub Pages IPs (185.199.108-111.153)
 dig +short web.zpkg.net        # origin-hetzner (or CF proxy IPs once flipped)
 curl -sI https://zpkg.net | head -3
 curl -s https://web.zpkg.net/healthz
-curl -s https://registry.zpkg.net/healthz   # only after DEN-534/535 promotion
+curl -s https://api.zpkg.net/healthz        # only after DEN-534/535 promotion
+curl -s https://registry.zpkg.net/healthz   # same root as api.zpkg.net today
 ```
 
 As of 2026-08-07 the Hetzner edge (95.217.171.250) did not answer on 80/443
