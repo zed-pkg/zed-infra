@@ -9,9 +9,10 @@ and must not accumulate app records. Both zones are on Cloudflare
 | Hostname | Serves | Backed by |
 | --- | --- | --- |
 | `zpkg.net` (+ `www`) | Marketing site | GitHub Pages (`zed-pkg/zed-pkg.github.io`) |
-| `registry.zpkg.net` | Registry REST API | `zed-api-server` on k8s (port 8080) |
+| `api.zpkg.net` | API server root | `zed-api-server` on k8s (port 8080) |
+| `registry.zpkg.net` | Registry REST API | Same root as `api.zpkg.net` today; later a sub-path of the API server (ingress path route or edge rewrite — DNS unchanged) |
 | `web.zpkg.net` | Read-only registry UI | `zed-web-server` on k8s (port 8081) |
-| `registry.<cloud>.zpkg.net`, `web.<cloud>.zpkg.net` | Per-cloud canary/debug | `k8s/overlays/{aws,hetzner}` in the app repos |
+| `api./registry./web.<cloud>.zpkg.net` | Per-cloud canary/debug | `k8s/overlays/{aws,hetzner}` in the app repos |
 | `origin-hetzner.zpkg.net`, `origin-aws.zpkg.net` | Origin A records, never proxied | Cluster edge nodes (ORESoftware/k8s-cluster) |
 
 Defaults that already point here: `zed-cli` ships with
