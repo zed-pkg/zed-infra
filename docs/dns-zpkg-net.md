@@ -68,6 +68,22 @@ Defaults that already point here: `zed-cli` ships with
    `proxy_app_records = true` and re-apply. Origin and per-cloud records stay
    DNS-only forever.
 
+## Keeping the zone synced with the repo
+
+CI runs `scripts/check-cloudflare-drift.sh` (workflow `cloudflare drift`) on
+terraform PRs, weekly, and on dispatch — it compares the live zone against
+the records declared in `terraform/cloudflare/main.tf` and fails on missing,
+divergent, or unmanaged records. To arm it, add:
+
+- repo secret `CLOUDFLARE_DNS_READ_TOKEN` — a second, read-only token
+  (Zone:DNS:Read on zpkg.net only), never the edit token;
+- repo variable `ZPKG_NET_ZONE_ID`.
+
+Until both exist the job succeeds with a "not configured" notice. When the
+edit token gains a second operator or CI applies, enable the commented R2
+`backend "s3"` block in `main.tf` first — two concurrent local states against
+one zone will silently fight.
+
 ## Verification
 
 ```sh
