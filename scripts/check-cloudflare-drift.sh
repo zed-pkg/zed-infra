@@ -73,7 +73,7 @@ done <<<"$expected"
 while IFS='|' read -r name type content proxied; do
   [ -z "$name" ] && continue
   case "$type" in TXT) [[ "$name" == _acme-challenge.* ]] && continue ;; esac
-  if ! grep -qF "${name}|${type}|" <<<"$expected"; then
+  if [ -z "$(awk -F'|' -v n="$name" -v t="$type" '$1==n && $2==t' <<<"$expected")" ]; then
     echo "UNMANAGED ${name} ${type} -> ${content} (not in terraform)"
     drift=1
   fi
