@@ -131,6 +131,16 @@ resource "cloudflare_dns_record" "web" {
 # Per-cloud hostnames asserted by the dual-cloud deploy contract
 # (registry.<cloud>.zpkg.net / web.<cloud>.zpkg.net). Always DNS-only:
 # they exist for cert issuance, canaries, and direct-to-cluster debugging.
+resource "cloudflare_dns_record" "api_per_cloud" {
+  for_each = local.cloud_origins
+  zone_id  = var.zone_id
+  name     = "api.${each.key}.zpkg.net"
+  type     = "CNAME"
+  content  = each.value
+  proxied  = false
+  ttl      = 300
+}
+
 resource "cloudflare_dns_record" "registry_per_cloud" {
   for_each = local.cloud_origins
   zone_id  = var.zone_id
