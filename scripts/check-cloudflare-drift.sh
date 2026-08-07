@@ -45,7 +45,7 @@ live="$(jq -r '.result[] | "\(.name)|\(.type)|\(.content)|\(.proxied)"' <<<"$liv
 drift=0
 
 while IFS='|' read -r name type content proxied; do
-  match="$(grep -F "${name}|${type}|" <<<"$live" || true)"
+  match="$(awk -F'|' -v n="$name" -v t="$type" '$1==n && $2==t' <<<"$live")"
   if [ -z "$match" ]; then
     echo "MISSING  ${name} ${type} -> ${content}"
     drift=1
