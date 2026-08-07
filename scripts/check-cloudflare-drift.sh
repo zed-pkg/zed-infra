@@ -21,6 +21,9 @@ zpkg.net|CNAME|zed-pkg.github.io|false
 www.zpkg.net|CNAME|zed-pkg.github.io|false
 origin-hetzner.zpkg.net|A|95.217.171.250|false
 origin-aws.zpkg.net|A|98.90.186.114|false
+api.zpkg.net|CNAME|origin-hetzner.zpkg.net|false
+api.aws.zpkg.net|CNAME|origin-aws.zpkg.net|false
+api.hetzner.zpkg.net|CNAME|origin-hetzner.zpkg.net|false
 registry.zpkg.net|CNAME|origin-hetzner.zpkg.net|false
 web.zpkg.net|CNAME|origin-hetzner.zpkg.net|false
 registry.aws.zpkg.net|CNAME|origin-aws.zpkg.net|false
