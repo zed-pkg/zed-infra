@@ -27,8 +27,8 @@ permissions:
 
 env:
   K8S_CLUSTER_REF: d7001b22caf793497c3e461a62346dcc3ab8beb3
-  ZED_API_REF: 3e9becdb23afe8f7b5b3412a20b2c2d74998ab3d
-  ZED_WEB_REF: 75f5ac4e35e121485af75588ce453f350e0cabbc
+  ZED_API_REF: f2662d345ced472e6e02c4aa3ccbabc224d361cf
+  ZED_WEB_REF: 738460353e620d57b3f23dc3d4e31c4b0b49a180
 
 jobs:
   contract:

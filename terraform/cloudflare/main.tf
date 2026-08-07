@@ -96,6 +96,20 @@ resource "cloudflare_dns_record" "origin_aws" {
 
 # Primary public hostnames. Hetzner is the serving cluster today; repoint
 # primary_origin when that changes.
+#
+# api.zpkg.net and registry.zpkg.net both resolve to the zed-api-server
+# root for now. Later, registry.zpkg.net moves to a sub-path of the API
+# (an ingress path route or edge rewrite), while api.zpkg.net keeps the
+# root — DNS for both stays exactly this either way.
+resource "cloudflare_dns_record" "api" {
+  zone_id = var.zone_id
+  name    = "api.zpkg.net"
+  type    = "CNAME"
+  content = var.primary_origin
+  proxied = var.proxy_app_records
+  ttl     = 1
+}
+
 resource "cloudflare_dns_record" "registry" {
   zone_id = var.zone_id
   name    = "registry.zpkg.net"
