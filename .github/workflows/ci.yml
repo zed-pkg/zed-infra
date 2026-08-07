@@ -1,41 +1,103 @@
 name: ci
+
 on:
   push:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   terraform-fmt:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: hashicorp/setup-terraform@v3
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
       - run: terraform fmt -check -recursive terraform/
 
   kustomize-build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - name: Build overlays
         run: |
+          set -euo pipefail
           for overlay in k8s/manifests/*/overlays/*; do
             echo "== $overlay =="
             kubectl kustomize "$overlay" >/dev/null
           done
 
+  # yaml-lint below proves the files *parse*; it cannot see an invalid
+  # expression. A job-level `env:` referencing ${{ runner.* }} is valid YAML
+  # but makes the whole workflow fail to start — no jobs, no logs, nothing to
+  # debug from. That shipped and went unnoticed through eight red runs of the
+  # deploy pipeline, so the expression checker is its own gate.
+  actionlint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Lint workflow expressions and context availability
+        run: |
+          set -euo pipefail
+          version=1.7.7
+          curl -fsSL --retry 3 \
+            "https://github.com/rhysd/actionlint/releases/download/v${version}/actionlint_${version}_linux_amd64.tar.gz" \
+            | tar xz actionlint
+          # shellcheck/pyflakes are separate concerns and not installed here;
+          # this gate is specifically about workflow expressions.
+          ./actionlint -shellcheck= -pyflakes= .github/workflows/*.yml
+
   yaml-lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Validate YAML syntax
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Validate manifest and workflow YAML syntax
         run: |
           python3 - <<'PY'
-          import glob, sys, yaml
+          import glob
+          import sys
+          import yaml
+
+          files = sorted(
+              glob.glob("k8s/**/*.yaml", recursive=True)
+              + glob.glob(".github/workflows/*.yml")
+              + glob.glob(".github/workflows/*.yaml")
+          )
           bad = 0
-          for f in glob.glob("k8s/**/*.yaml", recursive=True):
+          for path in files:
               try:
-                  list(yaml.safe_load_all(open(f)))
-              except Exception as e:
-                  print(f"{f}: {e}"); bad += 1
+                  with open(path, encoding="utf-8") as handle:
+                      list(yaml.safe_load_all(handle))
+              except Exception as exc:
+                  print(f"{path}: {exc}")
+                  bad += 1
+          print(f"validated {len(files)} YAML files")
           sys.exit(1 if bad else 0)
           PY
+
+  preflight-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Test Zed cloud preflight failure and cleanup paths
+        run: bash scripts/test-zed-cloud-preflight.sh
+
+  image-resolver-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Test immutable image label, digest, and token contracts
+        run: bash scripts/test-resolve-zed-images.sh

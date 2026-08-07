@@ -1,0 +1,64 @@
+name: zed cloud preflight
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/zed-cloud-preflight.yml'
+      - 'scripts/zed-cloud-preflight.sh'
+      - 'scripts/test-zed-cloud-preflight.sh'
+      - 'docs/zed-cloud-preflight.md'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/zed-cloud-preflight.yml'
+      - 'scripts/zed-cloud-preflight.sh'
+      - 'scripts/test-zed-cloud-preflight.sh'
+      - 'docs/zed-cloud-preflight.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    name: preflight script contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Exercise success, denied-RBAC, cleanup, and fail-closed paths
+        run: bash scripts/test-zed-cloud-preflight.sh
+
+  live-preflight:
+    name: validate ${{ matrix.cloud }} environment
+    if: (github.event_name == 'workflow_dispatch' || github.event_name == 'push') && needs.contract.result == 'success'
+    needs: contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        cloud: [aws, hetzner]
+    environment: ${{ matrix.cloud }}
+    concurrency:
+      group: zed-cloud-preflight-${{ matrix.cloud }}
+      cancel-in-progress: false
+    env:
+      KUBECONFIG_B64: ${{ secrets.KUBECONFIG_B64 }}
+      ZED_GHCR_USERNAME: ${{ secrets.ZED_GHCR_USERNAME }}
+      ZED_GHCR_TOKEN: ${{ secrets.ZED_GHCR_TOKEN }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Verify protected credentials, deploy RBAC, and image access
+        # KUBECONFIG lives here, not in the job-level env: the `runner`
+        # context is only available to steps, and referencing it above makes
+        # the whole workflow fail to start (no jobs, no logs).
+        env:
+          KUBECONFIG: ${{ runner.temp }}/zed-${{ matrix.cloud }}.kubeconfig
+        run: bash scripts/zed-cloud-preflight.sh '${{ matrix.cloud }}'
