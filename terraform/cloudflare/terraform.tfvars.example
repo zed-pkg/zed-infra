@@ -1,9 +1,11 @@
 # Token is NOT a tfvar: export CLOUDFLARE_API_TOKEN in the shell instead
 # (Zone:DNS:Edit on zpkg.net + account R2 write).
-account_id = "REPLACE-ME-account-id"
-zone_id    = "REPLACE-ME-zpkg-net-zone-id"
+# IDs below are real (not secrets) — captured from the 2026-08-07 audit docs.
+account_id = "62b833940607839add74bd2379cac303"
+zone_id    = "b559136046dcffc550ee8b3ed49cdf09" # zpkg.net
 
 # Optional overrides (defaults in variables.tf):
 # r2_location        = "wnam"
 # primary_origin     = "origin-hetzner.zpkg.net"
+# registry_origin    = "2eb5c6d9-a2b7-4c5e-9222-2f43e91f90e1.cfargotunnel.com" # keep the tunnel serving until DEN-534/535
 # proxy_app_records  = false  # flip to true only after certs are issued
