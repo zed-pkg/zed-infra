@@ -1,12 +1,12 @@
 # zed-infra
 
-Infrastructure-as-code for [zed-pkg](https://zpkg.tech): Cloudflare (R2 + DNS),
+Infrastructure-as-code for [zed-pkg](https://zpkg.net): Cloudflare (R2 + DNS),
 AWS (S3 alternative), GCP (planned), and the Kubernetes Argo CD app-of-apps
 that runs the backend.
 
 ```
 terraform/
-  cloudflare/   R2 artifact buckets + zpkg.tech DNS   (primary)
+  cloudflare/   R2 artifact buckets + zpkg.net DNS    (primary)
   aws/          S3 artifact bucket + least-priv IAM    (alternative)
   gcp/          planned (GCS + GKE)
 k8s/
@@ -78,27 +78,6 @@ kubectl apply -f k8s/bootstrap/zed.yaml
 
 Building images uses a parent-dir build context (the services path-depend on
 `../zed-interfaces`); see the wiring doc for the exact commands.
-
-## Environment secrets (sops + just + nix)
-
-Provider credentials for zed-pkg (the zpkg.net Cloudflare zone token, Supabase
-keys) live encrypted in `env/enc/<name>.env.enc` — sops with age recipients,
-dotenv format, values-only encryption so the variable names double as a
-reviewable schema. `env/template.env.example` documents every variable.
-
-```sh
-nix develop         # sops, age, just, ores-sops, kubectl, jq
-just edit prod      # change a secret in place; plaintext never touches disk
-just use prod       # decrypt and symlink ./.env for local tooling
-just audit          # CI/pre-commit gate: nothing plaintext is committable
-just cf-verify prod # prove the zone token actually authenticates
-```
-
-Secrets enter this store only via `just edit` (or `sops edit`) on a trusted
-host. A credential that has transited chat, a shell command, or an unencrypted
-file is burned: revoke it at the provider and mint a fresh one. Onboarding a
-new machine or operator is a `.sops.yaml` recipient addition + `sops
-updatekeys`; the flow is documented at the top of [.sops.yaml](.sops.yaml).
 
 ## License
 
