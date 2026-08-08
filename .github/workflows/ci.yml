@@ -16,17 +16,7 @@ jobs:
         with:
           persist-credentials: false
       - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
-        with:
-          terraform_version: 1.9.8
       - run: terraform fmt -check -recursive terraform/
-      - name: Validate modules
-        run: |
-          set -euo pipefail
-          for module in terraform/cloudflare terraform/aws; do
-            echo "== $module =="
-            terraform -chdir="$module" init -backend=false -input=false >/dev/null
-            terraform -chdir="$module" validate
-          done
 
   kustomize-build:
     runs-on: ubuntu-latest

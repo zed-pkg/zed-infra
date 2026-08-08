@@ -4,5 +4,5 @@ metadata:
   name: zed-web-server-config
 data:
   BIND_ADDR: "0.0.0.0:8081"
-  PUBLIC_REGISTRY_URL: "https://registry.zpkg.net"
+  PUBLIC_REGISTRY_URL: "https://registry.zpkg.tech"
   RUST_LOG: "info"

@@ -7,10 +7,10 @@ metadata:
 spec:
   ingressClassName: nginx
   tls:
-    - hosts: [web.zpkg.net]
+    - hosts: [www.zpkg.tech]
       secretName: zed-web-server-tls
   rules:
-    - host: web.zpkg.net
+    - host: www.zpkg.tech
       http:
         paths:
           - path: /

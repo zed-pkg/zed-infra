@@ -10,6 +10,6 @@ data:
   S3_ENDPOINT_URL: "https://REPLACE-ME-account-id.r2.cloudflarestorage.com"
   S3_REGION: "auto"
   S3_FORCE_PATH_STYLE: "true"
-  PUBLIC_BASE_URL: "https://registry.zpkg.net"
+  PUBLIC_BASE_URL: "https://registry.zpkg.tech"
   ZED_VERIFY_TAGS: "github"
   RUST_LOG: "info"
