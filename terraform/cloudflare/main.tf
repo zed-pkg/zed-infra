@@ -105,8 +105,9 @@ resource "cloudflare_dns_record" "api" {
   zone_id = var.zone_id
   name    = "api.zpkg.net"
   type    = "CNAME"
-  content = var.primary_origin
-  proxied = var.proxy_app_records
+  content = var.api_origin != "" ? var.api_origin : var.primary_origin
+  # Same rule as registry: a cfargotunnel.com target only works proxied.
+  proxied = var.api_origin != "" ? true : var.proxy_app_records
   ttl     = 1
 }
 
