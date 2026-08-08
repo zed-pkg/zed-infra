@@ -127,8 +127,8 @@ resource "cloudflare_dns_record" "web" {
   zone_id = var.zone_id
   name    = "web.zpkg.net"
   type    = "CNAME"
-  content = var.primary_origin
-  proxied = var.proxy_app_records
+  content = var.web_origin != "" ? var.web_origin : var.primary_origin
+  proxied = var.web_origin != "" ? true : var.proxy_app_records
   ttl     = 1
 }
 
