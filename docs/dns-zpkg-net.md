@@ -2,7 +2,17 @@
 
 The public domain is **zpkg.net**. `zpkg.tech` is parked for a future purpose
 and must not accumulate app records. Both zones are on Cloudflare
-(`maya`/`memphis` nameservers).
+(`maya`/`memphis` nameservers); zone ids (per the 2026-08-07 audit backup doc
+in Linear): zpkg.net `b559136046dcffc550ee8b3ed49cdf09`, zpkg.tech
+`4fbe6fea03ef155acfaabb906fe7489c`, account `62b833940607839add74bd2379cac303`.
+
+State inherited from the 2026-08-07 Cloudflare audit/hardening pass (Linear
+docs "Cloudflare — 2026-08-07 audit…" and "…DNS backup — pre-change
+snapshot"): both zpkg zones already run `ssl: strict`, `min_tls_version: 1.2`,
+`always_use_https: on`; zpkg.net carries SPF/DMARC/null-MX anti-spoofing
+records (now declared in this module — import them) plus the live registry
+tunnel CNAME; zpkg.tech carries only its three anti-spoofing records, which
+deliberately stay dashboard-managed.
 
 ## Hostname map
 
