@@ -27,8 +27,8 @@ permissions:
 
 env:
   K8S_CLUSTER_REF: d7001b22caf793497c3e461a62346dcc3ab8beb3
-  ZED_API_REF: 3e9becdb23afe8f7b5b3412a20b2c2d74998ab3d
-  ZED_WEB_REF: 75f5ac4e35e121485af75588ce453f350e0cabbc
+  ZED_API_REF: 3373ca5be93ac537e266e5e8b788ce9aaeb00618
+  ZED_WEB_REF: 542273d93fde6181ee3d94169b22887514468869
 
 jobs:
   contract:
@@ -108,9 +108,9 @@ jobs:
             web="/tmp/web-$cloud.yaml"
             grep -q 'replicas: 1' "$api"
             grep -q 'type: Recreate' "$api"
-            grep -q 'medium: Memory' "$api"
-            grep -q 'sizeLimit: 512Mi' "$api"
-            grep -q 'value: local' "$api"
+            grep -q 'value: memory' "$api"
+            grep -q 'name: STORAGE_MEMORY_MAX_BYTES' "$api"
+            ! grep -q 'medium: Memory' "$api"
             grep -q 'name: ZED_AUTH_DISABLED' "$api"
             grep -q 'name: ZED_RATE_LIMIT_DISABLED' "$api"
             grep -q 'name: ZED_VERIFY_TAGS' "$api"
@@ -120,10 +120,10 @@ jobs:
             ! grep -q 'port: 443' "$api"
             ! grep -q 'port: 6543' "$api"
             grep -q 'replicas: 2' "$web"
-            grep -q "registry.$cloud.zpkg.tech" "$web"
+            grep -q "registry.$cloud.zpkg.net" "$web"
           done
-          grep -q 'host: aws.zpkg.tech' /tmp/web-aws.yaml
-          grep -q 'host: hetzner.zpkg.tech' /tmp/web-hetzner.yaml
+          grep -q 'host: web.aws.zpkg.net' /tmp/web-aws.yaml
+          grep -q 'host: web.hetzner.zpkg.net' /tmp/web-hetzner.yaml
 
       - name: Ratchet three-digest deployment and package certification
         shell: bash
