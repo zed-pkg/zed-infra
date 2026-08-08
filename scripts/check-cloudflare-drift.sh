@@ -30,6 +30,9 @@ registry.aws.zpkg.net|CNAME|origin-aws.zpkg.net|false
 web.aws.zpkg.net|CNAME|origin-aws.zpkg.net|false
 registry.hetzner.zpkg.net|CNAME|origin-hetzner.zpkg.net|false
 web.hetzner.zpkg.net|CNAME|origin-hetzner.zpkg.net|false
+zpkg.net|TXT|"v=spf1 -all"|false
+_dmarc.zpkg.net|TXT|"v=DMARC1; p=reject; sp=reject; adkim=s; aspf=s"|false
+zpkg.net|MX|.|false
 TABLE
 )"
 

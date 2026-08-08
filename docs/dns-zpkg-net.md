@@ -2,7 +2,17 @@
 
 The public domain is **zpkg.net**. `zpkg.tech` is parked for a future purpose
 and must not accumulate app records. Both zones are on Cloudflare
-(`maya`/`memphis` nameservers).
+(`maya`/`memphis` nameservers); zone ids (per the 2026-08-07 audit backup doc
+in Linear): zpkg.net `b559136046dcffc550ee8b3ed49cdf09`, zpkg.tech
+`4fbe6fea03ef155acfaabb906fe7489c`, account `62b833940607839add74bd2379cac303`.
+
+State inherited from the 2026-08-07 Cloudflare audit/hardening pass (Linear
+docs "Cloudflare — 2026-08-07 audit…" and "…DNS backup — pre-change
+snapshot"): both zpkg zones already run `ssl: strict`, `min_tls_version: 1.2`,
+`always_use_https: on`; zpkg.net carries SPF/DMARC/null-MX anti-spoofing
+records (now declared in this module — import them) plus the live registry
+tunnel CNAME; zpkg.tech carries only its three anti-spoofing records, which
+deliberately stay dashboard-managed.
 
 ## Hostname map
 
@@ -24,17 +34,22 @@ Defaults that already point here: `zed-cli` ships with
 1. **Token.** Create a Cloudflare API token scoped to Zone:DNS:Edit on
    `zpkg.net` (plus account R2 write if you want terraform to manage the
    buckets in the same apply). Export it as `CLOUDFLARE_API_TOKEN` — it is
-   deliberately not a terraform variable. No existing token on any operator
-   machine covers this zone; the athleto/fiducia/sonus tokens are zone-scoped
-   elsewhere.
-2. **tfvars.** `cp terraform.tfvars.example terraform.tfvars`, fill
-   `account_id` and the `zpkg.net` `zone_id`
-   (`https://dash.cloudflare.com` → zpkg.net → Overview, right rail).
+   deliberately not a terraform variable. The athleto/fiducia/sonus tokens on
+   disk are zone-scoped elsewhere; a broader DNS-edit token was granted
+   temporarily during the 2026-08-07 audit (see the audit doc) — if it is
+   still live, prefer minting the narrow zone token anyway.
+2. **tfvars.** `cp terraform.tfvars.example terraform.tfvars` — the example
+   already carries the real `account_id` and `zpkg.net` `zone_id`.
 3. **Import the existing registry record — it is LIVE, not stray.** The
    manually created, proxied `registry.zpkg.net` record is a CNAME to the
-   `zpkg-registry-local` Cloudflare tunnel, which serves the real registry
-   (with published packages) off a laptop's `localhost:8080` (DEN-2760;
-   zed-cli's shipped default resolves through it). Applying with defaults
+   `zpkg-registry-local` Cloudflare tunnel
+   (`2eb5c6d9-a2b7-4c5e-9222-2f43e91f90e1.cfargotunnel.com`), which serves
+   the real registry (with published packages) from the operator
+   workstation's docker container `zpkg-r2-api-1` on `localhost:8080`
+   (DEN-2760; zed-cli's shipped default resolves through it). Import the
+   three zpkg.net anti-spoofing records (SPF, DMARC, null MX) the same way —
+   they exist live from the audit's hardening pass and are declared in this
+   module. Applying with defaults
    repoints it at the cluster, which serves nothing until DEN-534/DEN-535
    promote the public API — so either accept that gap, or set
    `registry_origin` in tfvars to the tunnel hostname
