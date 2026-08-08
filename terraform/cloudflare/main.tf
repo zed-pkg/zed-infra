@@ -115,7 +115,10 @@ resource "cloudflare_dns_record" "registry" {
   name    = "registry.zpkg.net"
   type    = "CNAME"
   content = var.registry_origin != "" ? var.registry_origin : var.primary_origin
-  proxied = var.proxy_app_records
+  # A cfargotunnel.com target only works through the proxy — when the
+  # transitional tunnel override is set, force proxied regardless of the
+  # zone-wide flag, or the live registry goes dark.
+  proxied = var.registry_origin != "" ? true : var.proxy_app_records
   ttl     = 1
 }
 

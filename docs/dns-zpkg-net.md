@@ -68,9 +68,16 @@ Defaults that already point here: `zed-cli` ships with
 
    Import the R2 buckets too if they already exist
    (`terraform import cloudflare_r2_bucket.artifacts <account_id>/zed-pkg-artifacts`).
-4. **Plan/apply** with `proxy_app_records = false` (the default). Review the
-   plan: expect creates for apex/www/web/origins/per-cloud and an update for
-   the imported registry record (proxied → false).
+4. **Plan/apply** with `proxy_app_records = false` (the default). Verified by
+   a live dry-run on 2026-08-08 (imports into scratch state + plan, no
+   mutations): with `registry_origin` set to the tunnel, the plan is
+   14 creates + 1 in-place change (only the registry record's freeform
+   comment) + 0 destroys — the email-record imports are exact no-ops, and
+   the registry stays proxied on the tunnel (a `cfargotunnel.com` target
+   only works proxied; the module forces that while the override is set).
+   Caveat: the R2 bucket resources need a token with account R2 read/write —
+   with a DNS-only token, import the two existing buckets separately or
+   `-target` the DNS records.
 5. **GitHub Pages custom domain.** After the apex record resolves:
 
    ```sh
