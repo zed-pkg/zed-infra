@@ -1,12 +1,12 @@
 # zed-infra
 
-Infrastructure-as-code for [zed-pkg](https://zpkg.tech): Cloudflare (R2 + DNS),
+Infrastructure-as-code for [zed-pkg](https://zpkg.net): Cloudflare (R2 + DNS),
 AWS (S3 alternative), GCP (planned), and the Kubernetes Argo CD app-of-apps
 that runs the backend.
 
 ```
 terraform/
-  cloudflare/   R2 artifact buckets + zpkg.tech DNS   (primary)
+  cloudflare/   R2 artifact buckets + zpkg.net DNS    (primary)
   aws/          S3 artifact bucket + least-priv IAM    (alternative)
   gcp/          planned (GCS + GKE)
 k8s/
