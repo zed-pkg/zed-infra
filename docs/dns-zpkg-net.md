@@ -34,12 +34,12 @@ Defaults that already point here: `zed-cli` ships with
 1. **Token.** Create a Cloudflare API token scoped to Zone:DNS:Edit on
    `zpkg.net` (plus account R2 write if you want terraform to manage the
    buckets in the same apply). Export it as `CLOUDFLARE_API_TOKEN` — it is
-   deliberately not a terraform variable. No existing token on any operator
-   machine covers this zone; the athleto/fiducia/sonus tokens are zone-scoped
-   elsewhere.
-2. **tfvars.** `cp terraform.tfvars.example terraform.tfvars`, fill
-   `account_id` and the `zpkg.net` `zone_id`
-   (`https://dash.cloudflare.com` → zpkg.net → Overview, right rail).
+   deliberately not a terraform variable. The athleto/fiducia/sonus tokens on
+   disk are zone-scoped elsewhere; a broader DNS-edit token was granted
+   temporarily during the 2026-08-07 audit (see the audit doc) — if it is
+   still live, prefer minting the narrow zone token anyway.
+2. **tfvars.** `cp terraform.tfvars.example terraform.tfvars` — the example
+   already carries the real `account_id` and `zpkg.net` `zone_id`.
 3. **Import the existing registry record — it is LIVE, not stray.** The
    manually created, proxied `registry.zpkg.net` record is a CNAME to the
    `zpkg-registry-local` Cloudflare tunnel, which serves the real registry
