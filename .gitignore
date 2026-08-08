@@ -5,3 +5,7 @@
 !*.tfvars.example
 *.secret.yaml
 crash.log
+tmp
+temp
+tmp/worktrees
+temp/worktrees
