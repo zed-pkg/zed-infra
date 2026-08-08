@@ -42,9 +42,14 @@ Defaults that already point here: `zed-cli` ships with
    already carries the real `account_id` and `zpkg.net` `zone_id`.
 3. **Import the existing registry record — it is LIVE, not stray.** The
    manually created, proxied `registry.zpkg.net` record is a CNAME to the
-   `zpkg-registry-local` Cloudflare tunnel, which serves the real registry
-   (with published packages) off a laptop's `localhost:8080` (DEN-2760;
-   zed-cli's shipped default resolves through it). Applying with defaults
+   `zpkg-registry-local` Cloudflare tunnel
+   (`2eb5c6d9-a2b7-4c5e-9222-2f43e91f90e1.cfargotunnel.com`), which serves
+   the real registry (with published packages) from the operator
+   workstation's docker container `zpkg-r2-api-1` on `localhost:8080`
+   (DEN-2760; zed-cli's shipped default resolves through it). Import the
+   three zpkg.net anti-spoofing records (SPF, DMARC, null MX) the same way —
+   they exist live from the audit's hardening pass and are declared in this
+   module. Applying with defaults
    repoints it at the cluster, which serves nothing until DEN-534/DEN-535
    promote the public API — so either accept that gap, or set
    `registry_origin` in tfvars to the tunnel hostname
