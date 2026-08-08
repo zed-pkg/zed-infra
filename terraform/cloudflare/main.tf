@@ -167,3 +167,36 @@ locals {
     hetzner = "origin-hetzner.zpkg.net"
   }
 }
+
+# Email anti-spoofing: zpkg.net sends no mail, and says so. These three were
+# created live during the 2026-08-07 Cloudflare hardening pass (see the
+# "Cloudflare DNS backup — 2026-08-07" Linear doc); managed here so the drift
+# check owns them. zpkg.tech carries the same three records but that zone is
+# parked and stays dashboard-managed. Import all three before the first apply.
+resource "cloudflare_dns_record" "spf" {
+  zone_id = var.zone_id
+  name    = "zpkg.net"
+  type    = "TXT"
+  content = "\"v=spf1 -all\""
+  proxied = false
+  ttl     = 1
+}
+
+resource "cloudflare_dns_record" "dmarc" {
+  zone_id = var.zone_id
+  name    = "_dmarc.zpkg.net"
+  type    = "TXT"
+  content = "\"v=DMARC1; p=reject; sp=reject; adkim=s; aspf=s\""
+  proxied = false
+  ttl     = 1
+}
+
+resource "cloudflare_dns_record" "null_mx" {
+  zone_id  = var.zone_id
+  name     = "zpkg.net"
+  type     = "MX"
+  content  = "."
+  priority = 0
+  proxied  = false
+  ttl      = 1
+}
