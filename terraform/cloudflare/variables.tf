@@ -44,6 +44,18 @@ variable "registry_origin" {
   default     = ""
 }
 
+variable "api_origin" {
+  description = "Transitional override for api.zpkg.net's target — same tunnel story as registry_origin (api and registry share the zed-api-server root today). Clear once DEN-534/DEN-535 promote the cluster API. Empty = primary_origin."
+  type        = string
+  default     = ""
+}
+
+variable "web_origin" {
+  description = "Transitional override for web.zpkg.net's target — the tunnel fronting a locally run zed-web-server (port 8081) while the Hetzner origin is down (billing) and the clusters have no zed apps (DEN-2881). Empty = primary_origin."
+  type        = string
+  default     = ""
+}
+
 variable "proxy_app_records" {
   description = "Proxy registry.zpkg.net / web.zpkg.net through Cloudflare. Keep false until cert-manager has issued the HTTP-01 certs on the cluster, or issuance deadlocks."
   type        = bool

@@ -58,10 +58,14 @@ while IFS='|' read -r name type content proxied; do
   elif [ "$match" != "${name}|${type}|${content}|${proxied}" ]; then
     # api/registry/web.zpkg.net may legitimately be proxied after the
     # post-cert flip (proxy_app_records=true); only content counts for them.
+    # They may also carry the transitional tunnel override (the
+    # *_origin tfvars in variables.tf) until DEN-534/DEN-535 promote the
+    # cluster origins — accept that content without calling it drift.
+    tunnel_origin="${ZPKG_TUNNEL_ORIGIN:-2eb5c6d9-a2b7-4c5e-9222-2f43e91f90e1.cfargotunnel.com}"
     live_content="$(cut -d'|' -f3 <<<"$match")"
     case "$name" in
       api.zpkg.net|registry.zpkg.net|web.zpkg.net)
-        if [ "$live_content" != "$content" ]; then
+        if [ "$live_content" != "$content" ] && [ "$live_content" != "$tunnel_origin" ]; then
           echo "DIFFERS  ${name}: live '${match}' want content '${content}'"
           drift=1
         fi
