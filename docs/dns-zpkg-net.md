@@ -26,8 +26,29 @@ deliberately stay dashboard-managed.
 | `origin-hetzner.zpkg.net`, `origin-aws.zpkg.net` | Origin A records, never proxied | Cluster edge nodes (ORESoftware/k8s-cluster) |
 
 Defaults that already point here: `zed-cli` ships with
-`registry.zpkg.net`, and `zed-interfaces` `DEFAULT_REGISTRY_URL` is
-`https://registry.zpkg.net`.
+`registry.zpkg.net` (zed-cli#228), and `zed-interfaces`
+`DEFAULT_REGISTRY_URL` is `https://registry.zpkg.net`
+(`src/rust/registry.rs` after the polyglot layout move).
+
+## Status — the zone is APPLIED (2026-08-08)
+
+All 16 records in this module are live and the drift check reports the zone
+in sync. Verified serving: `https://zpkg.net` (marketing site, GitHub Pages),
+`https://registry.zpkg.net/healthz`, `https://api.zpkg.net/healthz`,
+`https://web.zpkg.net/healthz`. A full publish → install → `--frozen`
+reinstall round-trip through `registry.zpkg.net` passed with byte-identical
+lockfiles (DEN-2831).
+
+**All three app hostnames currently resolve to the `zpkg-registry-local`
+tunnel, not a cluster** — the Hetzner origin is down pending billing
+reinstatement and neither cluster installs the zed apps yet (DEN-2881). The
+`registry_origin` / `api_origin` / `web_origin` overrides carry that state
+explicitly; clear them once DEN-534/DEN-535 promote a cluster origin. The
+tunnel connector runs on the operator workstation and does not survive a
+reboot — see the operational note in DEN-2831.
+
+The steps below are therefore the *reference* procedure (and what a rebuild
+or a second operator would follow), not outstanding work.
 
 ## One-time apply
 
