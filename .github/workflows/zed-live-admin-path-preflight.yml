@@ -1,0 +1,87 @@
+name: Zed live registry admin-path preflight
+
+on:
+  push:
+    branches:
+      - agent/den-2788-20-package-preflight
+    paths:
+      - .github/workflows/zed-live-admin-path-preflight.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  admin-path:
+    name: ${{ matrix.environment }} registry admin path
+    strategy:
+      fail-fast: false
+      matrix:
+        environment: [aws, hetzner]
+    environment: ${{ matrix.environment }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Detect a protected token-minting path without exposing values
+        shell: bash
+        env:
+          ENVIRONMENT_NAME: ${{ matrix.environment }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          ZED_DATABASE_URL: ${{ secrets.ZED_DATABASE_URL }}
+          ZED_API_DATABASE_URL: ${{ secrets.ZED_API_DATABASE_URL }}
+          ZED_REGISTRY_DATABASE_URL: ${{ secrets.ZED_REGISTRY_DATABASE_URL }}
+          RDS_DATABASE_URL: ${{ secrets.RDS_DATABASE_URL }}
+          AWS_RDS_DATABASE_URL: ${{ secrets.AWS_RDS_DATABASE_URL }}
+          KUBECONFIG_B64: ${{ secrets.KUBECONFIG_B64 }}
+        run: |
+          set -euo pipefail
+          mkdir -p evidence-admin
+
+          db_names=()
+          for name in \
+            DATABASE_URL \
+            ZED_DATABASE_URL \
+            ZED_API_DATABASE_URL \
+            ZED_REGISTRY_DATABASE_URL \
+            RDS_DATABASE_URL \
+            AWS_RDS_DATABASE_URL; do
+            value="${!name:-}"
+            if test -n "$value"; then
+              echo "::add-mask::$value"
+              db_names+=("$name")
+            fi
+          done
+
+          kubeconfigured=false
+          if test -n "${KUBECONFIG_B64:-}"; then
+            echo "::add-mask::$KUBECONFIG_B64"
+            kubeconfigured=true
+          fi
+
+          printf '%s\n' "${db_names[@]:-}" \
+            | jq -Rsc 'split("\n") | map(select(length > 0))' \
+            > "$RUNNER_TEMP/db-names.json"
+          jq -n \
+            --arg environment "$ENVIRONMENT_NAME" \
+            --argjson database_secret_names "$(cat "$RUNNER_TEMP/db-names.json")" \
+            --argjson kubeconfig_configured "$kubeconfigured" \
+            '{
+              environment: $environment,
+              database_secret_names: $database_secret_names,
+              database_admin_path: ($database_secret_names | length > 0),
+              kubeconfig_admin_path: $kubeconfig_configured,
+              token_minting_path: (($database_secret_names | length > 0) or $kubeconfig_configured)
+            }' \
+            > evidence-admin/admin-path.json
+
+          cat evidence-admin/admin-path.json
+          jq -e '.token_minting_path == true' evidence-admin/admin-path.json >/dev/null
+
+      - name: Upload bounded admin-path evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: zed-live-registry-admin-path-${{ matrix.environment }}
+          path: evidence-admin/
+          if-no-files-found: warn
+          retention-days: 7
