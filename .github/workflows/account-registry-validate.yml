@@ -1,0 +1,58 @@
+name: Validate zed-pkg account infrastructure
+
+on:
+  pull_request:
+    paths:
+      - "k8s/zed-pkg-account/**"
+      - "terraform/modules/shared-auth-rds/**"
+      - ".github/workflows/account-registry-validate.yml"
+  push:
+    branches:
+      - feat/account-registry-k8s-runtime
+    paths:
+      - "k8s/zed-pkg-account/**"
+      - "terraform/modules/shared-auth-rds/**"
+      - ".github/workflows/account-registry-validate.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+      - name: Check formatting
+        run: terraform fmt -check -recursive terraform/modules/shared-auth-rds
+      - name: Initialize module without a backend
+        run: terraform -chdir=terraform/modules/shared-auth-rds init -backend=false -input=false
+      - name: Validate module
+        run: terraform -chdir=terraform/modules/shared-auth-rds validate
+
+  kubernetes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-kubectl@v4
+        with:
+          version: latest
+      - name: Render Kustomize base
+        run: kubectl kustomize k8s/zed-pkg-account > /tmp/zed-pkg-account.yaml
+      - name: Enforce migration and secret boundaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(grep -c '^kind: Job$' /tmp/zed-pkg-account.yaml)" -eq 1
+          test "$(grep -c '^kind: Deployment$' /tmp/zed-pkg-account.yaml)" -eq 2
+          grep -q 'argocd.argoproj.io/hook: PreSync' /tmp/zed-pkg-account.yaml
+          grep -q 'AUTO_MIGRATE: "false"' /tmp/zed-pkg-account.yaml
+          grep -q 'replace-with-git-sha' /tmp/zed-pkg-account.yaml
+          if grep -q '^kind: Secret$' /tmp/zed-pkg-account.yaml; then
+            echo 'Plain Kubernetes Secret manifests are prohibited in this base.' >&2
+            exit 1
+          fi
+          api_images="$(grep 'image: ghcr.io/zed-pkg/zed-api-server.rs:' /tmp/zed-pkg-account.yaml | sed 's/^[[:space:]]*//' | sort -u)"
+          test "$(printf '%s\n' "$api_images" | grep -c .)" -eq 1
