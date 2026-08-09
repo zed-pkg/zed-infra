@@ -1,0 +1,44 @@
+[package]
+org = "zed-pkg"
+name = "zed-infra"
+version = "0.1.0"
+description = "GitOps, Kubernetes, OpenTofu, and Cloudflare infrastructure definitions for the Zed registry"
+license = "MIT"
+keywords = ["zed", "gitops", "kubernetes", "argocd", "cloudflare"]
+
+[package.repository]
+vcs = "git"
+url = "https://github.com/zed-pkg/zed-infra"
+
+[install]
+adapter = "none"
+dir = ".vendor/.zed"
+
+[targets.repository]
+dir = "."
+
+[publish]
+include_readme = true
+tag_format = "v{version}"
+smoke_test = "test -d \"$ZED_PKG_TEST_TARGET/k8s\" && test -d \"$ZED_PKG_TEST_TARGET/terraform\""
+exclude = [
+  ".env",
+  ".env.*",
+  ".direnv/**",
+  ".zed/**",
+  ".zed-pack/**",
+  ".vendor/.zed/**",
+  "env/enc/**",
+  "**/.terraform/**",
+  "**/terraform.tfstate",
+  "**/terraform.tfstate.*",
+  "**/kubeconfig*",
+  "artifacts/**",
+  "tmp/**",
+  "**/*.log",
+  ".DS_Store",
+]
+
+[scripts]
+validate-account-registry = "bash scripts/validate-account-registry.sh"
+validate-submodules = "bash scripts/validate-submodule-shas.sh"
