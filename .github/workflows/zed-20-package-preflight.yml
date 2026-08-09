@@ -33,7 +33,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: zed-pkg-test/registry-api-contract
-          ref: a2132d487a645f800a6204d619de541140521d13
+          ref: a77ad5e608a014bb1835d9e45b11c740d32014d4
           path: controller
           persist-credentials: false
 
@@ -64,7 +64,7 @@ jobs:
           test "$(git -C zed-cli rev-parse HEAD)" = "$ZED_CLI_SHA"
           "$ZED" --version
 
-      - name: Clone, validate, pack, and collision-check all 20 roots
+      - name: Clone, validate, materialize, pack, and collision-check all 20 roots
         shell: bash
         run: |
           set -euo pipefail
@@ -100,7 +100,7 @@ jobs:
 
           summary = {
               "schema": "zed.package-batch-preflight/v1",
-              "controller_sha": "a2132d487a645f800a6204d619de541140521d13",
+              "controller_sha": "a77ad5e608a014bb1835d9e45b11c740d32014d4",
               "api_source_sha": certification.API_SHA,
               "cli_source_sha": certification.CLI_SHA,
               "source_repository_count": len(roots),
