@@ -12,7 +12,14 @@ zed-api-server migrate
 
 That command applies the reviewed registry contract through the shared ORM migration boundary. API replicas run with `AUTO_MIGRATE=false`. The API rolls at wave `0`; the web console follows at wave `10`.
 
-A release must not sync when the Job and API images differ. Pin images by digest in the cluster overlay; branch names, `latest`, PR numbers, and mutable tags are not acceptable production references.
+A release must not sync when the Job and API images differ. Pin images by digest in the cluster overlay; branch names, `latest`, PR numbers, and mutable tags are not acceptable production references. The promoted references must use the explicit digest form:
+
+```text
+ghcr.io/zed-pkg/zed-api-server.rs@sha256:<64 lowercase hex characters>
+ghcr.io/zed-pkg/zed-web-server.rs@sha256:<64 lowercase hex characters>
+```
+
+The migrator and API references must be byte-for-byte identical. A review overlay may retain `replace-with-git-sha` only while its Argo Application has no automated sync and has not been manually activated.
 
 ## ORESoftware/k8s-cluster overlay
 
