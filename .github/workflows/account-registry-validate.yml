@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - "k8s/zed-pkg-account/**"
+      - "k8s/overlays/k8s-cluster/**"
       - "terraform/modules/shared-auth-rds/**"
       - ".github/workflows/account-registry-validate.yml"
   push:
@@ -11,6 +12,7 @@ on:
       - feat/account-registry-k8s-runtime
     paths:
       - "k8s/zed-pkg-account/**"
+      - "k8s/overlays/k8s-cluster/**"
       - "terraform/modules/shared-auth-rds/**"
       - ".github/workflows/account-registry-validate.yml"
 
@@ -39,12 +41,15 @@ jobs:
       - uses: azure/setup-kubectl@v4
         with:
           version: latest
-      - name: Render Kustomize base
-        run: kubectl kustomize k8s/zed-pkg-account > /tmp/zed-pkg-account.yaml
-      - name: Enforce migration and secret boundaries
+      - name: Render portable base and k8s-cluster overlay
+        run: |
+          kubectl kustomize k8s/zed-pkg-account > /tmp/zed-pkg-account.yaml
+          kubectl kustomize k8s/overlays/k8s-cluster > /tmp/zed-pkg-cluster.yaml
+      - name: Enforce portable migration and secret boundaries
         shell: bash
         run: |
           set -euo pipefail
+          test "$(grep -c '^kind: Namespace$' /tmp/zed-pkg-account.yaml)" -eq 1
           test "$(grep -c '^kind: Job$' /tmp/zed-pkg-account.yaml)" -eq 1
           test "$(grep -c '^kind: Deployment$' /tmp/zed-pkg-account.yaml)" -eq 2
           grep -q 'argocd.argoproj.io/hook: PreSync' /tmp/zed-pkg-account.yaml
@@ -54,5 +59,34 @@ jobs:
             echo 'Plain Kubernetes Secret manifests are prohibited in this base.' >&2
             exit 1
           fi
+          test "$(grep -c 'image: ghcr.io/zed-pkg/zed-api-server.rs:' /tmp/zed-pkg-account.yaml)" -eq 2
           api_images="$(grep 'image: ghcr.io/zed-pkg/zed-api-server.rs:' /tmp/zed-pkg-account.yaml | sed 's/^[[:space:]]*//' | sort -u)"
+          test "$(printf '%s\n' "$api_images" | grep -c .)" -eq 1
+      - name: Enforce the strict k8s-cluster tenant and public hosts
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -q '^kind: Namespace$' /tmp/zed-pkg-cluster.yaml; then
+            echo 'The k8s-cluster overlay must not create a cluster-scoped Namespace.' >&2
+            exit 1
+          fi
+          if grep -q 'namespace: zed-pkg' /tmp/zed-pkg-cluster.yaml; then
+            echo 'The k8s-cluster overlay must use the existing zed tenant.' >&2
+            exit 1
+          fi
+          grep -q 'namespace: zed' /tmp/zed-pkg-cluster.yaml
+          grep -Eq 'ZED_API_URL: .*zed-api-server\.zed\.svc\.cluster\.local:8080' /tmp/zed-pkg-cluster.yaml
+          grep -q 'host: app.zpkg.net' /tmp/zed-pkg-cluster.yaml
+          grep -q 'host: api.zpkg.net' /tmp/zed-pkg-cluster.yaml
+          grep -q 'secretName: zed-pkg-public-tls' /tmp/zed-pkg-cluster.yaml
+          grep -q 'ingressClassName: nginx' /tmp/zed-pkg-cluster.yaml
+          test "$(grep -c '^kind: Ingress$' /tmp/zed-pkg-cluster.yaml)" -eq 1
+          test "$(grep -c '^kind: Job$' /tmp/zed-pkg-cluster.yaml)" -eq 1
+          test "$(grep -c '^kind: Deployment$' /tmp/zed-pkg-cluster.yaml)" -eq 2
+          if grep -q '^kind: Secret$' /tmp/zed-pkg-cluster.yaml; then
+            echo 'Plain Kubernetes Secret manifests are prohibited in the cluster overlay.' >&2
+            exit 1
+          fi
+          test "$(grep -c 'image: ghcr.io/zed-pkg/zed-api-server.rs:' /tmp/zed-pkg-cluster.yaml)" -eq 2
+          api_images="$(grep 'image: ghcr.io/zed-pkg/zed-api-server.rs:' /tmp/zed-pkg-cluster.yaml | sed 's/^[[:space:]]*//' | sort -u)"
           test "$(printf '%s\n' "$api_images" | grep -c .)" -eq 1
