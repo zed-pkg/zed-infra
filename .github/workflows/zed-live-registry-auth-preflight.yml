@@ -1,0 +1,94 @@
+name: Zed live registry auth preflight
+
+on:
+  push:
+    branches:
+      - agent/den-2788-20-package-preflight
+    paths:
+      - .github/workflows/zed-live-registry-auth-preflight.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  token-binding:
+    name: ${{ matrix.environment }} registry token binding
+    strategy:
+      fail-fast: false
+      matrix:
+        environment: [aws, hetzner]
+    environment: ${{ matrix.environment }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Verify a scoped machine token is bound
+        id: token
+        shell: bash
+        env:
+          ENVIRONMENT_NAME: ${{ matrix.environment }}
+          ZED_PKG_TOKEN: ${{ secrets.ZED_PKG_TOKEN }}
+          ZED_REGISTRY_TOKEN: ${{ secrets.ZED_REGISTRY_TOKEN }}
+          ZED_MACHINE_TOKEN: ${{ secrets.ZED_MACHINE_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p evidence-auth
+
+          selected_name=""
+          selected_value=""
+          for name in ZED_PKG_TOKEN ZED_REGISTRY_TOKEN ZED_MACHINE_TOKEN; do
+            value="${!name:-}"
+            if test -n "$value"; then
+              if test -n "$selected_value"; then
+                echo "multiple registry token bindings are configured; keep one canonical secret" >&2
+                exit 1
+              fi
+              selected_name="$name"
+              selected_value="$value"
+            fi
+          done
+
+          if test -z "$selected_value"; then
+            jq -n \
+              --arg environment "$ENVIRONMENT_NAME" \
+              '{environment:$environment,configured:false,accepted_names:["ZED_PKG_TOKEN","ZED_REGISTRY_TOKEN","ZED_MACHINE_TOKEN"]}' \
+              > evidence-auth/token-binding.json
+            echo "no scoped registry machine token is configured in $ENVIRONMENT_NAME" >&2
+            exit 1
+          fi
+
+          echo "::add-mask::$selected_value"
+          case "$selected_value" in
+            zpkg_*) ;;
+            *)
+              echo "$selected_name is present but is not a zpkg_ machine token" >&2
+              exit 1
+              ;;
+          esac
+          test "${#selected_value}" -ge 32
+
+          jq -n \
+            --arg environment "$ENVIRONMENT_NAME" \
+            --arg secret_name "$selected_name" \
+            '{environment:$environment,configured:true,secret_name:$secret_name,prefix_valid:true,minimum_length_valid:true}' \
+            > evidence-auth/token-binding.json
+
+      - name: Verify the live API is healthy
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location \
+            --connect-timeout 5 --max-time 20 \
+            https://registry.zpkg.net/healthz \
+            -o evidence-auth/health.json
+          jq -e '.ok == true and .db == true' evidence-auth/health.json >/dev/null
+
+      - name: Upload bounded auth evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: zed-live-registry-auth-${{ matrix.environment }}
+          path: evidence-auth/
+          if-no-files-found: warn
+          retention-days: 7
