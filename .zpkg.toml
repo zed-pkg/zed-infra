@@ -38,7 +38,3 @@ exclude = [
   "**/*.log",
   ".DS_Store",
 ]
-
-[scripts]
-validate-account-registry = "bash scripts/validate-account-registry.sh"
-validate-submodules = "bash scripts/validate-submodule-shas.sh"
