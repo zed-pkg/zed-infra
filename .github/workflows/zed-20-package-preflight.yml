@@ -1,0 +1,146 @@
+name: Zed 20-package manifest preflight
+
+on:
+  push:
+    branches:
+      - agent/den-2788-20-package-preflight
+    paths:
+      - .github/workflows/zed-20-package-preflight.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: zed-20-package-preflight-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  ZED_CLI_SHA: 751358fe130e64b646844bc7d857c4cff215ca2d
+  ZED_API_SHA: 949b0872cf715b85ffc7e80a2a9e9cb9eb99efcf
+  ZED_PKG_REGISTRY: https://preflight.invalid
+  ZED_PKG_TOKEN: zpkg_preflight_not_used
+  ZED: ${{ github.workspace }}/zed-cli/target/release/zed
+
+jobs:
+  preflight:
+    name: preflight all emitted package identities
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out exact batch controller
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: zed-pkg-test/registry-api-contract
+          ref: a2132d487a645f800a6204d619de541140521d13
+          path: controller
+          persist-credentials: false
+
+      - name: Check out exact Zed CLI
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: zed-pkg/zed-cli
+          ref: ${{ env.ZED_CLI_SHA }}
+          path: zed-cli
+          persist-credentials: false
+
+      - name: Install the pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: stable
+
+      - name: Cache the exact-head CLI build
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          workspaces: zed-cli -> target
+
+      - name: Build and verify the exact CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --quiet --locked --release --bin zed \
+            --manifest-path zed-cli/Cargo.toml
+          test "$(git -C zed-cli rev-parse HEAD)" = "$ZED_CLI_SHA"
+          "$ZED" --version
+
+      - name: Clone, validate, pack, and collision-check all 20 roots
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import pathlib
+          import shutil
+          import sys
+
+          controller = pathlib.Path("controller/scripts").resolve()
+          sys.path.insert(0, str(controller))
+          import certify_20_public_package_batch as public_batch
+
+          certification = public_batch.certification
+          for path in (
+              certification.EVIDENCE,
+              certification.SOURCES,
+              certification.CONSUMERS,
+              certification.HOMES,
+          ):
+              shutil.rmtree(path, ignore_errors=True)
+              path.mkdir(parents=True, exist_ok=True)
+
+          roots = certification.clone_roots()
+          emitted = certification.preflight_all(roots)
+          identities = [package.identity for package in emitted]
+          if len(roots) != certification.EXPECTED_ROOT_COUNT:
+              raise SystemExit(
+                  f"expected {certification.EXPECTED_ROOT_COUNT} roots, got {len(roots)}"
+              )
+          if len(set(identities)) != len(identities):
+              raise SystemExit("duplicate immutable identities escaped preflight")
+
+          summary = {
+              "schema": "zed.package-batch-preflight/v1",
+              "controller_sha": "a2132d487a645f800a6204d619de541140521d13",
+              "cli_source_sha": certification.CLI_SHA,
+              "source_repository_count": len(roots),
+              "root_package_count": len(roots),
+              "emitted_package_count": len(emitted),
+              "all_emitted_identities_unique": True,
+              "roots": [root.as_json() for root in roots],
+              "emitted_packages": [package.as_json() for package in emitted],
+          }
+          certification.write_json(
+              certification.EVIDENCE / "preflight-certification.json",
+              summary,
+          )
+          print(
+              json.dumps(
+                  {
+                      "source_repository_count": len(roots),
+                      "root_package_count": len(roots),
+                      "emitted_package_count": len(emitted),
+                      "all_emitted_identities_unique": True,
+                  },
+                  indent=2,
+                  sort_keys=True,
+              )
+          )
+          PY
+
+      - name: Collect bounded failure diagnostics
+        if: failure()
+        shell: bash
+        run: |
+          set +e
+          mkdir -p evidence-v2
+          find sources-v2 -maxdepth 2 -name .zpkg.toml -print \
+            > evidence-v2/discovered-manifests.txt 2>&1 || true
+
+      - name: Upload immutable preflight evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: zed-20-package-preflight
+          path: evidence-v2/
+          if-no-files-found: error
+          retention-days: 30
