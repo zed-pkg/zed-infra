@@ -12,10 +12,10 @@ terraform {
 locals {
   identifier = lower(replace(var.name, "_", "-"))
   tags = merge(var.tags, {
-    Name       = local.identifier
-    Component  = "shared-auth"
-    DataPlane  = "customer-auth"
-    ManagedBy  = "terraform"
+    Name      = local.identifier
+    Component = "shared-auth"
+    DataPlane = "customer-auth"
+    ManagedBy = "terraform"
   })
 }
 
@@ -79,10 +79,10 @@ resource "aws_db_instance" "this" {
   publicly_accessible    = false
   multi_az               = var.multi_az
 
-  backup_retention_period = var.backup_retention_days
-  backup_window           = var.backup_window
-  maintenance_window      = var.maintenance_window
-  copy_tags_to_snapshot   = true
+  backup_retention_period  = var.backup_retention_days
+  backup_window            = var.backup_window
+  maintenance_window       = var.maintenance_window
+  copy_tags_to_snapshot    = true
   delete_automated_backups = false
 
   auto_minor_version_upgrade = true
