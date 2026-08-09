@@ -18,7 +18,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   ZED_CLI_SHA: 751358fe130e64b646844bc7d857c4cff215ca2d
-  ZED_API_SHA: 949b0872cf715b85ffc7e80a2a9e9cb9eb99efcf
+  ZED_API_SHA: b503ae953d29bdaa5601c688f0330495d1e40447
   ZED_PKG_REGISTRY: https://preflight.invalid
   ZED_PKG_TOKEN: zpkg_preflight_not_used
   ZED: ${{ github.workspace }}/zed-cli/target/release/zed
@@ -101,6 +101,7 @@ jobs:
           summary = {
               "schema": "zed.package-batch-preflight/v1",
               "controller_sha": "a2132d487a645f800a6204d619de541140521d13",
+              "api_source_sha": certification.API_SHA,
               "cli_source_sha": certification.CLI_SHA,
               "source_repository_count": len(roots),
               "root_package_count": len(roots),
