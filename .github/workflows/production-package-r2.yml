@@ -1,0 +1,316 @@
+name: production 19-package R2 release
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/production-package-r2.yml"
+      - "scripts/verify-production-package-r2.py"
+      - "docs/production-package-r2-release.md"
+  workflow_dispatch:
+    inputs:
+      cloud:
+        description: Protected cluster environment that already hosts the R2-backed registry
+        required: true
+        type: choice
+        default: aws
+        options:
+          - aws
+          - hetzner
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-19-package-r2-${{ inputs.cloud || github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+env:
+  CERTIFICATION_REF: 547833ea4baedb3dc8cb893e1bf761d7645f3545
+  ZED_API_REF: 949b0872cf715b85ffc7e80a2a9e9cb9eb99efcf
+  ZED_CLI_REF: 8929a58c6591c7a964d7f91412665d7c8a4afdf3
+  R2_BUCKET: zed-pkg-artifacts
+  R2_ENDPOINT_URL: https://62b833940607839add74bd2379cac303.r2.cloudflarestorage.com
+
+jobs:
+  contract:
+    name: exact release contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out the release controller
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Check out the immutable package certification
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: zed-pkg-test/zed-pkg-e2e
+          ref: ${{ env.CERTIFICATION_REF }}
+          path: certification
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Verify source pins, dependency closure, and verifier syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C certification rev-parse HEAD)" = "$CERTIFICATION_REF"
+          python3 -m py_compile scripts/verify-production-package-r2.py
+          python3 - <<'PY'
+          import pathlib
+          import sys
+
+          scripts = pathlib.Path("certification/scripts").resolve()
+          sys.path.insert(0, str(scripts))
+          from production_package_common import load_ledger
+
+          raw, packages = load_ledger(
+              pathlib.Path("certification/config/production-package-release.json")
+          )
+          assert len(packages) == 19
+          assert raw["registry_api_sha"] == "949b0872cf715b85ffc7e80a2a9e9cb9eb99efcf"
+          assert raw["zed_cli_sha"] == "8929a58c6591c7a964d7f91412665d7c8a4afdf3"
+          assert packages[-1].package == "zed-pkg/zed-cli"
+          PY
+          git diff --check
+
+  publish-r2:
+    name: publish/install 19 exact packages on ${{ inputs.cloud }} R2
+    if: github.event_name == 'workflow_dispatch'
+    needs: contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    environment: ${{ inputs.cloud }}
+    env:
+      KUBECONFIG_B64: ${{ secrets.KUBECONFIG_B64 }}
+      ZED_PKG_REGISTRY: http://127.0.0.1:48080
+      ZED_PKG_TOKEN: bootstrap-opto-sync-e2e
+      ZED_PKG_ALLOW_NO_MANIFEST: "1"
+      ZED_PKG_INSTALL_MODE: copy
+
+    steps:
+      - name: Resolve runner-scoped paths and initialize bounded evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "KUBECONFIG=$RUNNER_TEMP/zed-production-r2.kubeconfig" >> "$GITHUB_ENV"
+          echo "ZED_PKG_HOME=$RUNNER_TEMP/zed-production-r2-home" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/production-r2-evidence"
+          {
+            echo "certification_ref=$CERTIFICATION_REF"
+            echo "zed_api_ref=$ZED_API_REF"
+            echo "zed_cli_ref=$ZED_CLI_REF"
+            echo "bucket=$R2_BUCKET"
+          } > "$RUNNER_TEMP/production-r2-evidence/controller-pins.txt"
+
+      - name: Check out the release controller
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Check out the immutable package certification
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: zed-pkg-test/zed-pkg-e2e
+          ref: ${{ env.CERTIFICATION_REF }}
+          path: certification
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Check out the immutable publishing CLI
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: zed-pkg/zed-cli
+          ref: ${{ env.ZED_CLI_REF }}
+          path: zed-cli
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Assert every release-controller pin
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C certification rev-parse HEAD)" = "$CERTIFICATION_REF"
+          test "$(git -C zed-cli rev-parse HEAD)" = "$ZED_CLI_REF"
+          python3 -m py_compile certification/scripts/production_package_*.py
+          python3 -m py_compile scripts/verify-production-package-r2.py
+          grep -Fq "\"registry_api_sha\": \"$ZED_API_REF\"" \
+            certification/config/production-package-release.json
+          grep -Fq "\"zed_cli_sha\": \"$ZED_CLI_REF\"" \
+            certification/config/production-package-release.json
+
+      - name: Install the pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+
+      - name: Cache the exact Zed CLI build
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: zed-cli
+
+      - name: Build the exact Zed CLI
+        working-directory: zed-cli
+        run: cargo build --release --locked --bin zed
+
+      - name: Authorize the protected cluster connection
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$KUBECONFIG_B64"
+          printf '%s' "$KUBECONFIG_B64" | base64 --decode > "$KUBECONFIG"
+          chmod 600 "$KUBECONFIG"
+          kubectl cluster-info >/dev/null
+          test "$(kubectl auth can-i get deployments -n zed)" = yes
+          test "$(kubectl auth can-i get secrets -n zed)" = yes
+
+      - name: Fail closed unless the live registry is R2-backed
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/production-r2-evidence"
+          kubectl -n zed rollout status deployment/dd-zed-api-server --timeout=300s
+          kubectl -n zed get deployment dd-zed-api-server -o json > "$RUNNER_TEMP/api-deployment.json"
+          python3 - "$RUNNER_TEMP/api-deployment.json" "$evidence/deployment-contract.json" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          source, output = map(pathlib.Path, sys.argv[1:])
+          deployment = json.loads(source.read_text(encoding="utf-8"))
+          containers = deployment["spec"]["template"]["spec"]["containers"]
+          api = next(container for container in containers if container["name"] == "zed-api-server")
+          literals = {
+              entry["name"]: entry.get("value")
+              for entry in api.get("env", [])
+              if "value" in entry
+          }
+          expected = {
+              "STORAGE_BACKEND": "s3",
+              "S3_BUCKET": "zed-pkg-artifacts",
+              "S3_ENDPOINT_URL": "https://62b833940607839add74bd2379cac303.r2.cloudflarestorage.com",
+              "S3_REGION": "auto",
+              "S3_FORCE_PATH_STYLE": "true",
+          }
+          for name, value in expected.items():
+              if literals.get(name) != value:
+                  raise SystemExit(
+                      f"live deployment is not the certified R2 contract: {name}={literals.get(name)!r}"
+                  )
+          secret_refs = sorted(
+              item["secretRef"]["name"]
+              for item in api.get("envFrom", [])
+              if "secretRef" in item and "name" in item["secretRef"]
+          )
+          if "zed-r2-creds" not in secret_refs:
+              raise SystemExit("live deployment does not reference zed-r2-creds")
+          safe = {
+              "schema": 1,
+              "deployment": deployment["metadata"]["name"],
+              "namespace": deployment["metadata"]["namespace"],
+              "image": api["image"],
+              "storage_backend": literals["STORAGE_BACKEND"],
+              "bucket": literals["S3_BUCKET"],
+              "endpoint_url": literals["S3_ENDPOINT_URL"],
+              "region": literals["S3_REGION"],
+              "force_path_style": literals["S3_FORCE_PATH_STYLE"],
+              "secret_refs": secret_refs,
+          }
+          output.write_text(json.dumps(safe, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+          PY
+          kubectl -n zed get secret zed-r2-creds -o json | \
+            jq -e '.data.AWS_ACCESS_KEY_ID | length > 0' >/dev/null
+          kubectl -n zed get secret zed-r2-creds -o json | \
+            jq -e '.data.AWS_SECRET_ACCESS_KEY | length > 0' >/dev/null
+
+      - name: Publish, idempotently republish, install, uninstall, and frozen-reinstall 19 packages
+        shell: bash
+        env:
+          ZED: ${{ github.workspace }}/zed-cli/target/release/zed
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/production-r2-evidence"
+          roundtrip="$RUNNER_TEMP/production-r2-roundtrip"
+          work="$RUNNER_TEMP/production-r2-work"
+          kubectl -n zed port-forward service/dd-zed-api-server 48080:8080 \
+            > "$evidence/port-forward.log" 2>&1 &
+          pf_pid=$!
+          cleanup() {
+            kill "$pf_pid" >/dev/null 2>&1 || true
+            wait "$pf_pid" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT HUP INT TERM
+
+          for attempt in $(seq 1 90); do
+            if ! kill -0 "$pf_pid" 2>/dev/null; then
+              cat "$evidence/port-forward.log" >&2
+              exit 1
+            fi
+            if curl -fsS "$ZED_PKG_REGISTRY/healthz" > "$evidence/healthz.txt"; then
+              break
+            fi
+            sleep 1
+          done
+          curl -fsS "$ZED_PKG_REGISTRY/healthz" > "$evidence/healthz.txt"
+
+          python3 certification/scripts/production_package_roundtrip.py \
+            --ledger certification/config/production-package-release.json \
+            --workspace "$work" \
+            --evidence "$roundtrip" \
+            --zed "$ZED" \
+            --registry "$ZED_PKG_REGISTRY"
+
+          mkdir -p "$evidence/roundtrip"
+          cp -R "$roundtrip"/. "$evidence/roundtrip/"
+          python3 scripts/verify-production-package-r2.py \
+            --roundtrip "$roundtrip/production-package-roundtrip.json" \
+            --output "$evidence/r2-object-verification.json" \
+            --endpoint-url "$R2_ENDPOINT_URL" \
+            --bucket "$R2_BUCKET"
+
+          jq -e '.status == "success" and .package_count == 19' \
+            "$roundtrip/production-package-roundtrip.json" >/dev/null
+          jq -e '.status == "success" and .unique_object_count == 19' \
+            "$evidence/r2-object-verification.json" >/dev/null
+
+          {
+            echo '# Production Zed package R2 release'
+            echo
+            echo '- Exact packages published and installed: **19**'
+            echo '- Unique R2 objects verified by direct presigned GET: **19**'
+            echo "- Certification controller: \`$CERTIFICATION_REF\`"
+            echo "- Zed CLI: \`$ZED_CLI_REF\`"
+            echo "- Registry API contract: \`$ZED_API_REF\`"
+            echo "- Protected environment: \`${{ inputs.cloud }}\`"
+          } > "$evidence/summary.md"
+
+      - name: Collect bounded failure diagnostics
+        if: failure()
+        shell: bash
+        run: |
+          set +e
+          evidence="$RUNNER_TEMP/production-r2-evidence"
+          mkdir -p "$evidence"
+          kubectl -n zed get deployment,pod,service,networkpolicy -o wide \
+            > "$evidence/failure-runtime.txt" 2>&1
+          kubectl -n zed logs deployment/dd-zed-api-server --tail=500 \
+            > "$evidence/failure-api.log" 2>&1
+
+      - name: Upload immutable release evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: production-19-package-r2-${{ inputs.cloud }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/production-r2-evidence
+          if-no-files-found: error
+          retention-days: 90
+          include-hidden-files: false
+
+      - name: Scrub cluster and package credentials
+        if: always()
+        shell: bash
+        run: |
+          rm -f "$KUBECONFIG"
+          rm -rf "$ZED_PKG_HOME"
