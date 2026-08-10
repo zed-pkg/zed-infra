@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: zed-pkg-runtime
+  namespace: zed-pkg
+data:
+  ZED_API_URL: "http://zed-api-server.zed.svc.cluster.local:8080"

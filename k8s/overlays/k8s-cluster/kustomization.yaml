@@ -1,0 +1,19 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# ORESoftware/k8s-cluster already owns the strict `zed` tenant namespace.
+# Keep namespace creation outside this application and transform every
+# namespaced object from the portable base into that tenant.
+namespace: zed
+
+resources:
+  - ../../zed-pkg-account
+  - ingress.yaml
+
+patches:
+  - path: delete-namespace.yaml
+  - path: runtime-config.yaml
+
+# The portable base intentionally retains candidate image tags. The Argo CD
+# promotion commit must replace both with reviewed immutable digests before the
+# application is allowed to sync.
