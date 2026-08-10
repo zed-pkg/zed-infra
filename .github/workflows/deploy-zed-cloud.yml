@@ -35,14 +35,11 @@ jobs:
       KUBECONFIG_B64: ${{ secrets.KUBECONFIG_B64 }}
       ZED_GHCR_USERNAME: ${{ secrets.ZED_GHCR_USERNAME }}
       ZED_GHCR_TOKEN: ${{ secrets.ZED_GHCR_TOKEN }}
-      # Stacked on ORESoftware/k8s-cluster#568: this immutable head adds the
-      # AWS/Hetzner Zed Application catalog and observability bootstrap.
-      # Replace with its merge commit before promoting this workflow to main.
-      K8S_CLUSTER_REF: 41052d99d331c23da15b692e58edc5ba102d84ee
-      ZED_CLI_REF: 8929a58c6591c7a964d7f91412665d7c8a4afdf3
-      ZED_INTERFACES_REF: dc0e0a0620b9462817950b552d3d334a184b1cb1
-      ZED_API_REF: 3d2d4c98024e5bf718dc79c2648bd10d7759a31c
-      ZED_WEB_REF: 75f5ac4e35e121485af75588ce453f350e0cabbc
+      K8S_CLUSTER_REF: d7001b22caf793497c3e461a62346dcc3ab8beb3
+      ZED_CLI_REF: a6c1fefad78f9daeaaa73122733217e11b6cf81a
+      ZED_INTERFACES_REF: 07d01604461d00e237c7d86ad3855464167574ec
+      ZED_API_REF: f6e206a520500cec0ee1d2317554cb3f5cf538b2
+      ZED_WEB_REF: 823de5b8ff2adac5a367de41460f9785d5ab739f
       SYNCER_REF: 7795ce2d1342e17d934d2faafff5c8ed4322609e
       CLIENTS_REF: 54874e9f7df6009fccd9034fce39306daef2c043
       OPTO_E2E_REF: 1d47bd46cf3785416295daf6af84afb8053f1cfd

@@ -26,9 +26,9 @@ permissions:
   contents: read
 
 env:
-  K8S_CLUSTER_REF: 41052d99d331c23da15b692e58edc5ba102d84ee
-  ZED_API_REF: 3d2d4c98024e5bf718dc79c2648bd10d7759a31c
-  ZED_WEB_REF: 75f5ac4e35e121485af75588ce453f350e0cabbc
+  K8S_CLUSTER_REF: d7001b22caf793497c3e461a62346dcc3ab8beb3
+  ZED_API_REF: f6e206a520500cec0ee1d2317554cb3f5cf538b2
+  ZED_WEB_REF: 823de5b8ff2adac5a367de41460f9785d5ab739f
 
 jobs:
   contract:
@@ -126,10 +126,10 @@ jobs:
             ! grep -q 'port: 443' "$api"
             ! grep -q 'port: 6543' "$api"
             grep -q 'replicas: 2' "$web"
-            grep -q "registry.$cloud.zpkg.tech" "$web"
+            grep -q "registry.$cloud.zpkg.net" "$web"
           done
-          grep -q 'host: aws.zpkg.tech' /tmp/web-aws.yaml
-          grep -q 'host: hetzner.zpkg.tech' /tmp/web-hetzner.yaml
+          grep -q 'host: web.aws.zpkg.net' /tmp/web-aws.yaml
+          grep -q 'host: web.hetzner.zpkg.net' /tmp/web-hetzner.yaml
 
       - name: Ratchet three-digest deployment and package certification
         shell: bash
@@ -149,8 +149,8 @@ jobs:
           grep -q "K8S_CLUSTER_REF: $K8S_CLUSTER_REF" "$workflow"
           grep -q "ZED_API_REF: $ZED_API_REF" "$workflow"
           grep -q "ZED_WEB_REF: $ZED_WEB_REF" "$workflow"
-          grep -q 'ZED_CLI_REF: 8929a58c6591c7a964d7f91412665d7c8a4afdf3' "$workflow"
-          grep -q 'ZED_INTERFACES_REF: dc0e0a0620b9462817950b552d3d334a184b1cb1' "$workflow"
+          grep -q 'ZED_CLI_REF: a6c1fefad78f9daeaaa73122733217e11b6cf81a' "$workflow"
+          grep -q 'ZED_INTERFACES_REF: 07d01604461d00e237c7d86ad3855464167574ec' "$workflow"
           grep -q 'zed-cloud-preflight.sh' "$workflow"
           grep -q 'resolve-zed-images.sh' "$workflow"
           grep -q 'ZED_PREFLIGHT_KEEP_KUBECONFIG' "$workflow"

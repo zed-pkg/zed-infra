@@ -113,8 +113,8 @@ The intended public names remain:
 
 | Cloud | Registry API | Web UI |
 | --- | --- | --- |
-| AWS | `https://registry.aws.zpkg.tech` | `https://aws.zpkg.tech` |
-| Hetzner | `https://registry.hetzner.zpkg.tech` | `https://hetzner.zpkg.tech` |
+| AWS | `https://registry.aws.zpkg.net` | `https://web.aws.zpkg.net` |
+| Hetzner | `https://registry.hetzner.zpkg.net` | `https://web.hetzner.zpkg.net` |
 
 The web UI may be promoted through each cloud's read-only edge. The registry API
 must not be exposed while bootstrap bypasses are active. Public API promotion is
