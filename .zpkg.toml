@@ -2,22 +2,42 @@
 org = "zed-pkg"
 name = "zed-infra"
 version = "0.1.0"
-description = "part of zed-pkg: universal package manager backed by git/hg servers"
+description = "GitOps, Kubernetes, OpenTofu, and Cloudflare infrastructure definitions for the Zed registry"
 license = "MIT"
-keywords = ["zed-pkg", "package-manager"]
+keywords = ["zed", "gitops", "kubernetes", "argocd", "cloudflare"]
 
 [package.repository]
 vcs = "git"
 url = "https://github.com/zed-pkg/zed-infra"
 
-[publish]
-include_readme = true
-tag_format = "v{version}"
-exclude = [".env", ".env.*", ".direnv/**", ".zed/**", ".zed-pack/**", ".vendor/.zed/**", "target/**", "**/target/**", "**/node_modules/**", "tmp/**", "**/*.log", ".DS_Store"]
-
 [install]
+adapter = "none"
 dir = ".vendor/.zed"
 
 [targets.repository]
 dir = "."
-adapter = "none"
+
+[publish]
+include_readme = true
+tag_format = "v{version}"
+smoke_test = "test -d \"$ZED_PKG_TEST_TARGET/k8s\" && test -d \"$ZED_PKG_TEST_TARGET/terraform\""
+exclude = [
+  ".env",
+  ".env.*",
+  ".direnv/**",
+  ".zed/**",
+  ".zed-pack/**",
+  ".vendor/.zed/**",
+  "env/enc/**",
+  "**/.terraform/**",
+  "**/terraform.tfstate",
+  "**/terraform.tfstate.*",
+  "**/kubeconfig*",
+  "target/**",
+  "**/target/**",
+  "**/node_modules/**",
+  "artifacts/**",
+  "tmp/**",
+  "**/*.log",
+  ".DS_Store",
+]
