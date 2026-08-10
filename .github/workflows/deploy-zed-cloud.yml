@@ -237,6 +237,15 @@ jobs:
           ! grep -q 'kubernetes.io/metadata.name: ingress-nginx' "$api"
           ! grep -q 'cidr: 0.0.0.0/0' "$api"
           grep -q 'type: Recreate' "$api"
+          grep -q 'name: STORAGE_BACKEND' "$api"
+          grep -q 'value: memory' "$api"
+          grep -q 'name: STORAGE_MEMORY_MAX_BYTES' "$api"
+          grep -q 'value: "268435456"' "$api"
+          grep -q 'name: MAX_ARTIFACT_BYTES' "$api"
+          grep -q 'value: "104857600"' "$api"
+          ! grep -q 'medium: Memory' "$api"
+          ! grep -Eq 'mountPath: .*(artifact|/var/lib/zed)' "$api"
+          ! grep -Eq 'name: (artifact|artifacts|artifact-store)$' "$api"
 
           kubectl -n zed delete ingress dd-zed-api-server --ignore-not-found=true
           kubectl apply -f "$api"
@@ -258,6 +267,60 @@ jobs:
           test "$(kubectl -n zed get deployment zed-postgres -o jsonpath='{.status.readyReplicas}')" = '1'
           test "$(kubectl -n zed get deployment dd-zed-api-server -o jsonpath='{.status.readyReplicas}')" = '1'
           test "$(kubectl -n zed get deployment dd-zed-web-server -o jsonpath='{.status.readyReplicas}')" = '2'
+
+          api_deployment="$evidence/api-deployment.json"
+          process_memory="$evidence/process-memory.json"
+          kubectl -n zed get deployment dd-zed-api-server -o json > "$api_deployment"
+          python3 - "$api_deployment" "$process_memory" <<'PY'
+          import json, pathlib, sys
+          deployment_path, evidence_path = map(pathlib.Path, sys.argv[1:])
+          deployment = json.loads(deployment_path.read_text(encoding='utf-8'))
+          pod = deployment['spec']['template']['spec']
+          container = next(
+              item for item in pod['containers'] if item['name'] == 'zed-api-server'
+          )
+          env = {item['name']: item.get('value') for item in container.get('env', [])}
+          expected = {
+              'STORAGE_BACKEND': 'memory',
+              'STORAGE_MEMORY_MAX_BYTES': '268435456',
+              'MAX_ARTIFACT_BYTES': '104857600',
+          }
+          actual = {name: env.get(name) for name in expected}
+          if actual != expected:
+              raise SystemExit(f'process-memory environment mismatch: {actual!r}')
+
+          volumes = pod.get('volumes', [])
+          mounts = container.get('volumeMounts', [])
+          forbidden_volumes = [
+              item for item in volumes
+              if 'artifact' in item.get('name', '').lower()
+              or item.get('emptyDir', {}).get('medium') == 'Memory'
+          ]
+          forbidden_mounts = [
+              item for item in mounts
+              if 'artifact' in item.get('name', '').lower()
+              or 'artifact' in item.get('mountPath', '').lower()
+              or item.get('mountPath', '').startswith('/var/lib/zed')
+          ]
+          if forbidden_volumes or forbidden_mounts:
+              raise SystemExit(
+                  'artifact bytes must remain in Rust process memory; '
+                  f'volumes={forbidden_volumes!r} mounts={forbidden_mounts!r}'
+              )
+
+          proof = {
+              'deployment': deployment['metadata']['name'],
+              'replicas': deployment['spec']['replicas'],
+              'strategy': deployment['spec']['strategy']['type'],
+              'environment': actual,
+              'artifactVolumes': forbidden_volumes,
+              'artifactMounts': forbidden_mounts,
+          }
+          evidence_path.write_text(
+              json.dumps(proof, indent=2, sort_keys=True) + '\n', encoding='utf-8'
+          )
+          PY
+
           if kubectl -n zed get ingress dd-zed-api-server >/dev/null 2>&1; then
             echo 'bootstrap API unexpectedly has a public Ingress' >&2
             exit 1

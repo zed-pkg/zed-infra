@@ -39,9 +39,12 @@ Deployment specs and running pod `imageID` values contain the expected digests.
 This profile is intentionally disposable but complete enough for real
 `zed publish` and `zed install` transactions:
 
-- one API replica owns a 512 MiB memory-backed `emptyDir` artifact store;
-- the API uses `strategy: Recreate`, so two unrelated RAM stores cannot overlap
-  during promotion;
+- one API replica owns a bounded Rust process-memory artifact store with a
+  256 MiB total cap and a 100 MiB per-object ceiling under a 512 MiB pod limit;
+- no artifact volume, tmpfs, PVC, or `/var/lib/zed` mount exists; the pod's
+  `/tmp` `emptyDir` is scratch space only;
+- the API uses `strategy: Recreate`, so two unrelated process-memory stores
+  cannot overlap during promotion;
 - one `pgvector/pgvector:0.8.5-pg16` replica owns a separate 512 MiB
   memory-backed `emptyDir` metadata store;
 - two read-only web replicas share that metadata service;
@@ -62,7 +65,10 @@ extension. The workflow verifies that migration installed a `0.8.x` extension.
 
 Metadata and artifact bytes are reset together. Postgres is restarted first;
 then the Recreate API and web workloads are restarted, yielding a consistent
-empty registry before package certification begins.
+empty registry before package certification begins. The workflow records the
+live API environment and the absence of artifact volumes in
+`process-memory.json`; a successful package round trip therefore certifies the
+Rust server backend, not a Kubernetes tmpfs approximation.
 
 ## Package interdependency certification
 
@@ -78,6 +84,11 @@ live cluster-local API Service. It publishes the three packages in dependency
 order, verifies registry metadata and SHA-256 identities, and creates a blank
 consumer declaring only `opto-sync/opto-sync-e2e`.
 
+This is deliberately distinct from `zed r2g`: r2g remains the fast hermetic
+pre-publish check against an isolated `file://` registry, while this workflow is
+the server-backed acceptance gate against the deployed Rust process-memory
+registry on each cloud.
+
 A normal install must materialize all three packages under
 `zed_modules/opto-sync/`. The job then removes both `zed_modules` and the entire
 Zed download store and repeats with `zed install --frozen`. The first and frozen
@@ -88,6 +99,7 @@ The retained 30-day evidence includes:
 - source-to-digest image identities;
 - digest-pinned rendered manifests;
 - running pod image IDs and deployment specs;
+- the live process-memory environment and no-artifact-volume proof;
 - the effective API NetworkPolicy;
 - package metadata JSON;
 - port-forward diagnostics; and
@@ -113,9 +125,15 @@ cert-manager. Those architectures must remain distinct.
 
 ## GitOps transition
 
-The direct protected workflow is the current deployment controller. The AWS and
-Hetzner Argo application catalogs do not yet instantiate the Zed bootstrap. The
-GitOps transition must preserve all current invariants: pinned source revisions,
+The direct protected workflow remains the live deployment and certification
+controller. The earlier `ORESoftware/k8s-cluster#568` candidate was closed
+without merge, so this repository deliberately does not pin its abandoned head.
+A future GitOps catalog change must land through a newly reviewed immutable
+commit. GitOps eligibility is not live-cluster evidence: after that change
+lands, each Argo instance must still report the expected source revision, sync,
+health, and immutable image digests.
+
+The transition must preserve all current invariants: pinned source revisions,
 digest-only images, Recreate ownership, cluster-local API policy, simultaneous
 volatile-tier reset, and package certification evidence. This is related to the
 cross-cluster application-registry work in DEN-630.
