@@ -8,8 +8,7 @@ on:
       - "terraform/modules/shared-auth-rds/**"
       - ".github/workflows/account-registry-validate.yml"
   push:
-    branches:
-      - feat/account-registry-k8s-runtime
+    branches: [main]
     paths:
       - "k8s/zed-pkg-account/**"
       - "k8s/overlays/k8s-cluster/**"
@@ -23,8 +22,10 @@ jobs:
   terraform:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: hashicorp/setup-terraform@v3
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         with:
           terraform_wrapper: false
       - name: Check formatting
@@ -37,8 +38,10 @@ jobs:
   kubernetes:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: azure/setup-kubectl@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: azure/setup-kubectl@776406bce94f63e41d621b960d78ee25c8b76ede # v4.0.1
         with:
           version: latest
       - name: Render portable base and k8s-cluster overlay
@@ -60,7 +63,7 @@ jobs:
             exit 1
           fi
           test "$(grep -c 'image: ghcr.io/zed-pkg/zed-api-server.rs:' /tmp/zed-pkg-account.yaml)" -eq 2
-          api_images="$(grep 'image: ghcr.io/zed-pkg/zed-api-server.rs:' /tmp/zed-pkg-account.yaml | sed 's/^[[:space:]]*//' | sort -u)"
+          api_images="$(grep 'image: ghcr.io/zed-pkg/zed-api-server.rs:' /tmp/zed-pkg-account.yaml | awk '{$1=$1};1' | sort -u)"
           test "$(printf '%s\n' "$api_images" | grep -c .)" -eq 1
       - name: Enforce the strict k8s-cluster tenant and public hosts
         shell: bash
@@ -88,5 +91,5 @@ jobs:
             exit 1
           fi
           test "$(grep -c 'image: ghcr.io/zed-pkg/zed-api-server.rs:' /tmp/zed-pkg-cluster.yaml)" -eq 2
-          api_images="$(grep 'image: ghcr.io/zed-pkg/zed-api-server.rs:' /tmp/zed-pkg-cluster.yaml | sed 's/^[[:space:]]*//' | sort -u)"
+          api_images="$(grep 'image: ghcr.io/zed-pkg/zed-api-server.rs:' /tmp/zed-pkg-cluster.yaml | awk '{$1=$1};1' | sort -u)"
           test "$(printf '%s\n' "$api_images" | grep -c .)" -eq 1
