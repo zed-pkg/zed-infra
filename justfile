@@ -11,9 +11,9 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 set dotenv-load := false
 
-# Exported assignments are evaluated for every Just invocation. A fresh clone
-# cannot contain the ignored empty directory, so create the owner-only plaintext
-# boundary before any recipe — including `just --list` — can run.
+# Exported assignments are evaluated before recipes run. A fresh clone cannot
+# contain the ignored empty directory, so create the owner-only plaintext
+# boundary before any recipe can access decrypted environment state.
 export ZED_ENV_DEC := ```
   set -eu
   root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
