@@ -225,6 +225,21 @@ jobs:
           kubectl -n zed get secret zed-r2-creds -o json | \
             jq -e '.data.AWS_SECRET_ACCESS_KEY | length > 0' >/dev/null
 
+      - name: Bind the protected cross-organization source credential
+        shell: bash
+        env:
+          ZED_PACKAGE_SOURCE_TOKEN: ${{ secrets.ZED_PACKAGE_SOURCE_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$ZED_PACKAGE_SOURCE_TOKEN"
+          echo "::add-mask::$ZED_PACKAGE_SOURCE_TOKEN"
+          {
+            printf 'GIT_CONFIG_COUNT=1\n'
+            printf 'GIT_CONFIG_KEY_0=url.https://x-access-token:%s@github.com/.insteadOf\n' \
+              "$ZED_PACKAGE_SOURCE_TOKEN"
+            printf 'GIT_CONFIG_VALUE_0=https://github.com/\n'
+          } >> "$GITHUB_ENV"
+
       - name: Publish, idempotently republish, install, uninstall, and frozen-reinstall 19 packages
         shell: bash
         env:
