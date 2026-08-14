@@ -11,6 +11,22 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 set dotenv-load := false
 
+# Exported assignments are evaluated for every Just invocation. A fresh clone
+# cannot contain the ignored empty directory, so create the owner-only plaintext
+# boundary before any recipe — including `just --list` — can run.
+export ZED_ENV_DEC := ```
+  set -eu
+  root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+  if [ -L "$root/env" ] || [ -L "$root/env/dec" ]; then
+    echo "refusing to prepare symlinked env/dec" >&2
+    exit 1
+  fi
+  umask 077
+  mkdir -p "$root/env/dec"
+  chmod 700 "$root/env/dec"
+  printf '%s' "$root/env/dec"
+```
+
 enc_dir := justfile_directory() / "env/enc"
 dec_dir := justfile_directory() / "env/dec"
 age_key := env_var_or_default("SOPS_AGE_KEY_FILE", env_var("HOME") / ".config/sops/age/keys.txt")

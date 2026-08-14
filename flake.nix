@@ -40,6 +40,20 @@
             kubectl
             kustomize
           ];
+
+          shellHook = ores-sops.lib.shellHook + ''
+            # Keep this local guard until the flake lock advances to the
+            # ores-sops release that includes lib.prepareEnvDec.
+            _repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+            if [ -L "$_repo_root/env" ] || [ -L "$_repo_root/env/dec" ]; then
+              echo "env: refusing to prepare symlinked env/dec" >&2
+              return 1 2>/dev/null || exit 1
+            fi
+            umask 077
+            mkdir -p "$_repo_root/env/dec"
+            chmod 700 "$_repo_root/env/dec"
+            unset _repo_root
+          '';
         };
       });
 }
