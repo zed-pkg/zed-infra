@@ -37,6 +37,24 @@ resource "cloudflare_r2_bucket" "artifacts_dev" {
   location   = var.r2_location
 }
 
+# Public CDN in front of the production bucket. This is *not* an origin
+# hostname: Cloudflare terminates TLS at the edge and reads R2 directly.
+# registry.zpkg.net, web.zpkg.net, and the GitHub Pages apex can all be
+# down without affecting GET https://cdn.zpkg.net/<object-key>.
+#
+# The custom-domain API creates the DNS record (proxied CNAME). Do not also
+# declare cloudflare_dns_record.cdn or apply will fight itself. The drift
+# script allowlists this hostname until/after apply because the CNAME
+# target is Cloudflare-managed.
+resource "cloudflare_r2_custom_domain" "cdn" {
+  account_id  = var.account_id
+  bucket_name = cloudflare_r2_bucket.artifacts.name
+  domain      = "cdn.zpkg.net"
+  enabled     = true
+  zone_id     = var.zone_id
+  min_tls     = "1.2"
+}
+
 # ---------------------------------------------------------------------------
 # zpkg.net — the public domain. (zpkg.tech is parked for a future purpose and
 # intentionally has no records here.)
@@ -44,6 +62,7 @@ resource "cloudflare_r2_bucket" "artifacts_dev" {
 #   zpkg.net / www.zpkg.net  -> GitHub Pages marketing site (zed-pkg.github.io)
 #   registry.zpkg.net        -> zed-api-server  (registry REST API, k8s)
 #   web.zpkg.net             -> zed-web-server  (read-only registry UI, k8s)
+#   cdn.zpkg.net             -> R2 custom domain (public artifacts; independent of origin)
 #
 # Ordering rule (see docs/wiring-k8s-cluster.md and the canonical.plus runbook
 # in ORESoftware/k8s-cluster): app records stay DNS-only until cert-manager
