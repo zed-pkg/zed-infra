@@ -1,0 +1,17 @@
+name = "zpkg-user-proxy"
+main = "src/index.js"
+compatibility_date = "2026-08-28"
+compatibility_flags = ["nodejs_compat"]
+
+# Per-user dashboard host. Same origin as web.zpkg.net today; split later.
+
+[vars]
+ORIGIN_URL = "https://origin-hetzner.zpkg.net"
+ORIGIN_TIMEOUT_MS = "8000"
+
+[observability]
+enabled = true
+
+[[routes]]
+pattern = "user.zpkg.net/*"
+zone_name = "zpkg.net"

@@ -1,0 +1,15 @@
+name = "zpkg-web-proxy"
+main = "src/index.js"
+compatibility_date = "2026-08-28"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+ORIGIN_URL = "https://origin-hetzner.zpkg.net"
+ORIGIN_TIMEOUT_MS = "8000"
+
+[observability]
+enabled = true
+
+[[routes]]
+pattern = "web.zpkg.net/*"
+zone_name = "zpkg.net"

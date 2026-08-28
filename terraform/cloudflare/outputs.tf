@@ -8,6 +8,17 @@ output "cdn_hostname" {
   value       = cloudflare_r2_custom_domain.cdn.domain
 }
 
+output "edge_hostnames" {
+  description = "Public hostnames that Cloudflare proxies (Workers sit on these routes)"
+  value = {
+    registry = cloudflare_dns_record.registry.name
+    cdn      = cloudflare_r2_custom_domain.cdn.domain
+    web      = cloudflare_dns_record.web.name
+    app      = cloudflare_dns_record.app.name
+    user     = cloudflare_dns_record.user.name
+  }
+}
+
 output "artifacts_bucket_dev" {
   value = cloudflare_r2_bucket.artifacts_dev.name
 }

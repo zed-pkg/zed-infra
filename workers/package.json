@@ -1,0 +1,8 @@
+{
+  "name": "zpkg-net-edge-workers",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test shared/github-fallback.test.js"
+  }
+}
