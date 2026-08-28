@@ -204,3 +204,37 @@ resource "cloudflare_dns_record" "null_mx" {
   proxied  = false
   ttl      = 1
 }
+
+# ---------------------------------------------------------------------------
+# cdn.zpkg.net — public, content-addressed read path to the artifact bucket.
+#
+# Why this exists: today every artifact read goes registry API -> 302 ->
+# 600-second presigned URL, so an outage of the API is an outage of every
+# `zed install` in the world. Artifacts are keyed by their own sha256 and every
+# lockfile pins that digest, so a client can fetch bytes straight from the
+# bucket and verify them itself. Making that path public costs nothing in
+# confidentiality (published artifacts are public) and removes the API from the
+# critical path of an install that is already pinned.
+#
+# The Worker rather than a bare public bucket: it confines the reachable key
+# space to `artifacts/<sha256>.<ext>` and the signed metadata tree, refuses
+# writes and listing, and sets immutable caching. A bucket made public directly
+# would expose its whole key space, and R2's own `r2.dev` hostname is
+# rate-limited and documented as not for production.
+#
+# Ordering: apply the Worker first (`just cdn-deploy`), then this record. A
+# proxied CNAME to a route with no Worker behind it serves errors.
+# ---------------------------------------------------------------------------
+resource "cloudflare_dns_record" "cdn" {
+  count   = var.enable_cdn ? 1 : 0
+  zone_id = var.zone_id
+  name    = "cdn.zpkg.net"
+  type    = "CNAME"
+  # The target is inert: a Worker route claims the hostname before DNS is
+  # consulted. It must still resolve and must be proxied, or the route never
+  # runs. Pointing at the marketing origin keeps a misconfiguration visible
+  # (a wrong-looking page) instead of silent (an NXDOMAIN nobody notices).
+  content = var.marketing_origin
+  proxied = true
+  ttl     = 1
+}

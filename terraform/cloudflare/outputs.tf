@@ -16,3 +16,20 @@ output "s3_region" {
   description = "R2 uses the literal region `auto`"
   value       = "auto"
 }
+
+output "cdn_hostname" {
+  description = "Public content-addressed artifact mirror, when enabled."
+  value       = var.enable_cdn ? "https://cdn.zpkg.net" : null
+}
+
+output "cdn_workers_dev_hostname" {
+  description = <<-EOT
+    The zone-independent fallback hostname for the same Worker.
+
+    Not managed by Terraform — Cloudflare assigns it when the Worker is
+    deployed with workers_dev = true. Recorded here because it is the route
+    that survives losing the zpkg.net zone, and therefore the one that must be
+    in zed-cli's built-in mirror list.
+  EOT
+  value       = "https://zpkg-cdn.<account-subdomain>.workers.dev"
+}
