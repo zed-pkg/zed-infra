@@ -1,0 +1,23 @@
+{
+  "schema": "zpkg.cf-worker-snapshot/v1",
+  "worker": "zpkg-cdn",
+  "id": "18437f84b0884179b855298c7578bd93",
+  "created_on": "2026-08-29T18:27:40.444652Z",
+  "modified_on": "2026-08-29T19:10:25.251597Z",
+  "read_at": "2026-08-29T19:45:00Z",
+  "read_method": "Cloudflare Workers bindings MCP workers_get_worker_code + workers_list",
+  "code_contains": [
+    "parseCdnPath",
+    "githubFallbackUrlsForCdn",
+    "no independently public artifact source was found"
+  ],
+  "live_proof": {
+    "healthz": "https://cdn.zpkg.net/healthz → 200 {ok:true,service:zpkg-cdn}",
+    "github_path": "https://cdn.zpkg.net/github/zed-pkg-test/github-api-fallback-canary/v0.0.1/zpkg-zed-pkg-test-github-api-fallback-canary-0.0.1.tar.gz",
+    "x_zed_source": "github-release",
+    "sha256": "0279fe023f516d7077aae2176821d89ee459733f80d0a894006652029d7f10d4",
+    "bytes": 486,
+    "identical_to_github_release": true
+  },
+  "note": "Do not wrangler deploy this script without acquiring a KV lease against modified_on above. A later modified_on means someone else shipped; re-read the live script first."
+}

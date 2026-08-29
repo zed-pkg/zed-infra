@@ -112,6 +112,28 @@ cf-verify name="prod":
     curl -sf "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/tokens/verify" \
         -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN_ZPKG}" | jq '{success, status: .result.status}'
 
+# Read live Worker metadata. Does not upload. Token may be PLACEHOLDER — then this fails closed.
+cf-snapshot worker:
+    node "{{ justfile_directory() }}/workers/scripts/cf-lease.mjs" snapshot --worker {{ worker }}
+
+# Exclusive KV lease. Requires --if-match of the live modified_on from cf-snapshot (or --create-missing).
+cf-lease-acquire worker if_match:
+    node "{{ justfile_directory() }}/workers/scripts/cf-lease.mjs" acquire --worker {{ worker }} --if-match {{ if_match }}
+
+cf-lease-release worker:
+    node "{{ justfile_directory() }}/workers/scripts/cf-lease.mjs" release --worker {{ worker }}
+
+# Acquire → wrangler → release. Fails closed without a real token and matching live modified_on.
+# Never wrap this around sonus/fiducia workers — the script allowlist refuses them.
+cf-deploy config if_match:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    root="{{ justfile_directory() }}"
+    worker="$(python3 -c 'import tomllib,sys; print(tomllib.load(open(sys.argv[1],"rb"))["name"])' "$root/workers/{{ config }}/wrangler.toml")"
+    node "$root/workers/scripts/cf-lease.mjs" acquire --worker "$worker" --if-match "{{ if_match }}"
+    trap 'node "$root/workers/scripts/cf-lease.mjs" release --worker "$worker" || true' EXIT
+    cd "$root/workers" && npx wrangler deploy --config "{{ config }}/wrangler.toml"
+
 # Contract tests for the GitHub-fallback URL helpers used by the edge Workers.
 workers-test:
     cd "{{ justfile_directory() }}/workers" && npm test
