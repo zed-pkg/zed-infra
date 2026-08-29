@@ -11,7 +11,9 @@ variable "zone_id" {
 variable "r2_location" {
   description = "R2 bucket location hint (e.g. wnam, enam, weur)"
   type        = string
-  default     = "wnam"
+  # All four live zed-pkg buckets are in Eastern North America. Keeping the
+  # declaration exact prevents an import from proposing bucket replacement.
+  default = "enam"
 }
 
 variable "marketing_origin" {
@@ -21,7 +23,7 @@ variable "marketing_origin" {
 }
 
 variable "primary_origin" {
-  description = "Origin hostname registry.zpkg.net / web.zpkg.net point at"
+  description = "Cluster origin hostname used by api/registry/web/app/user when no transitional override is set"
   type        = string
   default     = "origin-hetzner.zpkg.net"
 }
@@ -57,19 +59,7 @@ variable "web_origin" {
 }
 
 variable "proxy_app_records" {
-  description = "Proxy registry.zpkg.net / web.zpkg.net through Cloudflare. Keep false until cert-manager has issued the HTTP-01 certs on the cluster, or issuance deadlocks."
-  type        = bool
-  default     = false
-}
-
-variable "enable_cdn" {
-  description = <<-EOT
-    Create the cdn.zpkg.net record for the zpkg-cdn Worker.
-
-    Off by default because the record is useless — and actively misleading —
-    until the Worker is deployed and holds the route. Deploy the Worker first
-    (cloudflare/workers/zpkg-cdn), then flip this.
-  EOT
+  description = "Proxy api/registry/web through Cloudflare. app/user are always proxied for their Workers. Keep false until cert-manager has issued cluster certificates, or HTTP-01 issuance deadlocks."
   type        = bool
   default     = false
 }

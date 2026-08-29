@@ -16,8 +16,8 @@ set -euo pipefail
 : "${ZPKG_NET_ZONE_ID:?ZPKG_NET_ZONE_ID is required}"
 
 # name|type|content|proxied — mirrors terraform/cloudflare/main.tf.
-# cdn.zpkg.net is *not* in this table: cloudflare_r2_custom_domain creates it
-# and the CNAME target is Cloudflare-managed (see the UNMANAGED allowlist).
+# cdn.zpkg.net is *not* in this table: the zpkg-cdn Worker Custom Domain creates
+# a Cloudflare-managed record (see the UNMANAGED allowlist).
 expected="$(cat <<'TABLE'
 zpkg.net|CNAME|zed-pkg.github.io|false
 www.zpkg.net|CNAME|zed-pkg.github.io|false
@@ -87,9 +87,8 @@ done <<<"$expected"
 while IFS='|' read -r name type content proxied; do
   [ -z "$name" ] && continue
   case "$type" in TXT) [[ "$name" == _acme-challenge.* ]] && continue ;; esac
-  # cdn.zpkg.net is an R2 custom domain. Cloudflare creates the proxied
-  # CNAME; the target is account-managed and is not a row in the DNS table
-  # above. Absent before apply, present after — neither is zone drift.
+  # cdn.zpkg.net is a Worker Custom Domain. Cloudflare creates the proxied
+  # record; its target is account-managed and is not a Terraform DNS row.
   if [ "$name" = "cdn.zpkg.net" ]; then
     continue
   fi

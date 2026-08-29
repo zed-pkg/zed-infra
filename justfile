@@ -114,4 +114,4 @@ cf-verify name="prod":
 
 # Contract tests for the GitHub-fallback URL helpers used by the edge Workers.
 workers-test:
-    cd "{{ justfile_directory() }}/workers" && node --test shared/github-fallback.test.js
+    cd "{{ justfile_directory() }}/workers" && npm test

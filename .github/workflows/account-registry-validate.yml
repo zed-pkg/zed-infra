@@ -84,6 +84,8 @@ jobs:
           grep -q 'host: api.zpkg.net' /tmp/zed-pkg-cluster.yaml
           grep -q 'host: registry.zpkg.net' /tmp/zed-pkg-cluster.yaml
           grep -q 'path: /v1' /tmp/zed-pkg-cluster.yaml
+          # `/v1` is only an Ingress routing prefix. The deployed API image
+          # must contain the registry Host guard before public promotion.
           grep -q 'secretName: zed-pkg-public-tls' /tmp/zed-pkg-cluster.yaml
           grep -q 'ingressClassName: nginx' /tmp/zed-pkg-cluster.yaml
           test "$(grep -c '^kind: Ingress$' /tmp/zed-pkg-cluster.yaml)" -eq 1

@@ -1,66 +1,74 @@
 # R2 buckets for zpkg.net
 
-Published artifacts are public. The API must not sit on the install
-critical path: `zed install --frozen` reads `https://cdn.zpkg.net/…`
-(or GitHub Releases) when `registry.zpkg.net` is 502.
+Published artifacts must remain installable when the registry API is down.
+`zed install --frozen` can read digest-pinned bytes from `cdn.zpkg.net` and
+verify them locally.
 
-Do **not** enable the Cloudflare-managed `r2.dev` hostname on the
-production bucket. It is rate-limited and not a production CDN. Use the
-`cdn.zpkg.net` custom domain (and the `cdn-proxy` Worker, which confines
-keys and falls back to GitHub).
+All R2 buckets stay private. Do **not** enable an `r2.dev` hostname or attach
+an R2 custom domain to the production bucket: either would bypass the audited
+Worker key-space boundary. `cdn.zpkg.net` is a Worker Custom Domain, and the
+Worker reads R2 only through its binding.
 
-## Live inventory (account `62b833940607839add74bd2379cac303`)
+## Live inventory
 
-Verified via the Cloudflare R2 API on 2026-08-29. Location hint on the
-live buckets is **ENAM**.
+Verified in the Cloudflare dashboard on 2026-08-29. All four buckets use the
+Eastern North America (`ENAM`) location and have public access disabled.
 
-| Bucket | Role | Public hostname |
+| Bucket | Role | Edge binding |
 | --- | --- | --- |
-| `zed-pkg-artifacts` | Production tarballs (`packages/`, `github/`, `artifacts/<sha256>`) | `cdn.zpkg.net` (custom domain — **not attached yet**; hostname NXDOMAIN) |
-| `zed-pkg-artifacts-dev` | Non-prod publishes | none (terraform-declared; create if missing) |
-| `zed-pkg-artifacts-e2e` | zed-pkg-test canaries | none |
-| `zed-pkg-static-registry-e2e` | Static registry fixture for e2e | none |
+| `zed-pkg-artifacts` | Production artifacts and metadata | `zpkg-cdn` → `ARTIFACTS` |
+| `zed-pkg-artifacts-dev` | Non-production publishes | `zpkg-cdn-dev` → `ARTIFACTS` |
+| `zed-pkg-artifacts-e2e` | `zed-pkg-test` canaries | E2E credentials only |
+| `zed-pkg-static-registry-e2e` | Static registry fixtures | E2E credentials only |
 
-S3-compatible endpoint (writes from `zed-api-server`, never from the
-browser):
+`zed-pkg-artifacts-dev` was created in the dashboard during this audit after
+the inventory found it missing. Import all four existing buckets into
+Terraform state before the first apply; never plan them as new resources.
 
-```
+The S3-compatible write endpoint used by `zed-api-server.rs` is:
+
+```text
 https://62b833940607839add74bd2379cac303.r2.cloudflarestorage.com
 region = auto
 ```
 
-## Attach `cdn.zpkg.net` (one-time)
+Access/secret keys remain outside Terraform and Git. Browser clients never get
+R2 credentials.
 
-The zone is already on this Cloudflare account. Connecting the custom
-domain creates the proxied CNAME; do not also hand-edit `cdn.zpkg.net`.
+## Attach cdn.zpkg.net
 
-Dashboard (production bucket → Settings → Custom Domains → Add):
-
-<https://dash.cloudflare.com/62b833940607839add74bd2379cac303/r2/default/buckets/zed-pkg-artifacts>
-
-Or, with a Zone:DNS:Edit + R2 token:
+Deploy the audited Worker. Its Wrangler Custom Domain declaration creates the
+Cloudflare-managed DNS record and certificate. Do not also create a Terraform
+DNS record and do not use R2 bucket Settings → Custom Domains.
 
 ```sh
-# CLOUDFLARE_API_TOKEN in the environment; do not print it
-curl -sS -X POST \
-  "https://api.cloudflare.com/client/v4/accounts/62b833940607839add74bd2379cac303/r2/buckets/zed-pkg-artifacts/domains/custom" \
-  -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-  -H "Content-Type: application/json" \
-  --data '{"domain":"cdn.zpkg.net","enabled":true,"zoneId":"b559136046dcffc550ee8b3ed49cdf09","minTLS":"1.2"}'
+cd workers
+npm test
+npx wrangler deploy --config cdn-proxy/wrangler.toml
 ```
 
-Terraform equivalent: `cloudflare_r2_custom_domain.cdn` in
-`terraform/cloudflare/main.tf`.
+The production worker keeps `workers_dev = true` deliberately. The resulting
+`zpkg-cdn.zed-pkg.workers.dev` endpoint has a different DNS failure domain from
+`zpkg.net` and appears in the mirror bootstrap document.
 
-Proof after attach (404 on a missing key is success; NXDOMAIN is not):
+## Public boundary
+
+The Worker may read R2 only for:
+
+- `artifacts/<sha256>.tar.gz` or `artifacts/<sha256>.zip`;
+- signed `metadata/<org>/<package>/index.json` and version metadata.
+
+Coordinate paths (`packages/...` and `github/...`) never read R2, because the
+bucket may later contain private aliases. Those paths require an anonymous,
+bounded, allowlisted npm/crates.io response or a GitHub repository explicitly
+reported as public. Writes and listing are impossible through the Worker.
+
+Verification after deployment:
 
 ```sh
 dig +short cdn.zpkg.net
-curl -sI https://cdn.zpkg.net/ | head -8
+curl -fsS https://cdn.zpkg.net/healthz | jq .
+curl -fsS https://cdn.zpkg.net/.well-known/zpkg-mirrors.json | jq .
+curl -sS -o /dev/null -w '%{http_code}\n' \
+  "https://cdn.zpkg.net/artifacts/$(printf '0%.0s' {1..64}).tar.gz" # 404
 ```
-
-## Worker binding
-
-`workers/cdn-proxy/wrangler.toml` binds `ARTIFACTS` → `zed-pkg-artifacts`.
-Deploy that Worker *before* relying on GitHub fallback for unknown keys;
-the custom domain alone serves R2 hits and 404s misses.

@@ -21,9 +21,9 @@ deliberately stay dashboard-managed.
 | `zpkg.net` (+ `www`) | Marketing site | GitHub Pages (`zed-pkg/zed-pkg.github.io`) |
 | `user.zpkg.net` | Signed-in web UI | `zed-web-server.rs` on k8s; Worker `user-proxy` |
 | `api.zpkg.net` | Full JSON API | `zed-api-server.rs` on k8s (port 8080) |
-| `registry.zpkg.net` | Registry slice only | Same API process, Ingress + Worker allow `/healthz` and `/v1/*` only. GitHub/native fallback when origin is 5xx/timeout |
+| `registry.zpkg.net` | Registry slice only | Same API process; Worker transition table and API Host guard allow only current machine-registry method/path pairs. Public GitHub/npm/crates.io fallback on origin outage. |
 | `web.zpkg.net` / `app.zpkg.net` | Aliases of `user.zpkg.net` | Same `zed-web-server` Service |
-| `cdn.zpkg.net` | Public artifacts | R2 custom domain on `zed-pkg-artifacts` **plus** Worker `cdn-proxy` (R2, then public GitHub/npm). **Not** a k8s origin. |
+| `cdn.zpkg.net` | Public artifacts | Worker Custom Domain `zpkg-cdn` with a private `zed-pkg-artifacts` binding. **Not** an R2 custom domain or k8s origin. |
 | `api./registry./web.<cloud>.zpkg.net` | Per-cloud canary/debug | `k8s/overlays/{aws,hetzner}` in the app repos |
 | `origin-hetzner.zpkg.net`, `origin-aws.zpkg.net` | Origin A records, never proxied | Cluster edge nodes (ORESoftware/k8s-cluster) |
 
@@ -32,18 +32,17 @@ Defaults that already point here: `zed-cli` ships with
 `DEFAULT_REGISTRY_URL` is `https://registry.zpkg.net`
 (`src/rust/registry.rs` after the polyglot layout move).
 `DEFAULT_R2_PUBLIC_BASE` is `https://cdn.zpkg.net` — that hostname is the
-R2 custom domain above, not a rewrite of the registry origin.
+Worker origin above, not a rewrite of the registry origin.
 
-## Status — the zone is APPLIED (2026-08-08)
+## Status and deployment gate
 
-All 16 DNS records in the drift table are live and the drift check reports the
-zone in sync. `cdn.zpkg.net` is declared as `cloudflare_r2_custom_domain.cdn`
-and is allowlisted in the drift script: it is absent until that resource is
-applied, then Cloudflare owns the proxied CNAME. Verified serving: `https://zpkg.net` (marketing site, GitHub Pages),
-`https://registry.zpkg.net/healthz`, `https://api.zpkg.net/healthz`,
-`https://web.zpkg.net/healthz`. A full publish → install → `--frozen`
-reinstall round-trip through `registry.zpkg.net` passed with byte-identical
-lockfiles (DEN-2831).
+The cluster/app records are declared in Terraform and checked by the drift
+script. `cdn.zpkg.net` is allowlisted separately because its Worker Custom
+Domain owns the Cloudflare-managed DNS record. On 2026-08-29 the apex still
+served GitHub Pages, `api.zpkg.net` and `registry.zpkg.net` returned an origin
+502, and `cdn.zpkg.net` was still NXDOMAIN. The 2026-08-08 publish → install →
+`--frozen` round trip is useful historical evidence, but it is not current
+deployment proof and must not be reported as such.
 
 **All three app hostnames currently resolve to the `zpkg-registry-local`
 tunnel, not a cluster** — the Hetzner origin is down pending billing
@@ -93,8 +92,9 @@ or a second operator would follow), not outstanding work.
    terraform import cloudflare_dns_record.registry <zone_id>/<record_id>
    ```
 
-   Import the R2 buckets too if they already exist
-   (`terraform import cloudflare_r2_bucket.artifacts <account_id>/zed-pkg-artifacts`).
+   Import all four existing R2 buckets too (for example,
+   `terraform import cloudflare_r2_bucket.artifacts <account_id>/zed-pkg-artifacts`);
+   see `docs/r2-buckets.md` for the complete inventory.
 4. **Plan/apply** with `proxy_app_records = false` (the default). Verified by
    a live dry-run on 2026-08-08 (imports into scratch state + plan, no
    mutations): with `registry_origin` set to the tunnel, the plan is
@@ -103,7 +103,7 @@ or a second operator would follow), not outstanding work.
    the registry stays proxied on the tunnel (a `cfargotunnel.com` target
    only works proxied; the module forces that while the override is set).
    Caveat: the R2 bucket resources need a token with account R2 read/write —
-   with a DNS-only token, import the two existing buckets separately or
+   with a DNS-only token, import the four existing buckets separately or
    `-target` the DNS records.
 5. **GitHub Pages custom domain.** After the apex record resolves:
 
@@ -152,7 +152,7 @@ curl -sI https://zpkg.net | head -3
 curl -s https://web.zpkg.net/healthz
 curl -s https://api.zpkg.net/healthz        # only after DEN-534/535 promotion
 curl -s https://registry.zpkg.net/healthz   # same root as api.zpkg.net today
-# After cloudflare_r2_custom_domain.cdn is applied:
+# After workers/cdn-proxy is deployed:
 curl -sI https://cdn.zpkg.net/ | head -5    # 404 on missing key is success; not an origin error
 ```
 

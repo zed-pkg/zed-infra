@@ -111,19 +111,173 @@ export function originIsUnavailable(status) {
 }
 
 /**
- * Parse a registry.zpkg.net pathname into a typed route.
- * @returns {object|null}
+ * The registry hostname is an explicit finite state machine, not a `/v1/*`
+ * prefix proxy. zed-api-server.rs also has browser/account compatibility
+ * routes below `/v1`; a prefix check would expose those routes accidentally.
  */
+export const REGISTRY_ACTION = Object.freeze({
+  PREFLIGHT: "preflight",
+  HEALTH: "health",
+  ORIGIN_READ: "origin_read",
+  ORIGIN_WRITE: "origin_write",
+  FALLBACK_READ: "fallback_read",
+  DENY_METHOD: "deny_method",
+  DENY_ROUTE: "deny_route",
+});
+
+const REGISTRY_ROUTE_SPECS = Object.freeze([
+  { name: "healthz", pattern: /^\/healthz$/, methods: ["GET", "HEAD"] },
+  { name: "list_packages", pattern: /^\/v1\/packages$/, methods: ["GET", "HEAD"] },
+  {
+    name: "get_package",
+    pattern: /^\/v1\/packages\/([a-z0-9-]+)\/([a-z0-9-]+)$/,
+    methods: ["GET", "HEAD"],
+    fallback: true,
+  },
+  {
+    name: "version",
+    pattern:
+      /^\/v1\/packages\/([a-z0-9-]+)\/([a-z0-9-]+)\/versions\/([0-9A-Za-z][0-9A-Za-z.+-]{0,127})$/,
+    methods: ["GET", "HEAD", "PUT"],
+    fallback: true,
+  },
+  {
+    name: "yank",
+    pattern:
+      /^\/v1\/packages\/([a-z0-9-]+)\/([a-z0-9-]+)\/versions\/([0-9A-Za-z][0-9A-Za-z.+-]{0,127})\/yank$/,
+    methods: ["POST"],
+  },
+  {
+    name: "artifact",
+    pattern: /^\/v1\/artifacts\/([a-f0-9]{64})$/,
+    methods: ["GET", "HEAD"],
+  },
+  {
+    name: "files",
+    pattern:
+      /^\/v1\/files\/([a-z0-9-]+)\/([a-z0-9-]+)\/([0-9A-Za-z][0-9A-Za-z.+-]{0,127})\/(.+)$/,
+    methods: ["GET", "HEAD"],
+  },
+  { name: "search", pattern: /^\/v1\/search$/, methods: ["GET", "HEAD"] },
+  { name: "semantic_search", pattern: /^\/v1\/search\/semantic$/, methods: ["POST"] },
+  {
+    name: "embedding",
+    pattern: /^\/v1\/packages\/([a-z0-9-]+)\/([a-z0-9-]+)\/embedding$/,
+    methods: ["PUT"],
+  },
+  { name: "claim_org", pattern: /^\/v1\/orgs$/, methods: ["POST"] },
+  {
+    name: "audit_verify",
+    pattern: /^\/v1\/orgs\/([a-z0-9-]+)\/audit\/verify$/,
+    methods: ["GET", "HEAD"],
+  },
+  {
+    name: "audit",
+    pattern: /^\/v1\/orgs\/([a-z0-9-]+)\/audit$/,
+    methods: ["GET", "HEAD"],
+  },
+  {
+    name: "declared_graph_export",
+    pattern:
+      /^\/v1\/packages\/([a-z0-9-]+)\/([a-z0-9-]+)\/versions\/([0-9A-Za-z][0-9A-Za-z.+-]{0,127})\/dependency-graph\/export\/([a-z0-9-]+)$/,
+    methods: ["GET", "HEAD"],
+  },
+  {
+    name: "declared_graph",
+    pattern:
+      /^\/v1\/packages\/([a-z0-9-]+)\/([a-z0-9-]+)\/versions\/([0-9A-Za-z][0-9A-Za-z.+-]{0,127})\/dependency-graph$/,
+    methods: ["GET", "HEAD"],
+  },
+  {
+    name: "resolution_graph",
+    pattern: /^\/v1\/resolutions\/(sha256:[a-f0-9]{64})\/dependency-graph$/,
+    methods: ["GET", "HEAD"],
+  },
+]);
+
+function normalizePath(pathname) {
+  if (typeof pathname !== "string" || pathname.length > 2048) return null;
+  // Registry routes have canonical ASCII spellings. Refusing all percent
+  // encoding prevents encoded separators and double-decoding ambiguity.
+  if (pathname.includes("%")) return null;
+  let path;
+  try {
+    path = decodeURIComponent(pathname);
+  } catch {
+    return null;
+  }
+  if (
+    path.includes("%") ||
+    path.includes("..") ||
+    path.includes("\\") ||
+    path.includes("\0") ||
+    path.includes("//")
+  ) {
+    return null;
+  }
+  return path.replace(/\/+$/, "") || "/";
+}
+
+function matchRegistryRoute(pathname) {
+  const path = normalizePath(pathname);
+  if (!path) return null;
+  for (const spec of REGISTRY_ROUTE_SPECS) {
+    const match = path.match(spec.pattern);
+    if (!match) continue;
+    return { path, spec, match };
+  }
+  return null;
+}
+
+/**
+ * Total transition function for the public registry boundary.
+ * Every input returns exactly one action and the function performs no I/O.
+ */
+export function classifyRegistryRequest(method, pathname) {
+  const route = matchRegistryRoute(pathname);
+  if (!route) {
+    return { action: REGISTRY_ACTION.DENY_ROUTE, route: null, allow: [] };
+  }
+
+  const normalizedMethod = String(method || "").toUpperCase();
+  if (normalizedMethod === "OPTIONS") {
+    return {
+      action: REGISTRY_ACTION.PREFLIGHT,
+      route: route.spec.name,
+      allow: [...route.spec.methods, "OPTIONS"],
+    };
+  }
+  if (!route.spec.methods.includes(normalizedMethod)) {
+    return {
+      action: REGISTRY_ACTION.DENY_METHOD,
+      route: route.spec.name,
+      allow: [...route.spec.methods, "OPTIONS"],
+    };
+  }
+  if (route.spec.name === "healthz") {
+    return { action: REGISTRY_ACTION.HEALTH, route: "healthz", allow: route.spec.methods };
+  }
+  const isRead = normalizedMethod === "GET" || normalizedMethod === "HEAD";
+  return {
+    action:
+      isRead && route.spec.fallback
+        ? REGISTRY_ACTION.FALLBACK_READ
+        : isRead
+          ? REGISTRY_ACTION.ORIGIN_READ
+          : REGISTRY_ACTION.ORIGIN_WRITE,
+    route: route.spec.name,
+    allow: route.spec.methods,
+  };
+}
+
 /** Paths that may be served on registry.zpkg.net (API registry slice only). */
 export function isRegistryOnlyPath(pathname) {
-  const path = decodeURIComponent((pathname || "/").replace(/\/+$/, "") || "/");
-  if (path.includes("..") || path.includes("\\")) return false;
-  if (path === "/healthz") return true;
-  return path === "/v1" || path.startsWith("/v1/");
+  return matchRegistryRoute(pathname) !== null;
 }
 
 export function parseRegistryPath(pathname) {
-  const path = decodeURIComponent(pathname.replace(/\/+$/, "") || "/");
+  const path = normalizePath(pathname);
+  if (!path) return null;
   if (path === "/healthz") return { kind: "healthz" };
 
   const artifact = path.match(/^\/v1\/artifacts\/([0-9a-f]{64})$/);
@@ -159,8 +313,15 @@ export function parseRegistryPath(pathname) {
  * @returns {object|null}
  */
 export function parseCdnPath(pathname) {
-  const path = decodeURIComponent(pathname.replace(/^\/+/, "").replace(/\/+$/, ""));
-  if (!path || path.includes("..") || path.includes("\\")) return null;
+  if (typeof pathname !== "string" || pathname.length > 2048) return null;
+  if (pathname.includes("%")) return null;
+  let path;
+  try {
+    path = decodeURIComponent(pathname.replace(/^\/+/, "").replace(/\/+$/, ""));
+  } catch {
+    return null;
+  }
+  if (!path || path.includes("%") || path.includes("..") || path.includes("\\")) return null;
 
   const github = path.match(
     /^github\/([a-z0-9-]+)\/([a-z0-9-]+)\/([^/]+)\/([^/]+)$/,
@@ -253,7 +414,7 @@ export function jsonResponse(body, status = 200, extra = {}) {
     headers: {
       "content-type": "application/json; charset=utf-8",
       "x-content-type-options": "nosniff",
-      "cache-control": "public, max-age=60",
+      "cache-control": status >= 400 ? "no-store" : "public, max-age=60",
       "x-zed-source": extra.source || "github",
       ...extra.headers,
     },
@@ -271,12 +432,10 @@ export const HOP_BY_HOP = new Set([
   "upgrade",
 ]);
 
-export function githubHeaders(token) {
-  const headers = {
+export function githubHeaders() {
+  return {
     Accept: "application/vnd.github+json",
     "User-Agent": USER_AGENT,
     "X-GitHub-Api-Version": "2022-11-28",
   };
-  if (token) headers.Authorization = `Bearer ${token}`;
-  return headers;
 }

@@ -3,6 +3,6 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test shared/github-fallback.test.js shared/native-public.test.js"
+    "test": "node --test shared/*.test.js registry-proxy/src/*.test.js cdn-proxy/src/*.test.js"
   }
 }

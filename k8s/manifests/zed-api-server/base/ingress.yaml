@@ -23,6 +23,8 @@ spec:
     - host: registry.zpkg.net
       http:
         paths:
+          # zed-api-server.rs applies its exact registry Host state machine;
+          # this prefix only routes requests to that guarded process.
           - path: /healthz
             pathType: Exact
             backend:

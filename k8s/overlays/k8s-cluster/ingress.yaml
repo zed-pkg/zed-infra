@@ -48,7 +48,9 @@ spec:
                 name: zed-api-server
                 port:
                   number: 8080
-    # Registry hostname is only the registry slice of that API (/v1 + /healthz)
+    # Registry Host is constrained to the exact machine-route table by both
+    # the Cloudflare Worker and zed-api-server.rs. /v1 is only an Ingress
+    # routing prefix; it is not broad authorization for /v1/account routes.
     - host: registry.zpkg.net
       http:
         paths:

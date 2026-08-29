@@ -6,7 +6,6 @@ compatibility_flags = ["nodejs_compat"]
 # Signed-in package UI. Same origin as web.zpkg.net today; split later.
 
 [vars]
-ORIGIN_URL = "https://origin-hetzner.zpkg.net"
 ORIGIN_TIMEOUT_MS = "8000"
 
 [observability]

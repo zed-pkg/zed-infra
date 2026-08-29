@@ -6,7 +6,6 @@ compatibility_flags = ["nodejs_compat"]
 # user.zpkg.net → zed-web-server.rs on the k8s cluster.
 
 [vars]
-ORIGIN_URL = "https://origin-hetzner.zpkg.net"
 ORIGIN_TIMEOUT_MS = "8000"
 
 [observability]

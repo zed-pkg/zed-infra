@@ -1,19 +1,53 @@
-name = "zpkg-cdn-proxy"
+# Public read-only Worker over the private production bucket. This Worker is
+# the origin for cdn.zpkg.net, so it uses a Custom Domain rather than a route
+# in front of another origin. workers.dev deliberately remains enabled as a
+# zone-independent emergency hostname.
+
+name = "zpkg-cdn"
 main = "src/index.js"
 compatibility_date = "2026-08-28"
 compatibility_flags = ["nodejs_compat"]
-
-# Sits in front of the zed-pkg-artifacts R2 bucket. The R2 custom domain
-# (cdn.zpkg.net) already proxies at the edge; this Worker takes the same
-# hostname so a missing R2 key can still be served from a GitHub Release.
+workers_dev = true
 
 [[r2_buckets]]
 binding = "ARTIFACTS"
 bucket_name = "zed-pkg-artifacts"
 
+[vars]
+REGISTRY_URL = "https://registry.zpkg.net"
+FALLBACK_TIMEOUT_MS = "5000"
+MIRRORS = '''[
+  {
+    "kind": "object-store",
+    "id": "zpkg-cdn",
+    "url": "https://cdn.zpkg.net",
+    "alternate_urls": ["https://zpkg-cdn.zed-pkg.workers.dev"],
+    "priority": 20
+  },
+  {
+    "kind": "zed-registry",
+    "id": "zpkg-registry",
+    "url": "https://registry.zpkg.net",
+    "priority": 0
+  }
+]'''
+
 [observability]
 enabled = true
 
 [[routes]]
-pattern = "cdn.zpkg.net/*"
-zone_name = "zpkg.net"
+pattern = "cdn.zpkg.net"
+custom_domain = true
+
+[env.dev]
+name = "zpkg-cdn-dev"
+workers_dev = true
+
+[[env.dev.r2_buckets]]
+binding = "ARTIFACTS"
+bucket_name = "zed-pkg-artifacts-dev"
+
+[env.dev.vars]
+REGISTRY_URL = "http://localhost:8080"
+FALLBACK_TIMEOUT_MS = "5000"
+MIRRORS = "[]"
