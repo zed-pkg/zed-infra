@@ -37,6 +37,20 @@ resource "cloudflare_r2_bucket" "artifacts_dev" {
   location   = var.r2_location
 }
 
+# Sibling test-org canaries (zed-pkg-test). Same account so Workers and
+# wrangler can bind them; not public. Created live 2026-08-08 (ENAM).
+resource "cloudflare_r2_bucket" "artifacts_e2e" {
+  account_id = var.account_id
+  name       = "zed-pkg-artifacts-e2e"
+  location   = var.r2_location
+}
+
+resource "cloudflare_r2_bucket" "static_registry_e2e" {
+  account_id = var.account_id
+  name       = "zed-pkg-static-registry-e2e"
+  location   = var.r2_location
+}
+
 # Public CDN in front of the production bucket. This is *not* an origin
 # hostname: Cloudflare terminates TLS at the edge and reads R2 directly.
 # registry.zpkg.net, web.zpkg.net, and the GitHub Pages apex can all be
