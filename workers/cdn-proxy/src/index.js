@@ -1,8 +1,5 @@
 import {
-  githubApiRepoUrl,
   githubFallbackUrlsForCdn,
-  githubHeaders,
-  githubIdentity,
   originIsUnavailable,
   parseCdnPath,
   USER_AGENT,
@@ -22,7 +19,6 @@ const IMMUTABLE = "public, max-age=31536000, immutable";
 const METADATA_CACHE = "public, max-age=60, stale-while-revalidate=600";
 const NO_STORE = "no-store";
 const MAX_PUBLIC_ARTIFACT_BYTES = 110 * 1024 * 1024;
-const MAX_GITHUB_JSON_BYTES = 1024 * 1024;
 
 const SECURITY_HEADERS = Object.freeze({
   "x-content-type-options": "nosniff",
@@ -149,17 +145,18 @@ async function getNativePublic(parsed, request, env) {
 }
 
 async function getGithubPublic(parsed, request, env) {
-  let identity;
-  if (parsed.kind === "cdn_github_object") {
-    identity = { owner: parsed.owner, repo: parsed.repo };
-  } else if (parsed.kind === "cdn_package_object") {
+  if (parsed.kind === "cdn_package_object") {
     if (publicNativeHostFromOrg(parsed.org)) return null;
-    identity = githubIdentity(parsed.org, parsed.name);
-  } else {
+  } else if (parsed.kind !== "cdn_github_object") {
     return null;
   }
-  if (!(await isPublicGithubRepo(identity, env))) return null;
 
+  // A successful credential-free release download is the public proof. A
+  // private repository's release URL is not anonymously readable, while a
+  // separate GitHub API lookup can be rate-limited independently and turn a
+  // healthy public artifact into a false negative. The registry metadata
+  // Worker still uses the API where it needs metadata; this byte proxy needs
+  // only the allowlisted, bounded artifact response itself.
   for (const url of githubFallbackUrlsForCdn(parsed)) {
     const response = await fetchWithValidatedRedirects(
       url,
@@ -172,28 +169,6 @@ async function getGithubPublic(parsed, request, env) {
     if (sanitized) return sanitized;
   }
   return null;
-}
-
-async function isPublicGithubRepo(identity, env) {
-  let response;
-  try {
-    response = await fetch(githubApiRepoUrl(identity), {
-      headers: githubHeaders(),
-      redirect: "error",
-      signal: AbortSignal.timeout(timeout(env)),
-    });
-  } catch {
-    return false;
-  }
-  if (!response.ok) return false;
-  const body = await readBoundedJson(response, MAX_GITHUB_JSON_BYTES);
-  return Boolean(
-    body &&
-      body.private === false &&
-      body.visibility === "public" &&
-      body.owner?.login?.toLowerCase() === identity.owner.toLowerCase() &&
-      body.name?.toLowerCase() === identity.repo.toLowerCase(),
-  );
 }
 
 async function fetchWithValidatedRedirects(url, method, headers, allowUrl, timeoutMs) {
@@ -261,20 +236,6 @@ function sanitizePublicArtifact(response, method, source) {
     status: response.status === 206 ? 206 : 200,
     headers,
   });
-}
-
-async function readBoundedJson(response, maxBytes) {
-  const contentType = response.headers.get("content-type") || "";
-  if (!/^application\/(?:[a-z0-9.+-]*\+)?json(?:\s*;|$)/i.test(contentType)) return null;
-  const declared = Number(response.headers.get("content-length") || 0);
-  if (declared > maxBytes) return null;
-  const bytes = new Uint8Array(await response.arrayBuffer());
-  if (bytes.byteLength > maxBytes) return null;
-  try {
-    return JSON.parse(new TextDecoder().decode(bytes));
-  } catch {
-    return null;
-  }
 }
 
 function bootstrap(env, method) {

@@ -23,7 +23,7 @@ deliberately stay dashboard-managed.
 | `api.zpkg.net` | Full JSON API | `zed-api-server.rs` on k8s (port 8080) |
 | `registry.zpkg.net` | Registry slice only | Same API process; Worker transition table and API Host guard allow only current machine-registry method/path pairs. Public GitHub/npm/crates.io fallback on origin outage. |
 | `web.zpkg.net` / `app.zpkg.net` | Aliases of `user.zpkg.net` | Same `zed-web-server` Service |
-| `cdn.zpkg.net` | Public artifacts | Worker Custom Domain `zpkg-cdn` with a private `zed-pkg-artifacts` binding. **Not** an R2 custom domain or k8s origin. |
+| `cdn.zpkg.net` | Public artifacts | Exact `cdn.zpkg.net/*` Worker Route for `zpkg-cdn`, with a private `zed-pkg-artifacts` binding. **Not** an R2 custom domain or k8s origin. |
 | `api./registry./web.<cloud>.zpkg.net` | Per-cloud canary/debug | `k8s/overlays/{aws,hetzner}` in the app repos |
 | `origin-hetzner.zpkg.net`, `origin-aws.zpkg.net` | Origin A records, never proxied | Cluster edge nodes (ORESoftware/k8s-cluster) |
 
@@ -32,15 +32,16 @@ Defaults that already point here: `zed-cli` ships with
 `DEFAULT_REGISTRY_URL` is `https://registry.zpkg.net`
 (`src/rust/registry.rs` after the polyglot layout move).
 `DEFAULT_R2_PUBLIC_BASE` is `https://cdn.zpkg.net` — that hostname is the
-Worker origin above, not a rewrite of the registry origin.
+Worker boundary above, not a rewrite of the registry origin.
 
 ## Status and deployment gate
 
 The cluster/app records are declared in Terraform and checked by the drift
-script. `cdn.zpkg.net` is allowlisted separately because its Worker Custom
-Domain owns the Cloudflare-managed DNS record. On 2026-08-29 the apex still
-served GitHub Pages, `api.zpkg.net` and `registry.zpkg.net` returned an origin
-502, and `cdn.zpkg.net` was still NXDOMAIN. The 2026-08-08 publish → install →
+script. `cdn.zpkg.net` is allowlisted separately because its existing proxied
+record is intercepted by a Worker Route. On 2026-08-29 the apex still served
+GitHub Pages, `api.zpkg.net` and `registry.zpkg.net` returned an origin 502,
+and the CDN Worker answered through both the zone route and Workers.dev. The
+2026-08-08 publish → install →
 `--frozen` round trip is useful historical evidence, but it is not current
 deployment proof and must not be reported as such.
 
