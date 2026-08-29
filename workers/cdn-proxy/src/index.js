@@ -107,16 +107,26 @@ async function getR2(env, key, request) {
     metadata ? "application/json" : key.endsWith(".zip") ? "application/zip" : "application/gzip",
   );
 
-  if (request.method === "HEAD" || !("body" in object) || object.body === null) {
+  if (request.method === "HEAD") {
     if ("size" in object) headers.set("content-length", String(object.size));
-    return new Response(null, { status: request.method === "HEAD" ? 200 : 304, headers });
+    return new Response(null, { status: 200, headers });
   }
-  if (object.range && "offset" in object.range && "length" in object.range) {
+  if (!("body" in object) || object.body === null) {
+    return new Response(null, { status: 304, headers });
+  }
+  if (
+    request.headers.has("range") &&
+    object.range &&
+    "offset" in object.range &&
+    "length" in object.range
+  ) {
     const start = object.range.offset;
     const end = start + object.range.length - 1;
     headers.set("content-range", `bytes ${start}-${end}/${object.size}`);
+    headers.set("content-length", String(object.range.length));
     return new Response(object.body, { status: 206, headers });
   }
+  if ("size" in object) headers.set("content-length", String(object.size));
   return new Response(object.body, { status: 200, headers });
 }
 

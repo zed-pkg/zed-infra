@@ -27,12 +27,18 @@ function bucket(objects = {}, error = null) {
   };
 }
 
-async function call(path, { method = "GET", objects = {}, env = {}, store } = {}) {
+async function call(
+  path,
+  { method = "GET", headers = {}, objects = {}, env = {}, store } = {},
+) {
   const artifacts = store || bucket(objects);
-  const response = await worker.fetch(new Request(`https://cdn.zpkg.net${path}`, { method }), {
-    ARTIFACTS: artifacts,
-    ...env,
-  });
+  const response = await worker.fetch(
+    new Request(`https://cdn.zpkg.net${path}`, { method, headers }),
+    {
+      ARTIFACTS: artifacts,
+      ...env,
+    },
+  );
   return { response, store: artifacts };
 }
 
@@ -46,6 +52,34 @@ test("serves a digest-addressed R2 artifact with immutable security headers", as
   assert.match(response.headers.get("cache-control"), /immutable/);
   assert.equal(response.headers.get("x-zed-source"), "r2");
   assert.equal(response.headers.get("x-content-type-options"), "nosniff");
+});
+
+test("R2 full-object metadata is not mistaken for a client range request", async () => {
+  const key = `artifacts/${SHA}.tar.gz`;
+  const store = {
+    async get(_key, options = {}) {
+      const partial = options.range?.has("range") === true;
+      return {
+        body: partial ? "pay" : "payload",
+        size: 7,
+        range: { offset: 0, length: partial ? 3 : 7 },
+        writeHttpMetadata() {},
+      };
+    },
+  };
+
+  const full = await call(`/${key}`, { store });
+  assert.equal(full.response.status, 200);
+  assert.equal(full.response.headers.get("content-range"), null);
+  assert.equal(full.response.headers.get("content-length"), "7");
+
+  const partial = await call(`/${key}`, {
+    store,
+    headers: { Range: "bytes=0-2" },
+  });
+  assert.equal(partial.response.status, 206);
+  assert.equal(partial.response.headers.get("content-range"), "bytes 0-2/7");
+  assert.equal(partial.response.headers.get("content-length"), "3");
 });
 
 test("signed metadata uses a bounded cache and is reachable", async () => {
