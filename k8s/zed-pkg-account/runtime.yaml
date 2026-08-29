@@ -32,7 +32,10 @@ data:
   BIND_ADDR: "0.0.0.0:8080"
   DB_CONNECT_MAX_WAIT_SECS: "60"
   SHARED_AUTH_AUDIENCE: "zed-pkg"
-  SHARED_AUTH_APPLICATION_ID: "zed-pkg"
+  SHARED_AUTH_APPLICATION_ID: "zpkg-web"
+  SHARED_AUTH_HANDOFF_CLIENT_ID: "zpkg"
+  SHARED_AUTH_DELEGATE_CLIENT_ID: "zpkg-web"
+  SHARED_AUTH_SCOPES: "zpkg:account"
   ZED_API_URL: "http://zed-api-server.zed-pkg.svc.cluster.local:8080"
   COOKIE_SECURE: "true"
   RUST_LOG: "info,tower_http=info"
@@ -241,6 +244,8 @@ spec:
           envFrom:
             - configMapRef:
                 name: zed-pkg-runtime
+            - secretRef:
+                name: zed-pkg-shared-auth
             - secretRef:
                 name: zed-pkg-web-auth
             - secretRef:
