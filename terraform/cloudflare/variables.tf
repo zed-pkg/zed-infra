@@ -61,15 +61,3 @@ variable "proxy_app_records" {
   type        = bool
   default     = false
 }
-
-variable "enable_cdn" {
-  description = <<-EOT
-    Create the cdn.zpkg.net record for the zpkg-cdn Worker.
-
-    Off by default because the record is useless — and actively misleading —
-    until the Worker is deployed and holds the route. Deploy the Worker first
-    (cloudflare/workers/zpkg-cdn), then flip this.
-  EOT
-  type        = bool
-  default     = false
-}
