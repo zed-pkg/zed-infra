@@ -11,8 +11,9 @@
 
 DNS for the cluster hosts lives in `terraform/cloudflare`. Ingress lives in
 `k8s/overlays/k8s-cluster/ingress.yaml`. `registry-proxy` is an edge route in
-front of the API hostname; `cdn-proxy` is itself the origin for a Worker Custom
-Domain. The API also enforces the registry Host boundary so a direct-origin
+front of the API hostname; `cdn-proxy` is an exact Worker Route on the existing
+proxied CDN record and never forwards accepted artifact paths to that DNS
+origin. The API also enforces the registry Host boundary so a direct-origin
 request cannot bypass the edge state machine.
 
 ## Promotion order
@@ -21,12 +22,12 @@ request cannot bypass the edge state machine.
 2. Promote that digest with authentication/rate limiting enabled, then prove
    `api.zpkg.net` and direct `Host: registry.zpkg.net` behavior at the origin.
 3. Deploy `registry-proxy`; only then rely on public fallback behavior.
-4. Deploy `cdn-proxy`, which creates `cdn.zpkg.net` as a Worker Custom Domain.
+4. Deploy `cdn-proxy`, which attaches the exact `cdn.zpkg.net/*` zone route.
 5. Prove `zed-web-server.rs` at the underlying DNS origin, then deploy the
    `user`, `web`, and `app` route Workers. They fetch the original URL so the
    public Host reaches the correct Kubernetes Ingress rule.
 
 Do not skip step 1: removing the registry Worker is a normal edge rollback,
 and the API Host guard must keep that rollback from widening the hostname.
-Rollback never makes an R2 bucket public; `zpkg-cdn.zed-pkg.workers.dev`
+Rollback never makes an R2 bucket public; `zpkg-cdn.alexander-d-mills.workers.dev`
 remains the zone-independent CDN address.

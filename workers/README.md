@@ -8,25 +8,27 @@ cannot: GitHub and *public* native registries as a read-only backup when
 | Worker | Hostname | Role |
 | --- | --- | --- |
 | `registry-proxy` | `registry.zpkg.net` | A total `(method, path) -> action` state machine exposes only the current machine-registry routes from `zed-api-server.rs`; `/v1/account/*`, auth, admin, and unknown paths fail before origin I/O. On an origin outage, package/version reads may use anonymously proven public npm, crates.io, or GitHub data. Writes stay origin-only. |
-| `cdn-proxy` | `cdn.zpkg.net` | The Worker is the hostname's origin. Its private R2 binding exposes only content-addressed artifacts and signed metadata. Coordinate paths never read R2; they require an anonymously successful npm/crates.io read or a GitHub repository explicitly reported as public. |
+| `cdn-proxy` | `cdn.zpkg.net` | A zone Worker Route is the hostname's public byte boundary. Its private R2 binding exposes only content-addressed artifacts and signed metadata. Coordinate paths never read R2; they require an anonymously successful npm/crates.io or GitHub Release read. |
 | `web-proxy` | `web.zpkg.net` | Alias of `user.zpkg.net`. |
 | `app-proxy` | `app.zpkg.net` | Alias of `user.zpkg.net`. |
 | `user-proxy` | `user.zpkg.net` | Origin proxy for `zed-web-server.rs` on k8s. |
 
-`cdn.zpkg.net` is a Worker **Custom Domain**, declared in
-`cdn-proxy/wrangler.toml`. The R2 bucket remains private and has neither an R2
-custom domain nor public `r2.dev` access, because either would bypass the
-Worker's key-space confinement. Do not also create a DNS record or CNAME this
-hostname to k8s; Cloudflare creates the record and certificate for the Worker.
+`cdn.zpkg.net` uses its existing proxied DNS record plus the exact
+`cdn.zpkg.net/*` Worker Route declared in `cdn-proxy/wrangler.toml`. The R2
+bucket remains private and has neither an R2 custom domain nor public `r2.dev`
+access, because either would bypass the Worker's key-space confinement. The
+DNS target is only a fail-closed fallback origin; successful CDN requests are
+intercepted by the Worker before origin I/O.
 
 When Cloudflare R2 *and* the registry origin are both unreachable, the
 remaining public backups are:
 
 1. **npm or crates.io**, only through fixed HTTPS hosts and paths, with no
    credentials, bounded metadata/artifact sizes, and redirect allowlists.
-2. **GitHub REST/Releases** only after an anonymous repository lookup reports
-   `private: false` and `visibility: public`. No GitHub token is attached to
-   this public edge. Private GitHub Packages/GHCR are never proxied.
+2. **GitHub REST/Releases** with no GitHub token attached to this public edge.
+   Registry metadata uses anonymous REST responses; CDN bytes are public only
+   when the allowlisted release URL itself succeeds anonymously. Private
+   GitHub Packages/GHCR are never proxied.
 
 The GitHub path is proven by `zed-pkg-test/zed-pkg-e2e`
 `scripts/github_api_fallback.py`.

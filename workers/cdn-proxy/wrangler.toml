@@ -1,7 +1,7 @@
-# Public read-only Worker over the private production bucket. This Worker is
-# the origin for cdn.zpkg.net, so it uses a Custom Domain rather than a route
-# in front of another origin. workers.dev deliberately remains enabled as a
-# zone-independent emergency hostname.
+# Public read-only Worker over the private production bucket. The existing
+# proxied cdn.zpkg.net CNAME stays in DNS and a zone Worker Route intercepts
+# every path before that fallback origin. workers.dev deliberately remains
+# enabled as a zone-independent emergency hostname.
 
 name = "zpkg-cdn"
 main = "src/index.js"
@@ -21,7 +21,7 @@ MIRRORS = '''[
     "kind": "object-store",
     "id": "zpkg-cdn",
     "url": "https://cdn.zpkg.net",
-    "alternate_urls": ["https://zpkg-cdn.zed-pkg.workers.dev"],
+    "alternate_urls": ["https://zpkg-cdn.alexander-d-mills.workers.dev"],
     "priority": 20
   },
   {
@@ -36,8 +36,8 @@ MIRRORS = '''[
 enabled = true
 
 [[routes]]
-pattern = "cdn.zpkg.net"
-custom_domain = true
+pattern = "cdn.zpkg.net/*"
+zone_name = "zpkg.net"
 
 [env.dev]
 name = "zpkg-cdn-dev"

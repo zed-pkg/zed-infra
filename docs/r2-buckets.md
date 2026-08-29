@@ -6,8 +6,9 @@ verify them locally.
 
 All R2 buckets stay private. Do **not** enable an `r2.dev` hostname or attach
 an R2 custom domain to the production bucket: either would bypass the audited
-Worker key-space boundary. `cdn.zpkg.net` is a Worker Custom Domain, and the
-Worker reads R2 only through its binding.
+Worker key-space boundary. `cdn.zpkg.net` is intercepted by an exact Worker
+Route on its existing proxied DNS record, and the Worker reads R2 only through
+its binding.
 
 ## Live inventory
 
@@ -37,9 +38,9 @@ R2 credentials.
 
 ## Attach cdn.zpkg.net
 
-Deploy the audited Worker. Its Wrangler Custom Domain declaration creates the
-Cloudflare-managed DNS record and certificate. Do not also create a Terraform
-DNS record and do not use R2 bucket Settings → Custom Domains.
+Keep the existing proxied `cdn.zpkg.net` DNS record and deploy the audited
+Worker Route. Do not use R2 bucket Settings → Custom Domains: that would bypass
+the Worker. Wrangler must report the exact `cdn.zpkg.net/*` zone route.
 
 ```sh
 cd workers
@@ -48,8 +49,8 @@ npx wrangler deploy --config cdn-proxy/wrangler.toml
 ```
 
 The production worker keeps `workers_dev = true` deliberately. The resulting
-`zpkg-cdn.zed-pkg.workers.dev` endpoint has a different DNS failure domain from
-`zpkg.net` and appears in the mirror bootstrap document.
+`zpkg-cdn.alexander-d-mills.workers.dev` endpoint has a different DNS failure
+domain from `zpkg.net` and appears in the mirror bootstrap document.
 
 ## Public boundary
 
@@ -60,8 +61,9 @@ The Worker may read R2 only for:
 
 Coordinate paths (`packages/...` and `github/...`) never read R2, because the
 bucket may later contain private aliases. Those paths require an anonymous,
-bounded, allowlisted npm/crates.io response or a GitHub repository explicitly
-reported as public. Writes and listing are impossible through the Worker.
+bounded, allowlisted npm/crates.io response or a credential-free GitHub Release
+response whose successful bytes are their own public proof. Writes and listing
+are impossible through the Worker.
 
 Verification after deployment:
 

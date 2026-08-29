@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { afterEach, test } from "node:test";
 
 import worker, { _internals } from "./index.js";
@@ -92,25 +93,63 @@ test("signed metadata uses a bounded cache and is reachable", async () => {
   assert.deepEqual(store.reads, [key]);
 });
 
-test("coordinate paths never read R2, even when a matching key exists", async () => {
-  const key = "packages/acme/private-lib/1.0.0/private-lib-1.0.0.tar.gz";
+test("an anonymously inaccessible GitHub release never falls back to R2", async () => {
+  const key = "github/acme/private-lib/v1.0.0/private-lib-1.0.0.tar.gz";
   const store = bucket({ [key]: "private-bytes" });
-  globalThis.fetch = async (input) => {
+  const seen = [];
+  globalThis.fetch = async (input, init = {}) => {
     const url = input instanceof Request ? input.url : String(input);
-    assert.equal(url, "https://api.github.com/repos/acme/private-lib");
-    return new Response(
-      JSON.stringify({
-        name: "private-lib",
-        owner: { login: "acme" },
-        private: true,
-        visibility: "private",
-      }),
-      { headers: { "content-type": "application/json" } },
-    );
+    const headers = new Headers(input instanceof Request ? input.headers : init.headers);
+    seen.push({ url, authorization: headers.get("authorization") });
+    return new Response("not found", { status: 404, headers: { "content-length": "9" } });
   };
   const { response } = await call(`/${key}`, { store });
   assert.equal(response.status, 404);
   assert.deepEqual(store.reads, []);
+  assert.deepEqual(seen, [
+    {
+      url: "https://github.com/acme/private-lib/releases/download/v1.0.0/private-lib-1.0.0.tar.gz",
+      authorization: null,
+    },
+  ]);
+});
+
+test("an anonymous allowlisted GitHub release response is its own public proof", async () => {
+  const seen = [];
+  globalThis.fetch = async (input, init = {}) => {
+    const url = input instanceof Request ? input.url : String(input);
+    const headers = new Headers(input instanceof Request ? input.headers : init.headers);
+    seen.push({ url, authorization: headers.get("authorization") });
+    if (url === "https://github.com/acme/public-lib/releases/download/v1.0.0/public-lib.tar.gz") {
+      return new Response(null, {
+        status: 302,
+        headers: { location: "https://release-assets.githubusercontent.com/public-lib.tar.gz" },
+      });
+    }
+    assert.equal(url, "https://release-assets.githubusercontent.com/public-lib.tar.gz");
+    return new Response("public-bytes", {
+      status: 200,
+      headers: { "content-type": "application/gzip", "content-length": "12" },
+    });
+  };
+
+  const { response, store } = await call(
+    "/github/acme/public-lib/v1.0.0/public-lib.tar.gz",
+  );
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), "public-bytes");
+  assert.equal(response.headers.get("x-zed-source"), "github-release");
+  assert.deepEqual(store.reads, []);
+  assert.deepEqual(seen, [
+    {
+      url: "https://github.com/acme/public-lib/releases/download/v1.0.0/public-lib.tar.gz",
+      authorization: null,
+    },
+    {
+      url: "https://release-assets.githubusercontent.com/public-lib.tar.gz",
+      authorization: null,
+    },
+  ]);
 });
 
 test("npm artifact fallback is anonymous, bounded, and uses the exact canonical URL", async () => {
@@ -218,4 +257,12 @@ test("health and bootstrap do not depend on R2", async () => {
   assert.equal(body.schema, "zpkg.mirror-bootstrap/v1");
   assert.equal(body.registry_url, "https://registry.zpkg.net");
   assert.deepEqual(broken.reads, []);
+});
+
+test("production Wrangler config preserves the existing DNS-compatible route", async () => {
+  const config = await readFile(new URL("../wrangler.toml", import.meta.url), "utf8");
+  assert.match(config, /pattern = "cdn\.zpkg\.net\/\*"/);
+  assert.match(config, /zone_name = "zpkg\.net"/);
+  assert.doesNotMatch(config, /custom_domain\s*=\s*true/);
+  assert.match(config, /https:\/\/zpkg-cdn\.alexander-d-mills\.workers\.dev/);
 });
