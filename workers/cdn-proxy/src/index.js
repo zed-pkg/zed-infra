@@ -4,6 +4,11 @@ import {
   parseCdnPath,
   USER_AGENT,
 } from "../../shared/github-fallback.js";
+import {
+  nativeTarballUrls,
+  publicNativeHostFromOrg,
+  statusMeansPrivateOrMissing,
+} from "../../shared/native-public.js";
 
 export default {
   async fetch(request, env) {
@@ -19,6 +24,9 @@ export default {
 
     const fromR2 = await getR2(env, parsed.key);
     if (fromR2) return fromR2;
+
+    const native = await getNativePublic(parsed);
+    if (native) return native;
 
     const github = await getGithub(parsed);
     if (github) return github;
@@ -49,6 +57,35 @@ async function getR2(env, key) {
   } catch {
     return null;
   }
+}
+
+async function getNativePublic(parsed) {
+  if (parsed.kind !== "cdn_package_object") return null;
+  const host = publicNativeHostFromOrg(parsed.org);
+  if (!host) return null;
+  for (const url of nativeTarballUrls(host, parsed.name, parsed.version, parsed.filename)) {
+    try {
+      const response = await fetch(url, {
+        headers: {
+          "User-Agent": USER_AGENT,
+          Accept: "application/octet-stream",
+        },
+        redirect: "follow",
+      });
+      if (statusMeansPrivateOrMissing(response.status) || originIsUnavailable(response.status)) {
+        continue;
+      }
+      if (!response.ok) continue;
+      const headers = new Headers(response.headers);
+      headers.set("x-zed-edge", "cdn");
+      headers.set("x-zed-source", `native-${host.id}`);
+      headers.set("x-content-type-options", "nosniff");
+      return new Response(response.body, { status: 200, headers });
+    } catch {
+      continue;
+    }
+  }
+  return null;
 }
 
 async function getGithub(parsed) {
