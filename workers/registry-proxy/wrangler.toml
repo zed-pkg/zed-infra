@@ -1,0 +1,19 @@
+name = "zpkg-registry-proxy"
+main = "src/index.js"
+compatibility_date = "2026-08-28"
+compatibility_flags = ["nodejs_compat"]
+
+# Read-only GitHub fallback when ORIGIN_URL (zed-api-server) is 5xx/timeout.
+# Put the optional GitHub token with: wrangler secret put GITHUB_TOKEN
+# (public repos work unauthenticated; the token raises rate limits).
+
+[vars]
+ORIGIN_URL = "https://origin-hetzner.zpkg.net"
+ORIGIN_TIMEOUT_MS = "4000"
+
+[observability]
+enabled = true
+
+[[routes]]
+pattern = "registry.zpkg.net/*"
+zone_name = "zpkg.net"

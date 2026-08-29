@@ -1,0 +1,19 @@
+name = "zpkg-cdn-proxy"
+main = "src/index.js"
+compatibility_date = "2026-08-28"
+compatibility_flags = ["nodejs_compat"]
+
+# Sits in front of the zed-pkg-artifacts R2 bucket. The R2 custom domain
+# (cdn.zpkg.net) already proxies at the edge; this Worker takes the same
+# hostname so a missing R2 key can still be served from a GitHub Release.
+
+[[r2_buckets]]
+binding = "ARTIFACTS"
+bucket_name = "zed-pkg-artifacts"
+
+[observability]
+enabled = true
+
+[[routes]]
+pattern = "cdn.zpkg.net/*"
+zone_name = "zpkg.net"

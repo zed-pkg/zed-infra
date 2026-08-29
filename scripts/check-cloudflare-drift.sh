@@ -28,6 +28,8 @@ api.aws.zpkg.net|CNAME|origin-aws.zpkg.net|false
 api.hetzner.zpkg.net|CNAME|origin-hetzner.zpkg.net|false
 registry.zpkg.net|CNAME|origin-hetzner.zpkg.net|false
 web.zpkg.net|CNAME|origin-hetzner.zpkg.net|false
+app.zpkg.net|CNAME|origin-hetzner.zpkg.net|true
+user.zpkg.net|CNAME|origin-hetzner.zpkg.net|true
 registry.aws.zpkg.net|CNAME|origin-aws.zpkg.net|false
 web.aws.zpkg.net|CNAME|origin-aws.zpkg.net|false
 registry.hetzner.zpkg.net|CNAME|origin-hetzner.zpkg.net|false
@@ -66,7 +68,7 @@ while IFS='|' read -r name type content proxied; do
     tunnel_origin="${ZPKG_TUNNEL_ORIGIN:-2eb5c6d9-a2b7-4c5e-9222-2f43e91f90e1.cfargotunnel.com}"
     live_content="$(cut -d'|' -f3 <<<"$match")"
     case "$name" in
-      api.zpkg.net|registry.zpkg.net|web.zpkg.net)
+      api.zpkg.net|registry.zpkg.net|web.zpkg.net|app.zpkg.net|user.zpkg.net)
         if [ "$live_content" != "$content" ] && [ "$live_content" != "$tunnel_origin" ]; then
           echo "DIFFERS  ${name}: live '${match}' want content '${content}'"
           drift=1

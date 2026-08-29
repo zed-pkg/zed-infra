@@ -111,3 +111,7 @@ cf-verify name="prod":
     fi
     curl -sf "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/tokens/verify" \
         -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN_ZPKG}" | jq '{success, status: .result.status}'
+
+# Contract tests for the GitHub-fallback URL helpers used by the edge Workers.
+workers-test:
+    cd "{{ justfile_directory() }}/workers" && node --test shared/github-fallback.test.js

@@ -9,6 +9,7 @@ terraform/
   cloudflare/   R2 artifact buckets + zpkg.net DNS    (primary)
   aws/          S3 artifact bucket + least-priv IAM    (alternative)
   gcp/          planned (GCS + GKE)
+workers/        Cloudflare Workers for registry/cdn/web/app/user.zpkg.net
 k8s/
   bootstrap/zed.yaml         root Application (standalone app-of-apps entrypoint)
   apps/                      child Applications (one per service)

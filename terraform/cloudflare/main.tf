@@ -60,9 +60,13 @@ resource "cloudflare_r2_custom_domain" "cdn" {
 # intentionally has no records here.)
 #
 #   zpkg.net / www.zpkg.net  -> GitHub Pages marketing site (zed-pkg.github.io)
-#   registry.zpkg.net        -> zed-api-server  (registry REST API, k8s)
+#   registry.zpkg.net        -> zed-api-server  (registry REST API, k8s); Worker
+#                               registry-proxy falls back to GitHub Releases
 #   web.zpkg.net             -> zed-web-server  (read-only registry UI, k8s)
+#   app.zpkg.net             -> signed-in UI (same origin as web today)
+#   user.zpkg.net            -> per-user dashboard (same origin as web today)
 #   cdn.zpkg.net             -> R2 custom domain (public artifacts; independent of origin)
+#                               Worker cdn-proxy reads R2 then GitHub Releases
 #
 # Ordering rule (see docs/wiring-k8s-cluster.md and the canonical.plus runbook
 # in ORESoftware/k8s-cluster): app records stay DNS-only until cert-manager
@@ -148,6 +152,28 @@ resource "cloudflare_dns_record" "web" {
   type    = "CNAME"
   content = var.web_origin != "" ? var.web_origin : var.primary_origin
   proxied = var.web_origin != "" ? true : var.proxy_app_records
+  ttl     = 1
+}
+
+# app.zpkg.net / user.zpkg.net share the web origin today. They are always
+# proxied: the matching Workers (workers/app-proxy, workers/user-proxy)
+# require an orange-cloud hostname. Split ORIGIN_URL later without a DNS
+# change.
+resource "cloudflare_dns_record" "app" {
+  zone_id = var.zone_id
+  name    = "app.zpkg.net"
+  type    = "CNAME"
+  content = var.web_origin != "" ? var.web_origin : var.primary_origin
+  proxied = true
+  ttl     = 1
+}
+
+resource "cloudflare_dns_record" "user" {
+  zone_id = var.zone_id
+  name    = "user.zpkg.net"
+  type    = "CNAME"
+  content = var.web_origin != "" ? var.web_origin : var.primary_origin
+  proxied = true
   ttl     = 1
 }
 
