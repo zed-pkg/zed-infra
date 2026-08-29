@@ -35,14 +35,16 @@ The GitHub path is proven by `zed-pkg-test/zed-pkg-e2e`
 
 ## Deploy
 
+Do **not** run raw `wrangler deploy` against a live script. Read the remote
+Worker first, take a KV lease, then deploy. See `docs/cf-deploy-leases.md`.
+`zpkg-cdn` already serves GitHub-fallback (`workers/live-snapshots/zpkg-cdn.json`);
+overwriting it without `--if-match` of that `modified_on` is forbidden.
+
 ```bash
 cd workers
 npm test
-npx wrangler deploy --config registry-proxy/wrangler.toml
-npx wrangler deploy --config cdn-proxy/wrangler.toml
-npx wrangler deploy --config web-proxy/wrangler.toml
-npx wrangler deploy --config app-proxy/wrangler.toml
-npx wrangler deploy --config user-proxy/wrangler.toml
+just cf-snapshot zpkg-cdn
+just cf-deploy cdn-proxy <modified_on from snapshot>
 ```
 
 CI does **not** deploy. DNS for `app.zpkg.net` / `user.zpkg.net` is in
