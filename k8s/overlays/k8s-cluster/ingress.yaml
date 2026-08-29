@@ -9,10 +9,24 @@ spec:
   ingressClassName: nginx
   tls:
     - hosts:
+        - user.zpkg.net
         - app.zpkg.net
         - api.zpkg.net
+        - registry.zpkg.net
       secretName: zed-pkg-public-tls
   rules:
+    # Signed-in / per-user UI — zed-web-server.rs
+    - host: user.zpkg.net
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: zed-web-server
+                port:
+                  number: 8080
+    # Compatibility alias for the same web service
     - host: app.zpkg.net
       http:
         paths:
@@ -23,10 +37,29 @@ spec:
                 name: zed-web-server
                 port:
                   number: 8080
+    # Full zed-api-server.rs (auth, admin, registry, everything)
     - host: api.zpkg.net
       http:
         paths:
           - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: zed-api-server
+                port:
+                  number: 8080
+    # Registry hostname is only the registry slice of that API (/v1 + /healthz)
+    - host: registry.zpkg.net
+      http:
+        paths:
+          - path: /healthz
+            pathType: Exact
+            backend:
+              service:
+                name: zed-api-server
+                port:
+                  number: 8080
+          - path: /v1
             pathType: Prefix
             backend:
               service:

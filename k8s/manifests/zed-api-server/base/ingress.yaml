@@ -7,13 +7,30 @@ metadata:
 spec:
   ingressClassName: nginx
   tls:
-    - hosts: [registry.zpkg.net]
+    - hosts: [api.zpkg.net, registry.zpkg.net]
       secretName: zed-api-server-tls
   rules:
-    - host: registry.zpkg.net
+    - host: api.zpkg.net
       http:
         paths:
           - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: zed-api-server
+                port:
+                  number: 80
+    - host: registry.zpkg.net
+      http:
+        paths:
+          - path: /healthz
+            pathType: Exact
+            backend:
+              service:
+                name: zed-api-server
+                port:
+                  number: 80
+          - path: /v1
             pathType: Prefix
             backend:
               service:

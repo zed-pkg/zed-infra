@@ -114,6 +114,14 @@ export function originIsUnavailable(status) {
  * Parse a registry.zpkg.net pathname into a typed route.
  * @returns {object|null}
  */
+/** Paths that may be served on registry.zpkg.net (API registry slice only). */
+export function isRegistryOnlyPath(pathname) {
+  const path = decodeURIComponent((pathname || "/").replace(/\/+$/, "") || "/");
+  if (path.includes("..") || path.includes("\\")) return false;
+  if (path === "/healthz") return true;
+  return path === "/v1" || path.startsWith("/v1/");
+}
+
 export function parseRegistryPath(pathname) {
   const path = decodeURIComponent(pathname.replace(/\/+$/, "") || "/");
   if (path === "/healthz") return { kind: "healthz" };

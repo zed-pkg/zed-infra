@@ -23,6 +23,14 @@ output "artifacts_bucket_dev" {
   value = cloudflare_r2_bucket.artifacts_dev.name
 }
 
+output "artifacts_bucket_e2e" {
+  value = cloudflare_r2_bucket.artifacts_e2e.name
+}
+
+output "static_registry_bucket_e2e" {
+  value = cloudflare_r2_bucket.static_registry_e2e.name
+}
+
 output "s3_endpoint_url" {
   description = "S3-compatible endpoint for R2; set as zed-api-server S3_ENDPOINT_URL"
   value       = "https://${var.account_id}.r2.cloudflarestorage.com"
@@ -33,9 +41,9 @@ output "s3_region" {
   value       = "auto"
 }
 
-output "cdn_hostname" {
-  description = "Public content-addressed artifact mirror, when enabled."
-  value       = var.enable_cdn ? "https://cdn.zpkg.net" : null
+output "cdn_public_url" {
+  description = "Public content-addressed artifact mirror URL, when the Worker/DNS record is enabled."
+  value       = var.enable_cdn ? "https://cdn.zpkg.net" : "https://${cloudflare_r2_custom_domain.cdn.domain}"
 }
 
 output "cdn_workers_dev_hostname" {
