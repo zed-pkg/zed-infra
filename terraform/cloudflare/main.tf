@@ -51,23 +51,11 @@ resource "cloudflare_r2_bucket" "static_registry_e2e" {
   location   = var.r2_location
 }
 
-# Public CDN in front of the production bucket. This is *not* an origin
-# hostname: Cloudflare terminates TLS at the edge and reads R2 directly.
-# registry.zpkg.net, web.zpkg.net, and the GitHub Pages apex can all be
-# down without affecting GET https://cdn.zpkg.net/<object-key>.
-#
-# The custom-domain API creates the DNS record (proxied CNAME). Do not also
-# declare cloudflare_dns_record.cdn or apply will fight itself. The drift
-# script allowlists this hostname until/after apply because the CNAME
-# target is Cloudflare-managed.
-resource "cloudflare_r2_custom_domain" "cdn" {
-  account_id  = var.account_id
-  bucket_name = cloudflare_r2_bucket.artifacts.name
-  domain      = "cdn.zpkg.net"
-  enabled     = true
-  zone_id     = var.zone_id
-  min_tls     = "1.2"
-}
+# The production bucket stays private. `cdn.zpkg.net` is a Worker custom
+# domain declared in workers/cdn-proxy/wrangler.toml; the Worker reads through
+# its R2 binding and exposes only the audited public key shapes. Do not attach
+# an R2 custom domain or make the bucket public: either would bypass the
+# Worker's read-only key-space confinement.
 
 # ---------------------------------------------------------------------------
 # zpkg.net — the public domain. (zpkg.tech is parked for a future purpose and
@@ -76,11 +64,11 @@ resource "cloudflare_r2_custom_domain" "cdn" {
 #   zpkg.net / www.zpkg.net  -> GitHub Pages marketing site (zed-pkg.github.io)
 #   user.zpkg.net            -> zed-web-server.rs on k8s (Worker user-proxy)
 #   api.zpkg.net             -> zed-api-server.rs on k8s (full API)
-#   registry.zpkg.net        -> same API process, /healthz + /v1 only
-#                               (Worker registry-proxy; GitHub/native fallback)
+#   registry.zpkg.net        -> same API process, explicit registry route table
+#                               (Worker + API host guard; public read fallback)
 #   web.zpkg.net / app.zpkg.net -> aliases of user.zpkg.net (same web Service)
-#   cdn.zpkg.net             -> R2 custom domain on zed-pkg-artifacts
-#                               (Worker cdn-proxy: R2, then public GitHub/npm)
+#   cdn.zpkg.net             -> Worker custom domain; private R2 binding first,
+#                               then explicitly public GitHub/npm/crates fallbacks
 #
 # Ordering rule (see docs/wiring-k8s-cluster.md and the canonical.plus runbook
 # in ORESoftware/k8s-cluster): app records stay DNS-only until cert-manager
@@ -262,38 +250,4 @@ resource "cloudflare_dns_record" "null_mx" {
   priority = 0
   proxied  = false
   ttl      = 1
-}
-
-# ---------------------------------------------------------------------------
-# cdn.zpkg.net — public, content-addressed read path to the artifact bucket.
-#
-# Why this exists: today every artifact read goes registry API -> 302 ->
-# 600-second presigned URL, so an outage of the API is an outage of every
-# `zed install` in the world. Artifacts are keyed by their own sha256 and every
-# lockfile pins that digest, so a client can fetch bytes straight from the
-# bucket and verify them itself. Making that path public costs nothing in
-# confidentiality (published artifacts are public) and removes the API from the
-# critical path of an install that is already pinned.
-#
-# The Worker rather than a bare public bucket: it confines the reachable key
-# space to `artifacts/<sha256>.<ext>` and the signed metadata tree, refuses
-# writes and listing, and sets immutable caching. A bucket made public directly
-# would expose its whole key space, and R2's own `r2.dev` hostname is
-# rate-limited and documented as not for production.
-#
-# Ordering: apply the Worker first (`just cdn-deploy`), then this record. A
-# proxied CNAME to a route with no Worker behind it serves errors.
-# ---------------------------------------------------------------------------
-resource "cloudflare_dns_record" "cdn" {
-  count   = var.enable_cdn ? 1 : 0
-  zone_id = var.zone_id
-  name    = "cdn.zpkg.net"
-  type    = "CNAME"
-  # The target is inert: a Worker route claims the hostname before DNS is
-  # consulted. It must still resolve and must be proxied, or the route never
-  # runs. Pointing at the marketing origin keeps a misconfiguration visible
-  # (a wrong-looking page) instead of silent (an NXDOMAIN nobody notices).
-  content = var.marketing_origin
-  proxied = true
-  ttl     = 1
 }

@@ -10,36 +10,22 @@ import { HOP_BY_HOP, originIsUnavailable } from "./github-fallback.js";
 export function createOriginProxy({ label }) {
   return {
     async fetch(request, env) {
-      const originUrl = env.ORIGIN_URL;
-      if (!originUrl) {
-        return new Response(`${label} origin is not configured\n`, {
-          status: 500,
-          headers: { "content-type": "text/plain; charset=utf-8" },
-        });
-      }
-
-      const incoming = new URL(request.url);
-      const target = new URL(incoming.pathname + incoming.search, originUrl);
       const headers = new Headers(request.headers);
       for (const name of HOP_BY_HOP) headers.delete(name);
-      headers.set("Host", new URL(originUrl).host);
+      const forwarded = new Request(request, { headers, redirect: "manual" });
 
       const upgrade = request.headers.get("Upgrade");
       if (upgrade && upgrade.toLowerCase() === "websocket") {
-        return fetch(new Request(target, request));
+        return fetch(forwarded, fetchOptions(env));
       }
 
       let originResponse;
       try {
-        originResponse = await fetch(
-          new Request(target.toString(), {
-            method: request.method,
-            headers,
-            body: request.body,
-            redirect: "manual",
-          }),
-          { signal: AbortSignal.timeout(Number(env.ORIGIN_TIMEOUT_MS || 8000)) },
-        );
+        // This Worker is attached as a Route, not a Custom Domain. Fetching
+        // the original URL reaches the route's underlying DNS origin without
+        // reinvoking this Worker, while preserving the public Host that the
+        // Kubernetes Ingress uses to select zed-web-server.rs.
+        originResponse = await fetch(forwarded, fetchOptions(env));
       } catch {
         return unavailable(label);
       }
@@ -58,6 +44,22 @@ export function createOriginProxy({ label }) {
       });
     },
   };
+}
+
+function fetchOptions(env) {
+  const timeout = Number(env.ORIGIN_TIMEOUT_MS || 8000);
+  const options = {
+    signal: AbortSignal.timeout(
+      Number.isFinite(timeout) && timeout >= 100 && timeout <= 30000 ? timeout : 8000,
+    ),
+  };
+  // Optional cutover override. Cloudflare permits this only when both the
+  // request Host and override are in the same zone, so it cannot become an
+  // arbitrary-host proxy. Normal operation follows the Terraform DNS record.
+  if (env.ORIGIN_RESOLVE_OVERRIDE) {
+    options.cf = { resolveOverride: env.ORIGIN_RESOLVE_OVERRIDE };
+  }
+  return options;
 }
 
 function unavailable(label, originStatus = 0) {

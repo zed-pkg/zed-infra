@@ -4,15 +4,15 @@ output "artifacts_bucket" {
 }
 
 output "cdn_hostname" {
-  description = "Public Cloudflare-proxied origin for R2 objects (independent of the registry origin)"
-  value       = cloudflare_r2_custom_domain.cdn.domain
+  description = "Public Worker custom domain for audited R2/GitHub/native reads"
+  value       = "cdn.zpkg.net"
 }
 
 output "edge_hostnames" {
   description = "Public hostnames that Cloudflare proxies (Workers sit on these routes)"
   value = {
     registry = cloudflare_dns_record.registry.name
-    cdn      = cloudflare_r2_custom_domain.cdn.domain
+    cdn      = "cdn.zpkg.net"
     web      = cloudflare_dns_record.web.name
     app      = cloudflare_dns_record.app.name
     user     = cloudflare_dns_record.user.name
@@ -42,8 +42,8 @@ output "s3_region" {
 }
 
 output "cdn_public_url" {
-  description = "Public content-addressed artifact mirror URL, when the Worker/DNS record is enabled."
-  value       = var.enable_cdn ? "https://cdn.zpkg.net" : "https://${cloudflare_r2_custom_domain.cdn.domain}"
+  description = "Public content-addressed artifact mirror URL managed by the CDN Worker custom domain."
+  value       = "https://cdn.zpkg.net"
 }
 
 output "cdn_workers_dev_hostname" {

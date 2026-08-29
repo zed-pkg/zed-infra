@@ -1,107 +1,47 @@
 /**
- * Public native-registry fallback for zpkg.net edge workers.
+ * Anonymous, public-only native registry adapters.
  *
- * When the zed-api-server origin is down, `registry.zpkg.net` and
- * `cdn.zpkg.net` may reconstruct reads from well-known *public* package
- * APIs (npmjs, crates.io, PyPI, …). This file is binding-free so Node
- * tests can import it.
- *
- * Private / high-likelihood-private packages are never proxied:
- * - no Authorization header is sent to these hosts
- * - 401 / 403 / 404 / unpublished / `private: true` are treated as a miss
- * - enterprise mirrors (Artifactory, GitHub Packages private, TestPyPI)
- *   are not in this table
- *
- * Org tokens match `zed-interfaces` `NativeHost::from_token` / `as_str`.
+ * A package name is never treated as an authorization signal. Public status
+ * is established only when the canonical public endpoint answers without an
+ * Authorization header and returns a valid public metadata document. The
+ * first deployment intentionally supports only npm and crates.io: these are
+ * the two ecosystems in the product requirement and both have fixed,
+ * auditable metadata and artifact hosts. Add another ecosystem only with the
+ * same URL, redirect, body-size, and negative-path tests.
  */
 
-import { isSlug, USER_AGENT } from "./github-fallback.js";
+import { USER_AGENT } from "./github-fallback.js";
 
-const NAME = /^[A-Za-z0-9._+-]+$/;
+const NAME = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$/;
+const VERSION = /^[0-9A-Za-z][0-9A-Za-z.+-]{0,127}$/;
+const SHA256 = /^[a-f0-9]{64}$/;
+export const MAX_NATIVE_METADATA_BYTES = 1024 * 1024;
 
-/** Canonical host id → public read endpoints. */
-export const PUBLIC_NATIVE_HOSTS = {
-  npm: {
+export const PUBLIC_NATIVE_HOSTS = Object.freeze({
+  npm: Object.freeze({
     id: "npm",
-    aliases: ["npm", "npmjs", "npmjs.com"],
+    aliases: Object.freeze(["npm", "npmjs", "npmjs.com"]),
     metadata: "https://registry.npmjs.org",
-    artifacts: "https://registry.npmjs.org",
-  },
-  "crates-io": {
+    artifactHosts: Object.freeze(["registry.npmjs.org"]),
+  }),
+  "crates-io": Object.freeze({
     id: "crates-io",
-    aliases: ["crates-io", "crates.io", "cargo"],
+    aliases: Object.freeze(["crates-io", "crates.io", "cargo"]),
     metadata: "https://crates.io/api/v1",
-    artifacts: "https://static.crates.io/crates",
-  },
-  pypi: {
-    id: "pypi",
-    aliases: ["pypi", "pypi.org"],
-    metadata: "https://pypi.org/pypi",
-    artifacts: "https://files.pythonhosted.org",
-  },
-  rubygems: {
-    id: "rubygems",
-    aliases: ["rubygems", "rubygems.org", "gem"],
-    metadata: "https://rubygems.org/api/v1",
-    artifacts: "https://rubygems.org/gems",
-  },
-  hex: {
-    id: "hex",
-    aliases: ["hex", "hex.pm"],
-    metadata: "https://hex.pm/api",
-    artifacts: "https://repo.hex.pm/tarballs",
-  },
-  "pub-dev": {
-    id: "pub-dev",
-    aliases: ["pub-dev", "pub.dev", "pub"],
-    metadata: "https://pub.dev/api",
-    artifacts: "https://pub.dev/api",
-  },
-  nuget: {
-    id: "nuget",
-    aliases: ["nuget", "nuget.org"],
-    metadata: "https://api.nuget.org/v3-flatcontainer",
-    artifacts: "https://api.nuget.org/v3-flatcontainer",
-  },
-  "go-proxy": {
-    id: "go-proxy",
-    aliases: ["go-proxy", "goproxy", "go-modules", "golang"],
-    metadata: "https://proxy.golang.org",
-    artifacts: "https://proxy.golang.org",
-  },
-  hackage: {
-    id: "hackage",
-    aliases: ["hackage"],
-    metadata: "https://hackage.haskell.org",
-    artifacts: "https://hackage.haskell.org/package",
-  },
-  packagist: {
-    id: "packagist",
-    aliases: ["packagist", "packagist.org", "composer"],
-    metadata: "https://repo.packagist.org/p2",
-    artifacts: "https://repo.packagist.org/p2",
-  },
-};
+    artifactHosts: Object.freeze(["crates.io", "static.crates.io"]),
+  }),
+});
 
 const ALIAS_TO_HOST = new Map();
 for (const host of Object.values(PUBLIC_NATIVE_HOSTS)) {
-  for (const alias of host.aliases) {
-    ALIAS_TO_HOST.set(alias, host);
-  }
+  for (const alias of host.aliases) ALIAS_TO_HOST.set(alias, host);
 }
 
 export function normalizeOrgToken(org) {
   if (typeof org !== "string") return "";
-  return org
-    .trim()
-    .toLowerCase()
-    .replace(/[_ ]/g, "-");
+  return org.trim().toLowerCase().replace(/[_ ]/g, "-");
 }
 
-/**
- * Map a zed org slug to a public native host, or null.
- * Unknown orgs (including GitHub owners) stay on the GitHub fallback.
- */
 export function publicNativeHostFromOrg(org) {
   return ALIAS_TO_HOST.get(normalizeOrgToken(org)) || null;
 }
@@ -111,184 +51,123 @@ export function isSafePackageName(name) {
     typeof name === "string" &&
     NAME.test(name) &&
     !name.includes("..") &&
-    name.length >= 1 &&
-    name.length <= 128
+    !name.includes("/") &&
+    !name.includes("\\")
   );
 }
 
 /**
- * High-likelihood public: well-known public host + safe name + no
- * private-package markers. Scoped npm (`@scope/name`) is accepted only
- * when both halves are slugs; we never attach credentials.
+ * This predicate only establishes that a coordinate is safe to ask about.
+ * The anonymous upstream response establishes that it is actually public.
  */
 export function isHighLikelihoodPublic(host, name) {
-  if (!host || !isSafePackageName(name)) return false;
-  const lower = name.toLowerCase();
-  if (lower.includes("private") && /(?:^|[-_.])private(?:[-_.]|$)/.test(lower)) {
-    return false;
-  }
-  if (lower.startsWith("internal-") || lower.endsWith("-internal")) {
-    return false;
-  }
-  return true;
+  return Boolean(host && isSafePackageName(name));
 }
 
-export function nativeHeaders() {
-  return {
-    Accept: "application/json",
-    "User-Agent": USER_AGENT,
-  };
-}
-
-export function encodeNpmName(name) {
-  if (name.startsWith("@")) {
-    const [scope, pkg] = name.split("/");
-    if (scope && pkg) return `${encodeURIComponent(scope)}/${encodeURIComponent(pkg)}`;
-  }
-  return encodeURIComponent(name);
+export function nativeHeaders(accept = "application/json") {
+  return { Accept: accept, "User-Agent": USER_AGENT };
 }
 
 export function nativePackageMetadataUrl(host, name) {
-  if (!host || !isHighLikelihoodPublic(host, name)) return null;
+  if (!isHighLikelihoodPublic(host, name)) return null;
   switch (host.id) {
     case "npm":
-      return `${host.metadata}/${encodeNpmName(name)}`;
+      return `${host.metadata}/${encodeURIComponent(name)}`;
     case "crates-io":
       return `${host.metadata}/crates/${encodeURIComponent(name)}`;
-    case "pypi":
-      return `${host.metadata}/${encodeURIComponent(name)}/json`;
-    case "rubygems":
-      return `${host.metadata}/gems/${encodeURIComponent(name)}.json`;
-    case "hex":
-      return `${host.metadata}/packages/${encodeURIComponent(name)}`;
-    case "pub-dev":
-      return `${host.metadata}/packages/${encodeURIComponent(name)}`;
-    case "nuget":
-      return `${host.metadata}/${encodeURIComponent(name.toLowerCase())}/index.json`;
-    case "hackage":
-      return `${host.metadata}/package/${encodeURIComponent(name)}.json`;
-    case "packagist": {
-      const vendor = packagistVendorName(name);
-      return vendor
-        ? `${host.metadata}/${encodeURIComponent(vendor.vendor)}/${encodeURIComponent(vendor.package)}.json`
-        : null;
-    }
-    case "go-proxy":
-      return `${host.metadata}/${name}/@v/list`;
     default:
       return null;
   }
 }
 
 export function nativeVersionMetadataUrl(host, name, version) {
-  if (!host || !isHighLikelihoodPublic(host, name) || !version) return null;
+  if (!isHighLikelihoodPublic(host, name) || !VERSION.test(version || "")) return null;
   switch (host.id) {
     case "npm":
-      return `${host.metadata}/${encodeNpmName(name)}/${encodeURIComponent(version)}`;
+      return `${host.metadata}/${encodeURIComponent(name)}/${encodeURIComponent(version)}`;
     case "crates-io":
       return `${host.metadata}/crates/${encodeURIComponent(name)}/${encodeURIComponent(version)}`;
-    case "pypi":
-      return `${host.metadata}/${encodeURIComponent(name)}/${encodeURIComponent(version)}/json`;
-    case "rubygems":
-      return `https://rubygems.org/api/v2/rubygems/${encodeURIComponent(name)}/versions/${encodeURIComponent(version)}.json`;
-    case "hex":
-      return `${host.metadata}/packages/${encodeURIComponent(name)}`;
-    case "pub-dev":
-      return `${host.metadata}/packages/${encodeURIComponent(name)}`;
-    case "nuget":
-      return `${host.artifacts}/${encodeURIComponent(name.toLowerCase())}/${encodeURIComponent(version.toLowerCase())}/${encodeURIComponent(name.toLowerCase())}.nuspec`;
-    case "hackage":
-      return `${host.metadata}/package/${encodeURIComponent(name)}-${encodeURIComponent(version)}`;
-    case "go-proxy":
-      return `${host.metadata}/${name}/@v/${encodeURIComponent(version)}.info`;
     default:
-      return nativePackageMetadataUrl(host, name);
+      return null;
   }
 }
 
 export function nativeTarballUrls(host, name, version, filename) {
-  if (!host || !isHighLikelihoodPublic(host, name) || !version) return [];
-  const urls = [];
+  if (!isHighLikelihoodPublic(host, name) || !VERSION.test(version || "")) return [];
   switch (host.id) {
-    case "npm":
-      urls.push(
-        `${host.artifacts}/${encodeNpmName(name)}/-/${encodeURIComponent(filename || `${name}-${version}.tgz`)}`,
-      );
-      break;
-    case "crates-io":
-      urls.push(
-        `${host.artifacts}/${encodeURIComponent(name)}/${encodeURIComponent(name)}-${encodeURIComponent(version)}.crate`,
-      );
-      break;
-    case "pypi":
-      if (filename) {
-        urls.push(
-          `https://files.pythonhosted.org/packages/source/${name[0]}/${encodeURIComponent(name)}/${encodeURIComponent(filename)}`,
-        );
-      }
-      break;
-    case "rubygems":
-      urls.push(
-        `${host.artifacts}/${encodeURIComponent(filename || `${name}-${version}.gem`)}`,
-      );
-      break;
-    case "hex":
-      urls.push(
-        `${host.artifacts}/${encodeURIComponent(name)}-${encodeURIComponent(version)}.tar`,
-      );
-      break;
-    case "nuget":
-      urls.push(
-        `${host.artifacts}/${encodeURIComponent(name.toLowerCase())}/${encodeURIComponent(version.toLowerCase())}/${encodeURIComponent(name.toLowerCase())}.${encodeURIComponent(version.toLowerCase())}.nupkg`,
-      );
-      break;
-    case "hackage":
-      urls.push(
-        `${host.artifacts}/${encodeURIComponent(name)}-${encodeURIComponent(version)}/${encodeURIComponent(name)}-${encodeURIComponent(version)}.tar.gz`,
-      );
-      break;
-    case "go-proxy":
-      urls.push(`${host.artifacts}/${name}/@v/${encodeURIComponent(version)}.zip`);
-      break;
+    case "npm": {
+      const expected = `${name}-${version}.tgz`;
+      if (filename && filename !== expected) return [];
+      return [`https://registry.npmjs.org/${encodeURIComponent(name)}/-/${encodeURIComponent(expected)}`];
+    }
+    case "crates-io": {
+      const expected = `${name}-${version}.crate`;
+      if (filename && filename !== expected) return [];
+      return [
+        `https://static.crates.io/crates/${encodeURIComponent(name)}/${encodeURIComponent(expected)}`,
+      ];
+    }
     default:
-      break;
+      return [];
   }
-  return [...new Set(urls)];
 }
 
-export function packagistVendorName(name) {
-  if (name.includes("/")) {
-    const [vendor, pkg] = name.split("/");
-    if (isSlug(vendor) && isSlug(pkg)) return { vendor, package: pkg };
-    return null;
+export function isAllowedNativeDownloadUrl(host, rawUrl, name, version) {
+  if (!host || !isSafePackageName(name) || !VERSION.test(version || "")) return false;
+  let url;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    return false;
   }
-  const dash = name.indexOf("-");
-  if (dash <= 0 || dash === name.length - 1) return null;
-  const vendor = name.slice(0, dash);
-  const pkg = name.slice(dash + 1);
-  if (isSlug(vendor) && isSlug(pkg)) return { vendor, package: pkg };
-  return null;
+  if (url.protocol !== "https:" || url.username || url.password || url.port) return false;
+  if (!host.artifactHosts.includes(url.hostname)) return false;
+
+  const encodedName = encodeURIComponent(name);
+  const encodedVersion = encodeURIComponent(version);
+  if (host.id === "npm") {
+    return (
+      url.hostname === "registry.npmjs.org" &&
+      url.pathname === `/${encodedName}/-/${encodedName}-${encodedVersion}.tgz`
+    );
+  }
+  if (host.id === "crates-io") {
+    return (
+      (url.hostname === "crates.io" &&
+        url.pathname === `/api/v1/crates/${encodedName}/${encodedVersion}/download`) ||
+      (url.hostname === "static.crates.io" &&
+        url.pathname === `/crates/${encodedName}/${encodedName}-${encodedVersion}.crate`)
+    );
+  }
+  return false;
 }
 
-/**
- * True when the upstream body says this package is private / unpublished.
- * Public registries normally 404 those; this is the extra belt.
- */
 export function isPrivateOrUnpublished(host, body) {
-  if (!body || typeof body !== "object") return true;
-  if (body.private === true) return true;
-  if (body.unpublished) return true;
+  if (!body || typeof body !== "object" || body.private === true || body.unpublished) return true;
   if (typeof body.error === "string" && /not found|unpublished|private/i.test(body.error)) {
     return true;
   }
   if (host?.id === "npm") {
-    if (body.unpublished || body._unpublished) return true;
-    if (!body.versions && !body.version && !body.dist) return true;
+    return Boolean(body._unpublished || (!body.versions && !body.version && !body.dist));
   }
-  if (host?.id === "crates-io" && !body.crate && !body.version && !body.versions) {
-    return true;
+  if (host?.id === "crates-io") {
+    return !body.crate && !body.version && !body.versions;
   }
-  return false;
+  return true;
+}
+
+export async function readBoundedJson(response, maxBytes = MAX_NATIVE_METADATA_BYTES) {
+  const contentType = response.headers.get("content-type") || "";
+  if (!/^application\/(?:[a-z0-9.+-]*\+)?json(?:\s*;|$)/i.test(contentType)) return null;
+  const declared = Number(response.headers.get("content-length") || 0);
+  if (declared > maxBytes) return null;
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  if (bytes.byteLength > maxBytes) return null;
+  try {
+    return JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    return null;
+  }
 }
 
 export function versionsFromNativeBody(host, body) {
@@ -298,25 +177,10 @@ export function versionsFromNativeBody(host, body) {
       return Object.keys(body.versions || {}).sort(sortVersionsDesc);
     case "crates-io":
       return (body.versions || [])
+        .filter((row) => !row.yanked)
         .map((row) => row.num || row.vers)
         .filter(Boolean)
         .sort(sortVersionsDesc);
-    case "pypi":
-      return Object.keys(body.releases || {}).sort(sortVersionsDesc);
-    case "rubygems":
-      return [];
-    case "hex":
-      return (body.releases || [])
-        .map((row) => row.version)
-        .filter(Boolean)
-        .sort(sortVersionsDesc);
-    case "pub-dev":
-      return (body.versions || [])
-        .map((row) => row.version)
-        .filter(Boolean)
-        .sort(sortVersionsDesc);
-    case "nuget":
-      return (body.versions || []).slice().sort(sortVersionsDesc);
     default:
       return [];
   }
@@ -324,82 +188,33 @@ export function versionsFromNativeBody(host, body) {
 
 export function downloadFromNativeVersion(host, name, version, body) {
   if (!body || typeof body !== "object") return null;
-  switch (host?.id) {
-    case "npm": {
-      const dist = body.dist || body.versions?.[version]?.dist;
-      if (!dist?.tarball) return null;
-      return {
-        url: dist.tarball,
-        sha256: integrityToSha256(dist.integrity) || "",
-        size: Number(dist.unpackedSize || 0),
-        format: "tar.gz",
-      };
+  if (host?.id === "npm") {
+    const dist = body.dist || body.versions?.[version]?.dist;
+    if (!dist?.tarball || !isAllowedNativeDownloadUrl(host, dist.tarball, name, version)) {
+      return null;
     }
-    case "crates-io": {
-      const crate = body.version || body.crate;
-      const vers = crate?.num || crate?.vers || version;
-      const urls = nativeTarballUrls(host, name, vers);
-      return {
-        url: crate?.dl_path
-          ? `https://crates.io${crate.dl_path}`
-          : urls[0],
-        sha256: crate?.checksum || "",
-        size: 0,
-        format: "crate",
-      };
-    }
-    case "pypi": {
-      const files = body.urls || [];
-      const sdist =
-        files.find((file) => file.packagetype === "sdist" && !file.yanked) ||
-        files.find((file) => !file.yanked);
-      if (!sdist?.url) return null;
-      return {
-        url: sdist.url,
-        sha256: sdist.digests?.sha256 || "",
-        size: Number(sdist.size || 0),
-        format: "tar.gz",
-      };
-    }
-    case "rubygems":
-      if (!body.gem_uri) return null;
-      return {
-        url: body.gem_uri,
-        sha256: body.sha || "",
-        size: 0,
-        format: "gem",
-      };
-    case "hex": {
-      const urls = nativeTarballUrls(host, name, version);
-      return urls[0]
-        ? { url: urls[0], sha256: "", size: 0, format: "tar" }
-        : null;
-    }
-    case "pub-dev": {
-      const latest = body.latest || body.versions?.find((row) => row.version === version);
-      const archive = latest?.archive_url;
-      return archive
-        ? { url: archive, sha256: latest.archive_sha256 || "", size: 0, format: "tar.gz" }
-        : null;
-    }
-    default: {
-      const urls = nativeTarballUrls(host, name, version);
-      return urls[0]
-        ? { url: urls[0], sha256: "", size: 0, format: "tar.gz" }
-        : null;
-    }
+    return {
+      url: dist.tarball,
+      sha256: integrityToSha256(dist.integrity),
+      size: Number.isSafeInteger(Number(dist.unpackedSize)) ? Number(dist.unpackedSize) : 0,
+      format: "tar.gz",
+    };
   }
-}
-
-export function descriptionFromNativeBody(host, body) {
-  if (!body || typeof body !== "object") return null;
-  return (
-    body.description ||
-    body.crate?.description ||
-    body.info?.summary ||
-    body.meta?.description ||
-    null
-  );
+  if (host?.id === "crates-io") {
+    const row = body.version || body.crate;
+    if (!row || (row.num || row.vers || version) !== version || row.yanked) return null;
+    const url = row.dl_path
+      ? new URL(row.dl_path, "https://crates.io").toString()
+      : nativeTarballUrls(host, name, version)[0];
+    if (!url || !isAllowedNativeDownloadUrl(host, url, name, version)) return null;
+    return {
+      url,
+      sha256: SHA256.test(row.checksum || "") ? row.checksum : "",
+      size: Number.isSafeInteger(row.crate_size) && row.crate_size > 0 ? row.crate_size : 0,
+      format: "crate",
+    };
+  }
+  return null;
 }
 
 export function toPackageMetadata(host, org, name, body) {
@@ -407,9 +222,9 @@ export function toPackageMetadata(host, org, name, body) {
   return {
     org,
     name,
-    description: descriptionFromNativeBody(host, body),
-    vcs: host.id === "crates-io" || host.id === "npm" ? "git" : "none",
-    repo_url: repoUrlFromNative(host, name, body),
+    description: body.description || body.crate?.description || null,
+    vcs: "git",
+    repo_url: publicRepoUrl(host, name, body),
     latest: versions[0] || body.version || null,
     tags: [],
     versions,
@@ -422,44 +237,27 @@ export function toVersionMetadata(host, org, name, version, body, download) {
     org,
     name,
     version,
-    sha256: download?.sha256 || "",
-    size: download?.size || 0,
-    format: download?.format || "tar.gz",
+    sha256: download.sha256 || "",
+    size: download.size || 0,
+    format: download.format,
     vcs_tag: version,
     vcs_commit: null,
-    download_url: download?.url || "",
-    published_at: body.time?.[version] || body.created_at || "1970-01-01T00:00:00Z",
-    yanked: Boolean(body.yanked || body.retired),
-    mirrors: download?.url
-      ? [{ kind: `native-${host.id}`, url: download.url }]
-      : [],
+    download_url: download.url,
+    published_at: body.time?.[version] || body.version?.created_at || "1970-01-01T00:00:00Z",
+    yanked: Boolean(body.yanked || body.version?.yanked),
+    mirrors: [{ kind: `native-${host.id}`, url: download.url }],
     native_host: host.id,
   };
 }
 
-function repoUrlFromNative(host, name, body) {
-  const repo =
-    body.repository?.url ||
-    body.repository ||
-    body.crate?.repository ||
-    body.info?.project_urls?.Source ||
-    body.source_code_uri ||
-    null;
-  if (typeof repo === "string" && repo.startsWith("http")) {
+function publicRepoUrl(host, name, body) {
+  const repo = body.repository?.url || body.repository || body.crate?.repository || null;
+  if (typeof repo === "string" && /^https:\/\//.test(repo)) {
     return repo.replace(/^git\+/, "").replace(/\.git$/, "");
   }
-  switch (host.id) {
-    case "npm":
-      return `https://www.npmjs.com/package/${name}`;
-    case "crates-io":
-      return `https://crates.io/crates/${name}`;
-    case "pypi":
-      return `https://pypi.org/project/${name}/`;
-    case "rubygems":
-      return `https://rubygems.org/gems/${name}`;
-    default:
-      return `https://${host.id}/${name}`;
-  }
+  return host.id === "npm"
+    ? `https://www.npmjs.com/package/${name}`
+    : `https://crates.io/crates/${name}`;
 }
 
 function integrityToSha256(integrity) {
@@ -467,8 +265,9 @@ function integrityToSha256(integrity) {
   const match = integrity.match(/^sha256-([A-Za-z0-9+/=]+)$/);
   if (!match) return "";
   try {
-    const bytes = Uint8Array.from(atob(match[1]), (c) => c.charCodeAt(0));
-    return [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
+    const bytes = Uint8Array.from(atob(match[1]), (character) => character.charCodeAt(0));
+    const hex = [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+    return SHA256.test(hex) ? hex : "";
   } catch {
     return "";
   }

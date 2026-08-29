@@ -28,7 +28,7 @@ The migrator and API references must be byte-for-byte identical. A review overla
 - it deletes the portable `Namespace/zed-pkg` resource rather than widening the AppProject;
 - it transforms every namespaced object into namespace `zed`;
 - it rewrites `ZED_API_URL` to the namespace-local `zed-api-server.zed.svc.cluster.local` service;
-- it exposes `user.zpkg.net` (and `app.zpkg.net`) to `zed-web-server.rs`, `api.zpkg.net` to the full `zed-api-server.rs`, and `registry.zpkg.net` to that API's `/v1` + `/healthz` slice only;
+- it exposes `user.zpkg.net` (and `app.zpkg.net`) to `zed-web-server.rs`, `api.zpkg.net` to the full `zed-api-server.rs`, and `registry.zpkg.net` to the same process through its explicit machine-registry Host state machine (the Ingress `/v1` prefix is routing only, not the security boundary);
 - it requests one cert-manager TLS secret, `zed-pkg-public-tls`, for those hosts.
 
 The k8s-cluster Argo Application should pin this repository by an exact reviewed commit and remain manual until the candidate image tags are replaced by immutable API and web digests.
@@ -58,6 +58,10 @@ No Secret manifests or credential values live in this repository.
 7. Registry tests prove the exact 10-day/50-download boundaries and serialization with the 51st download.
 8. The web console certifies signup, login, cookie protection, CSRF/origin checks, membership isolation, and package settings flows.
 9. DNS for `user.zpkg.net`, `api.zpkg.net`, and `registry.zpkg.net` resolves to the ingress and cert-manager has issued `zed-pkg-public-tls`.
+10. The promoted API digest includes `zed-api-server.rs` PR #46 (or a
+    descendant) and its `registry_host` tests; do not expose the Ingress with
+    an older image whose `/v1/account/*` compatibility routes lack the Host
+    boundary.
 
 ## Local validation
 

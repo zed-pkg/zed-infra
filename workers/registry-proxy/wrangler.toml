@@ -3,14 +3,16 @@ main = "src/index.js"
 compatibility_date = "2026-08-28"
 compatibility_flags = ["nodejs_compat"]
 
-# Hostname is the registry slice of zed-api-server.rs (/healthz + /v1 only).
-# ORIGIN_URL is the cluster edge (same API process as api.zpkg.net).
-# Read-only GitHub/native fallback when that origin is 5xx/timeout.
-# Put the optional GitHub token with: wrangler secret put GITHUB_TOKEN
+# Hostname is the explicit machine-registry route set of zed-api-server.rs.
+# The Worker rejects account/auth/admin paths before origin I/O, including
+# compatibility account routes that also happen to live below /v1.
+# GitHub fallback is deliberately anonymous; do not attach a token that could
+# make private repositories observable to this public edge.
 
 [vars]
-ORIGIN_URL = "https://origin-hetzner.zpkg.net"
+ORIGIN_URL = "https://api.zpkg.net"
 ORIGIN_TIMEOUT_MS = "4000"
+FALLBACK_TIMEOUT_MS = "4000"
 
 [observability]
 enabled = true

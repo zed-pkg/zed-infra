@@ -37,8 +37,17 @@ jobs:
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v6.0.0
         with:
           node-version: "22"
-      - name: GitHub-fallback locator contract
-        run: node --test workers/shared/github-fallback.test.js
+      - name: Check out the current canonical API contract
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: zed-pkg/zed-api-server.rs
+          ref: main
+          path: .contract/zed-api-server.rs
+          persist-credentials: false
+      - name: Edge route-state, public-fallback, and R2 boundary contracts
+        run: npm test --prefix workers
+      - name: Reject edge drift from the current machine-registry OpenAPI
+        run: node workers/check-api-contract.mjs .contract/zed-api-server.rs/openapi/zed.openapi.json
 
   kustomize-build:
     runs-on: ubuntu-latest
