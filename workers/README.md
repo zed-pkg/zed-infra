@@ -9,9 +9,9 @@ cannot: GitHub and *public* native registries as a read-only backup when
 | --- | --- | --- |
 | `registry-proxy` | `registry.zpkg.net` | Proxy `zed-api-server`. On 5xx/timeout, reconstruct `GET /healthz`, `GET /v1/packages/{org}/{name}`, and `GET /v1/packages/{org}/{name}/versions/{version}` from (1) public native APIs when `org` is `npm` / `crates-io` / `pypi` / … and the package is public, then (2) the GitHub REST API (tags + Releases). Writes stay origin-only and return 503. Private packages (401/403/`private: true`/unpublished) are a miss. |
 | `cdn-proxy` | `cdn.zpkg.net` | Read the `zed-pkg-artifacts` R2 binding first. On miss, fetch a public native tarball when the key is `packages/{native-org}/{name}/{version}/…`, else the matching GitHub Release asset. |
-| `web-proxy` | `web.zpkg.net` | Origin proxy for the read-only registry UI. |
-| `app-proxy` | `app.zpkg.net` | Same origin as web today; reserved for the signed-in UI. |
-| `user-proxy` | `user.zpkg.net` | Same origin as web today; reserved for the per-user dashboard. |
+| `web-proxy` | `web.zpkg.net` | Alias of `user.zpkg.net`. |
+| `app-proxy` | `app.zpkg.net` | Alias of `user.zpkg.net`. |
+| `user-proxy` | `user.zpkg.net` | Origin proxy for `zed-web-server.rs` on k8s. |
 
 `cdn.zpkg.net` is *also* declared as `cloudflare_r2_custom_domain` in
 `terraform/cloudflare`. A Worker route on that hostname takes precedence and

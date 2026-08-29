@@ -3,7 +3,7 @@ main = "src/index.js"
 compatibility_date = "2026-08-28"
 compatibility_flags = ["nodejs_compat"]
 
-# Per-user dashboard host. Same origin as web.zpkg.net today; split later.
+# user.zpkg.net → zed-web-server.rs on the k8s cluster.
 
 [vars]
 ORIGIN_URL = "https://origin-hetzner.zpkg.net"

@@ -79,8 +79,11 @@ jobs:
           fi
           grep -q 'namespace: zed' /tmp/zed-pkg-cluster.yaml
           grep -Eq 'ZED_API_URL: .*zed-api-server\.zed\.svc\.cluster\.local:8080' /tmp/zed-pkg-cluster.yaml
+          grep -q 'host: user.zpkg.net' /tmp/zed-pkg-cluster.yaml
           grep -q 'host: app.zpkg.net' /tmp/zed-pkg-cluster.yaml
           grep -q 'host: api.zpkg.net' /tmp/zed-pkg-cluster.yaml
+          grep -q 'host: registry.zpkg.net' /tmp/zed-pkg-cluster.yaml
+          grep -q 'path: /v1' /tmp/zed-pkg-cluster.yaml
           grep -q 'secretName: zed-pkg-public-tls' /tmp/zed-pkg-cluster.yaml
           grep -q 'ingressClassName: nginx' /tmp/zed-pkg-cluster.yaml
           test "$(grep -c '^kind: Ingress$' /tmp/zed-pkg-cluster.yaml)" -eq 1

@@ -7,6 +7,7 @@ import {
   githubReleaseSidecarNames,
   gitTagsForVersion,
   isSlug,
+  isRegistryOnlyPath,
   parseCdnPath,
   parseRegistryPath,
   versionFromGitTag,
@@ -18,6 +19,16 @@ test("slug matches zed-interfaces is_slug", () => {
   assert.equal(isSlug("Node"), false);
   assert.equal(isSlug("-bad"), false);
   assert.equal(isSlug("has_underscore"), false);
+});
+
+test("registry hostname only forwards the API /v1 slice", () => {
+  assert.equal(isRegistryOnlyPath("/healthz"), true);
+  assert.equal(isRegistryOnlyPath("/v1/packages/npm/lodash"), true);
+  assert.equal(isRegistryOnlyPath("/v1/search"), true);
+  assert.equal(isRegistryOnlyPath("/"), false);
+  assert.equal(isRegistryOnlyPath("/auth/login"), false);
+  assert.equal(isRegistryOnlyPath("/shared-auth"), false);
+  assert.equal(isRegistryOnlyPath("/v1/../secret"), false);
 });
 
 test("parseRegistryPath covers health, package, version, artifact", () => {

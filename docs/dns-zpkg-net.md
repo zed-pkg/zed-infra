@@ -19,12 +19,11 @@ deliberately stay dashboard-managed.
 | Hostname | Serves | Backed by |
 | --- | --- | --- |
 | `zpkg.net` (+ `www`) | Marketing site | GitHub Pages (`zed-pkg/zed-pkg.github.io`) |
-| `api.zpkg.net` | API server root | `zed-api-server` on k8s (port 8080) |
-| `registry.zpkg.net` | Registry REST API | Same root as `api.zpkg.net` today; Worker `registry-proxy` reconstructs GET package/version from GitHub Releases when the origin is 5xx/timeout |
-| `web.zpkg.net` | Read-only registry UI | `zed-web-server` on k8s (port 8081); Worker `web-proxy` |
-| `app.zpkg.net` | Signed-in UI | Same origin as `web.zpkg.net` today; Worker `app-proxy` |
-| `user.zpkg.net` | Per-user dashboard | Same origin as `web.zpkg.net` today; Worker `user-proxy` |
-| `cdn.zpkg.net` | Public package artifacts | Cloudflare R2 custom domain on `zed-pkg-artifacts` **plus** Worker `cdn-proxy` (R2 binding, then GitHub Release). Proxied at the edge; **does not use the k8s origin**. |
+| `user.zpkg.net` | Signed-in web UI | `zed-web-server.rs` on k8s; Worker `user-proxy` |
+| `api.zpkg.net` | Full JSON API | `zed-api-server.rs` on k8s (port 8080) |
+| `registry.zpkg.net` | Registry slice only | Same API process, Ingress + Worker allow `/healthz` and `/v1/*` only. GitHub/native fallback when origin is 5xx/timeout |
+| `web.zpkg.net` / `app.zpkg.net` | Aliases of `user.zpkg.net` | Same `zed-web-server` Service |
+| `cdn.zpkg.net` | Public artifacts | R2 custom domain on `zed-pkg-artifacts` **plus** Worker `cdn-proxy` (R2, then public GitHub/npm). **Not** a k8s origin. |
 | `api./registry./web.<cloud>.zpkg.net` | Per-cloud canary/debug | `k8s/overlays/{aws,hetzner}` in the app repos |
 | `origin-hetzner.zpkg.net`, `origin-aws.zpkg.net` | Origin A records, never proxied | Cluster edge nodes (ORESoftware/k8s-cluster) |
 

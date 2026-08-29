@@ -11,6 +11,7 @@ import {
   gitTagsForVersion,
   jsonResponse,
   originIsUnavailable,
+  isRegistryOnlyPath,
   parseRegistryPath,
   USER_AGENT,
   versionFromGitTag,
@@ -36,6 +37,20 @@ export default {
 
     if (request.method === "OPTIONS") {
       return new Response(null, { status: 204, headers: corsHeaders() });
+    }
+
+    // registry.zpkg.net is a hostname for the API's /v1 registry slice only.
+    // Auth, admin, and other api.zpkg.net routes stay off this host.
+    if (!isRegistryOnlyPath(url.pathname)) {
+      return jsonResponse(
+        {
+          ok: false,
+          error: "not_registry_path",
+          message:
+            "registry.zpkg.net serves /healthz and /v1/* on zed-api-server.rs. Use api.zpkg.net for the rest of the API.",
+        },
+        404,
+      );
     }
 
     if (WRITE_METHODS.has(request.method)) {

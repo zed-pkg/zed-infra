@@ -74,13 +74,13 @@ resource "cloudflare_r2_custom_domain" "cdn" {
 # intentionally has no records here.)
 #
 #   zpkg.net / www.zpkg.net  -> GitHub Pages marketing site (zed-pkg.github.io)
-#   registry.zpkg.net        -> zed-api-server  (registry REST API, k8s); Worker
-#                               registry-proxy falls back to GitHub Releases
-#   web.zpkg.net             -> zed-web-server  (read-only registry UI, k8s)
-#   app.zpkg.net             -> signed-in UI (same origin as web today)
-#   user.zpkg.net            -> per-user dashboard (same origin as web today)
-#   cdn.zpkg.net             -> R2 custom domain (public artifacts; independent of origin)
-#                               Worker cdn-proxy reads R2 then GitHub Releases
+#   user.zpkg.net            -> zed-web-server.rs on k8s (Worker user-proxy)
+#   api.zpkg.net             -> zed-api-server.rs on k8s (full API)
+#   registry.zpkg.net        -> same API process, /healthz + /v1 only
+#                               (Worker registry-proxy; GitHub/native fallback)
+#   web.zpkg.net / app.zpkg.net -> aliases of user.zpkg.net (same web Service)
+#   cdn.zpkg.net             -> R2 custom domain on zed-pkg-artifacts
+#                               (Worker cdn-proxy: R2, then public GitHub/npm)
 #
 # Ordering rule (see docs/wiring-k8s-cluster.md and the canonical.plus runbook
 # in ORESoftware/k8s-cluster): app records stay DNS-only until cert-manager
