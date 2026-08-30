@@ -1,0 +1,37 @@
+# zpkg-registry-gateway — the public registry hostname.
+#
+# registry.zpkg.net is what every `zed` binary is compiled to talk to, so this
+# Worker is on the critical path of every install in the world. It holds no
+# state and makes no decisions beyond an allowlist, which is what makes it safe
+# to have there.
+#
+# Deploy before pointing DNS: a proxied record whose Worker route has no Worker
+# behind it serves errors.
+
+name = "zpkg-registry-gateway"
+main = "src/worker.js"
+compatibility_date = "2026-08-01"
+
+# On, like the CDN's, and for the same reason: an off-zone hostname that still
+# answers when zpkg.net itself is the broken thing.
+workers_dev = true
+
+[vars]
+# By hostname, not by IP: this keeps working while the public `api` record is
+# being repointed between clouds.
+ORIGIN_URL = "https://api.zpkg.net"
+# Artifact 302s are rewritten here, so a download never depends on a presigned
+# URL that expires in ten minutes.
+CDN_URL = "https://cdn.zpkg.net"
+
+[[routes]]
+pattern = "registry.zpkg.net/*"
+zone_name = "zpkg.net"
+
+[env.dev]
+name = "zpkg-registry-gateway-dev"
+workers_dev = true
+
+[env.dev.vars]
+ORIGIN_URL = "http://localhost:8080"
+CDN_URL = ""

@@ -42,8 +42,14 @@ resource "cloudflare_r2_bucket" "artifacts_dev" {
 # intentionally has no records here.)
 #
 #   zpkg.net / www.zpkg.net  -> GitHub Pages marketing site (zed-pkg.github.io)
-#   registry.zpkg.net        -> zed-api-server  (registry REST API, k8s)
-#   web.zpkg.net             -> zed-web-server  (read-only registry UI, k8s)
+#   api.zpkg.net             -> zed-api-server, whole API (registry + account plane)
+#   registry.zpkg.net        -> the *registry sub-path* of that same API server,
+#                               enforced at the edge by the zpkg-registry-gateway
+#                               Worker (cloudflare/workers/zpkg-registry-gateway)
+#   user.zpkg.net            -> zed-web-server  (the human front door)
+#   web.zpkg.net             -> zed-web-server  (same server; the infrastructure name)
+#   cdn.zpkg.net             -> zpkg-cdn Worker over R2 (public artifact reads,
+#                               the one path that needs no origin at all)
 #
 # Ordering rule (see docs/wiring-k8s-cluster.md and the canonical.plus runbook
 # in ORESoftware/k8s-cluster): app records stay DNS-only until cert-manager
@@ -97,10 +103,15 @@ resource "cloudflare_dns_record" "origin_aws" {
 # Primary public hostnames. Hetzner is the serving cluster today; repoint
 # primary_origin when that changes.
 #
-# api.zpkg.net and registry.zpkg.net both resolve to the zed-api-server
-# root for now. Later, registry.zpkg.net moves to a sub-path of the API
-# (an ingress path route or edge rewrite), while api.zpkg.net keeps the
-# root — DNS for both stays exactly this either way.
+# api.zpkg.net and registry.zpkg.net resolve to the same zed-api-server.
+# They are not the same surface: the zpkg-registry-gateway Worker holds the
+# route on registry.zpkg.net and allows only the registry endpoints through
+# (packages, artifacts, files, search, orgs' keys, mirrors, healthz),
+# answering 404 for the account plane — which the API server nests at BOTH
+# /api/v1 and /v1, so path prefix alone would not have separated them.
+# api.zpkg.net keeps the whole root for the web UI. DNS for both is the same
+# either way; the split is at the edge, and deploying that Worker is a
+# prerequisite for this record being correct.
 resource "cloudflare_dns_record" "api" {
   zone_id = var.zone_id
   name    = "api.zpkg.net"
@@ -128,6 +139,24 @@ resource "cloudflare_dns_record" "web" {
   name    = "web.zpkg.net"
   type    = "CNAME"
   content = var.web_origin != "" ? var.web_origin : var.primary_origin
+  proxied = var.web_origin != "" ? true : var.proxy_app_records
+  ttl     = 1
+}
+
+# user.zpkg.net — the name humans are given for zed-web-server.
+#
+# `web.zpkg.net` stays, pointing at the same origin: it is what the k8s
+# manifests, the existing certificates, and the per-cloud canaries below are
+# already built around, and retiring a hostname that clients may hold is a
+# separate, deliberate act. `user` is the front door; `web` is the one the
+# infrastructure talks about. Same server, same overrides, so they cannot
+# drift apart.
+resource "cloudflare_dns_record" "user" {
+  zone_id = var.zone_id
+  name    = "user.zpkg.net"
+  type    = "CNAME"
+  content = var.web_origin != "" ? var.web_origin : var.primary_origin
+  # Same rule as web/registry: a cfargotunnel.com target only works proxied.
   proxied = var.web_origin != "" ? true : var.proxy_app_records
   ttl     = 1
 }
@@ -203,4 +232,38 @@ resource "cloudflare_dns_record" "null_mx" {
   priority = 0
   proxied  = false
   ttl      = 1
+}
+
+# ---------------------------------------------------------------------------
+# cdn.zpkg.net — public, content-addressed read path to the artifact bucket.
+#
+# Why this exists: today every artifact read goes registry API -> 302 ->
+# 600-second presigned URL, so an outage of the API is an outage of every
+# `zed install` in the world. Artifacts are keyed by their own sha256 and every
+# lockfile pins that digest, so a client can fetch bytes straight from the
+# bucket and verify them itself. Making that path public costs nothing in
+# confidentiality (published artifacts are public) and removes the API from the
+# critical path of an install that is already pinned.
+#
+# The Worker rather than a bare public bucket: it confines the reachable key
+# space to `artifacts/<sha256>.<ext>` and the signed metadata tree, refuses
+# writes and listing, and sets immutable caching. A bucket made public directly
+# would expose its whole key space, and R2's own `r2.dev` hostname is
+# rate-limited and documented as not for production.
+#
+# Ordering: apply the Worker first (`just cdn-deploy`), then this record. A
+# proxied CNAME to a route with no Worker behind it serves errors.
+# ---------------------------------------------------------------------------
+resource "cloudflare_dns_record" "cdn" {
+  count   = var.enable_cdn ? 1 : 0
+  zone_id = var.zone_id
+  name    = "cdn.zpkg.net"
+  type    = "CNAME"
+  # The target is inert: a Worker route claims the hostname before DNS is
+  # consulted. It must still resolve and must be proxied, or the route never
+  # runs. Pointing at the marketing origin keeps a misconfiguration visible
+  # (a wrong-looking page) instead of silent (an NXDOMAIN nobody notices).
+  content = var.marketing_origin
+  proxied = true
+  ttl     = 1
 }
