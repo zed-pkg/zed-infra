@@ -1,0 +1,11 @@
+{
+  "name": "zpkg-registry-gateway",
+  "private": true,
+  "version": "0.1.0",
+  "description": "registry.zpkg.net — the registry sub-path of the zed API server, as an allowlisting Cloudflare Worker",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "test": "node --test test/*.test.mjs"
+  }
+}

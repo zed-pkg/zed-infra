@@ -7,7 +7,7 @@ data:
   STORAGE_BACKEND: "s3"
   S3_BUCKET: "zed-pkg-artifacts"
   # Cloudflare R2 endpoint; see zed-infra/terraform/cloudflare outputs.
-  S3_ENDPOINT_URL: "https://REPLACE-ME-account-id.r2.cloudflarestorage.com"
+  S3_ENDPOINT_URL: "https://62b833940607839add74bd2379cac303.r2.cloudflarestorage.com"
   S3_REGION: "auto"
   S3_FORCE_PATH_STYLE: "true"
   PUBLIC_BASE_URL: "https://registry.zpkg.net"
