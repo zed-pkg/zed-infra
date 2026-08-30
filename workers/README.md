@@ -10,7 +10,7 @@ cannot: GitHub and *public* native registries as a read-only backup when
 | `registry-proxy` | `registry.zpkg.net` | A total `(method, path) -> action` state machine exposes only the current machine-registry routes from `zed-api-server.rs`; `/v1/account/*`, auth, admin, and unknown paths fail before origin I/O. On an origin outage, package/version reads may use anonymously proven public npm, crates.io, or GitHub data. Writes stay origin-only. |
 | `cdn-proxy` | `cdn.zpkg.net` | A zone Worker Route is the hostname's public byte boundary. Its private R2 binding exposes only content-addressed artifacts and signed metadata. Coordinate paths never read R2; they require an anonymously successful npm/crates.io or GitHub Release read. |
 | `web-proxy` | `web.zpkg.net` | Alias of `user.zpkg.net`. |
-| `app-proxy` | `app.zpkg.net` | Alias of `user.zpkg.net`. |
+| `app-proxy` | `app.zpkg.net` | Alias of `user.zpkg.net`; exact `/login` and `/signup` origin 404s become a cache-disabled edge 503 while the account routes are rolling out. |
 | `user-proxy` | `user.zpkg.net` | Origin proxy for `zed-web-server.rs` on k8s. |
 
 `cdn.zpkg.net` uses its existing proxied DNS record plus the exact
@@ -55,6 +55,11 @@ that reaches the underlying Terraform DNS origin while preserving the public
 Host used by Kubernetes Ingress. An optional `ORIGIN_RESOLVE_OVERRIDE` may
 select another hostname in the same Cloudflare zone during a controlled
 cutover; normal operation leaves it unset.
+
+For browser navigation, the app Worker renders a small static HTML 503 at the
+edge when `/login` or `/signup` is unavailable. Non-browser clients retain the
+typed JSON 503. Ordinary origin 404s are preserved so the Worker cannot mask a
+misspelled or unknown route.
 
 ## Tests
 
