@@ -1,4 +1,5 @@
 .terraform/
+.wrangler/
 __pycache__/
 *.py[cod]
 *.tfstate

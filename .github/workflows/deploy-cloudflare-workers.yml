@@ -1,0 +1,126 @@
+name: deploy Cloudflare Workers
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'workers/**'
+      - '.github/workflows/deploy-cloudflare-workers.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: zpkg-cloudflare-workers-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_WORKERS_DEPLOY_TOKEN }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v6.0.0
+        with:
+          node-version: "22"
+
+      - name: Require the scoped Cloudflare deployment identity
+        run: |
+          set -euo pipefail
+          test -n "${CLOUDFLARE_ACCOUNT_ID}" || {
+            echo "CLOUDFLARE_ACCOUNT_ID repository variable is not configured" >&2
+            exit 1
+          }
+          test -n "${CLOUDFLARE_API_TOKEN}" || {
+            echo "CLOUDFLARE_WORKERS_DEPLOY_TOKEN repository secret is not configured" >&2
+            exit 1
+          }
+
+      - name: Prove edge contracts before deployment
+        run: npm test --prefix workers
+
+      - name: Read, lease, and deploy every canonical Worker
+        working-directory: workers
+        run: |
+          set -euo pipefail
+
+          deploy_one() {
+            local config="$1"
+            local worker="$2"
+            local snapshot
+            local modified_on
+            local deploy_status=0
+            local release_status=0
+
+            snapshot="$(node scripts/cf-lease.mjs snapshot --worker "${worker}")"
+            modified_on="$(
+              node -e '
+                const fs = require("node:fs");
+                const snapshot = JSON.parse(fs.readFileSync(0, "utf8"));
+                process.stdout.write(snapshot.live?.modified_on || "");
+              ' <<<"${snapshot}"
+            )"
+
+            if [ -n "${modified_on}" ]; then
+              node scripts/cf-lease.mjs acquire \
+                --worker "${worker}" \
+                --if-match "${modified_on}"
+            else
+              node scripts/cf-lease.mjs acquire \
+                --worker "${worker}" \
+                --create-missing
+            fi
+
+            npx --yes wrangler@4.127.1 deploy \
+              --env="" \
+              --config "${config}/wrangler.toml" || deploy_status=$?
+            node scripts/cf-lease.mjs release \
+              --worker "${worker}" || release_status=$?
+
+            if [ "${deploy_status}" -ne 0 ]; then
+              return "${deploy_status}"
+            fi
+            return "${release_status}"
+          }
+
+          deploy_one app-proxy zpkg-app-proxy
+          deploy_one user-proxy zpkg-user-proxy
+          deploy_one web-proxy zpkg-web-proxy
+          deploy_one registry-proxy zpkg-registry-proxy
+          deploy_one cdn-proxy zpkg-cdn
+
+      - name: Verify the app route no longer leaks the origin placeholder
+        run: |
+          set -euo pipefail
+          headers="${RUNNER_TEMP}/app-zpkg-net.headers"
+          body="${RUNNER_TEMP}/app-zpkg-net.html"
+          status="$(
+            curl -sS --retry 3 \
+              -H 'Accept: text/html' \
+              -D "${headers}" \
+              -o "${body}" \
+              -w '%{http_code}' \
+              https://app.zpkg.net/
+          )"
+
+          case "${status}" in
+            200|301|302|303|307|308)
+              echo "app.zpkg.net origin is serving HTTP ${status}"
+              ;;
+            503)
+              grep -qi '^retry-after: 7200' "${headers}"
+              grep -qi 'come back in about two hours' "${body}"
+              echo "app.zpkg.net is serving the reviewed maintenance fallback"
+              ;;
+            *)
+              echo "app.zpkg.net returned unexpected HTTP ${status}" >&2
+              exit 1
+              ;;
+          esac

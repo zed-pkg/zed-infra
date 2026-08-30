@@ -132,7 +132,7 @@ cf-deploy config if_match:
     worker="$(python3 -c 'import tomllib,sys; print(tomllib.load(open(sys.argv[1],"rb"))["name"])' "$root/workers/{{ config }}/wrangler.toml")"
     node "$root/workers/scripts/cf-lease.mjs" acquire --worker "$worker" --if-match "{{ if_match }}"
     trap 'node "$root/workers/scripts/cf-lease.mjs" release --worker "$worker" || true' EXIT
-    cd "$root/workers" && npx wrangler deploy --config "{{ config }}/wrangler.toml"
+    cd "$root/workers" && npx --yes wrangler@4.127.1 deploy --env="" --config "{{ config }}/wrangler.toml"
 
 # Contract tests for the GitHub-fallback URL helpers used by the edge Workers.
 workers-test:

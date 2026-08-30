@@ -7,8 +7,13 @@ import { HOP_BY_HOP, originIsUnavailable } from "./github-fallback.js";
  * Cloudflare HTML error page, and so the three hostnames can later diverge
  * (auth gate on user.*, SPA on app.*) without a DNS change.
  */
-export function createOriginProxy({ label, unavailableOnNotFoundPaths = [] }) {
+export function createOriginProxy({
+  label,
+  retryAfterSeconds = 30,
+  unavailableOnNotFoundPaths = [],
+}) {
   const edgeOwnedPaths = compileEdgeOwnedPaths(unavailableOnNotFoundPaths);
+  const retryAfter = normalizeRetryAfterSeconds(retryAfterSeconds);
 
   return {
     async fetch(request, env) {
@@ -29,7 +34,7 @@ export function createOriginProxy({ label, unavailableOnNotFoundPaths = [] }) {
         // Kubernetes Ingress uses to select zed-web-server.rs.
         originResponse = await fetch(forwarded, fetchOptions(env));
       } catch {
-        return unavailable(label, 0, request);
+        return unavailable(label, 0, request, retryAfter);
       }
 
       const pathname = new URL(request.url).pathname;
@@ -37,7 +42,7 @@ export function createOriginProxy({ label, unavailableOnNotFoundPaths = [] }) {
         originIsUnavailable(originResponse.status) ||
         (originResponse.status === 404 && edgeOwnedPaths.has(pathname))
       ) {
-        return unavailable(label, originResponse.status, request);
+        return unavailable(label, originResponse.status, request, retryAfter);
       }
 
       const out = new Headers(originResponse.headers);
@@ -68,6 +73,13 @@ function compileEdgeOwnedPaths(paths) {
   return new Set(paths);
 }
 
+function normalizeRetryAfterSeconds(value) {
+  if (!Number.isInteger(value) || value < 1 || value > 86400) {
+    throw new TypeError("retryAfterSeconds must be an integer from 1 through 86400");
+  }
+  return value;
+}
+
 function fetchOptions(env) {
   const timeout = Number(env.ORIGIN_TIMEOUT_MS || 8000);
   const options = {
@@ -84,13 +96,15 @@ function fetchOptions(env) {
   return options;
 }
 
-function unavailable(label, originStatus = 0, request) {
+function unavailable(label, originStatus = 0, request, retryAfterSeconds = 30) {
+  const retryGuidance = guidanceFor(retryAfterSeconds);
   const headers = {
     "cache-control": "no-store",
     "content-type": "application/json; charset=utf-8",
     "referrer-policy": "no-referrer",
-    "retry-after": "30",
+    "retry-after": String(retryAfterSeconds),
     "x-content-type-options": "nosniff",
+    "x-robots-tag": "noindex, nofollow",
     "x-zed-edge": label,
   };
 
@@ -98,7 +112,7 @@ function unavailable(label, originStatus = 0, request) {
     headers["content-security-policy"] =
       "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'";
     headers["content-type"] = "text/html; charset=utf-8";
-    return new Response(unavailableHtml(), { status: 503, headers });
+    return new Response(unavailableHtml(retryGuidance), { status: 503, headers });
   }
 
   return new Response(
@@ -106,7 +120,7 @@ function unavailable(label, originStatus = 0, request) {
       ok: false,
       host: label,
       origin_status: originStatus,
-      message: `${label} origin is down; GitHub Pages (zpkg.net) and GitHub Releases remain available`,
+      message: `${label} origin is down. ${retryGuidance} GitHub Pages (zpkg.net) and GitHub Releases remain available.`,
     }),
     {
       status: 503,
@@ -115,13 +129,19 @@ function unavailable(label, originStatus = 0, request) {
   );
 }
 
-function unavailableHtml() {
+function guidanceFor(retryAfterSeconds) {
+  if (retryAfterSeconds >= 7200) return "Please come back in about two hours.";
+  if (retryAfterSeconds >= 3600) return "Please come back in about an hour.";
+  return "Please try again shortly.";
+}
+
+function unavailableHtml(retryGuidance) {
   return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Zed account portal temporarily unavailable</title>
+  <title>Zed app temporarily unavailable</title>
   <style>
     :root { color-scheme: light dark; font-family: ui-sans-serif, system-ui, sans-serif; }
     body { display: grid; min-height: 100vh; margin: 0; place-items: center; background: #0b1020; color: #eef2ff; }
@@ -134,8 +154,9 @@ function unavailableHtml() {
 <body>
   <main>
     <p><code>503 · served by Cloudflare</code></p>
-    <h1>The Zed account portal is temporarily unavailable.</h1>
-    <p>The application origin is not ready, but the public package site and release artifacts remain online. Please retry in a moment.</p>
+    <h1>The Zed app is temporarily down.</h1>
+    <p>Our application servers are not responding. ${retryGuidance}</p>
+    <p>The public package site and release artifacts remain online.</p>
     <p><a href="https://zpkg.net/">Return to zpkg.net</a></p>
   </main>
 </body>

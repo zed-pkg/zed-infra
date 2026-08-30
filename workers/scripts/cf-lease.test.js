@@ -7,7 +7,42 @@ import {
   isAllowedWorker,
   leaseKey,
   parseArgs,
+  readLiveWorker,
 } from "./cf-lease.mjs";
+
+test("live snapshots use Worker-list metadata instead of parsing downloaded source", async () => {
+  const realFetch = globalThis.fetch;
+  const modifiedOn = "2026-08-30T00:24:25.841934Z";
+  globalThis.fetch = async (url) => {
+    assert.match(String(url), /\/workers\/scripts$/);
+    return new Response(
+      JSON.stringify({
+        success: true,
+        result: [
+          {
+            id: "zpkg-app-proxy",
+            created_on: "2026-08-30T00:20:38.407938Z",
+            modified_on: modifiedOn,
+            etag: "821595826ab1b9fe3af2f913796a0c6f",
+          },
+        ],
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  };
+
+  try {
+    assert.deepEqual(await readLiveWorker("token", "zpkg-app-proxy", "account"), {
+      id: "zpkg-app-proxy",
+      created_on: "2026-08-30T00:20:38.407938Z",
+      modified_on: modifiedOn,
+      etag: "821595826ab1b9fe3af2f913796a0c6f",
+    });
+    assert.equal(await readLiveWorker("token", "zpkg-user-proxy", "account"), null);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
 
 test("foreign workers cannot be leased or overwritten", () => {
   assert.equal(isAllowedWorker("sonusauris-app-proxy"), false);

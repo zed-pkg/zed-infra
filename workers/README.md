@@ -10,7 +10,7 @@ cannot: GitHub and *public* native registries as a read-only backup when
 | `registry-proxy` | `registry.zpkg.net` | A total `(method, path) -> action` state machine exposes only the current machine-registry routes from `zed-api-server.rs`; `/v1/account/*`, auth, admin, and unknown paths fail before origin I/O. On an origin outage, package/version reads may use anonymously proven public npm, crates.io, or GitHub data. Writes stay origin-only. |
 | `cdn-proxy` | `cdn.zpkg.net` | A zone Worker Route is the hostname's public byte boundary. Its private R2 binding exposes only content-addressed artifacts and signed metadata. Coordinate paths never read R2; they require an anonymously successful npm/crates.io or GitHub Release read. |
 | `web-proxy` | `web.zpkg.net` | Alias of `user.zpkg.net`. |
-| `app-proxy` | `app.zpkg.net` | Alias of `user.zpkg.net`; exact `/login` and `/signup` origin 404s become a cache-disabled edge 503 while the account routes are rolling out. |
+| `app-proxy` | `app.zpkg.net` | Alias of `user.zpkg.net`; origin failures plus exact `/`, `/login`, and `/signup` origin 404s become a cache-disabled maintenance response while the app routes are unavailable. |
 | `user-proxy` | `user.zpkg.net` | Origin proxy for `zed-web-server.rs` on k8s. |
 
 `cdn.zpkg.net` uses its existing proxied DNS record plus the exact
@@ -47,8 +47,14 @@ just cf-snapshot zpkg-cdn
 just cf-deploy cdn-proxy <modified_on from snapshot>
 ```
 
-CI does **not** deploy. DNS for `app.zpkg.net` / `user.zpkg.net` is in
-terraform; Worker routes require those records to be proxied.
+`.github/workflows/deploy-cloudflare-workers.yml` deploys every canonical
+Worker after a tested Worker change lands on `main`. It uses the same live
+snapshot and KV lease as the manual path, pins Wrangler, serializes production
+deployments, and verifies `app.zpkg.net` after promotion. Arm it with the
+`CLOUDFLARE_WORKERS_DEPLOY_TOKEN` repository secret (Cloudflare's scoped
+"Edit Cloudflare Workers" token) and `CLOUDFLARE_ACCOUNT_ID` repository
+variable. DNS for `app.zpkg.net` / `user.zpkg.net` is in Terraform; Worker
+routes require those records to be proxied.
 
 The three web route Workers fetch the original public URL. On a Worker Route,
 that reaches the underlying Terraform DNS origin while preserving the public
@@ -57,9 +63,11 @@ select another hostname in the same Cloudflare zone during a controlled
 cutover; normal operation leaves it unset.
 
 For browser navigation, the app Worker renders a small static HTML 503 at the
-edge when `/login` or `/signup` is unavailable. Non-browser clients retain the
-typed JSON 503. Ordinary origin 404s are preserved so the Worker cannot mask a
-misspelled or unknown route.
+edge when `/`, `/login`, or `/signup` is unavailable, including transport and
+Cloudflare origin failures. It sends `Retry-After: 7200` and tells users to
+return in about two hours. Non-browser clients retain the typed JSON 503.
+Ordinary origin 404s are preserved so the Worker cannot mask a misspelled or
+unknown route.
 
 ## Tests
 
