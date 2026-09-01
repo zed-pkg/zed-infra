@@ -124,3 +124,95 @@ jobs:
               exit 1
               ;;
           esac
+
+      - name: Verify public registry metadata and CDN bytes through the edge
+        env:
+          CANARY_ORG: zed-pkg-test
+          CANARY_REPO: github-api-fallback-canary
+          CANARY_PACKAGE: github-api-fallback-canary
+          CANARY_VERSION: 0.0.2
+        run: |
+          set -euo pipefail
+          root="${RUNNER_TEMP}/zed-public-fallback"
+          mkdir -p "${root}"
+
+          tag="v${CANARY_VERSION}"
+          asset="zpkg-${CANARY_ORG}-${CANARY_PACKAGE}-${CANARY_VERSION}.tar.gz"
+          sidecar="zpkg-${CANARY_ORG}-${CANARY_PACKAGE}-${CANARY_VERSION}.json"
+          github_release="https://github.com/${CANARY_ORG}/${CANARY_REPO}/releases/download/${tag}"
+          registry_url="https://registry.zpkg.net/v1/packages/${CANARY_ORG}/${CANARY_PACKAGE}/versions/${CANARY_VERSION}"
+          cdn_url="https://cdn.zpkg.net/github/${CANARY_ORG}/${CANARY_REPO}/${tag}/${asset}"
+
+          curl -fsSL --retry 8 --retry-all-errors \
+            -H 'Accept: application/json' \
+            "${github_release}/${sidecar}" \
+            -o "${root}/github-sidecar.json"
+          curl -fsSL --retry 8 --retry-all-errors \
+            "${github_release}/${asset}" \
+            -o "${root}/github-asset.tar.gz"
+
+          registry_status="$(
+            curl -sS --retry 8 --retry-all-errors \
+              -H 'Accept: application/json' \
+              -D "${root}/registry.headers" \
+              -o "${root}/registry.json" \
+              -w '%{http_code}' \
+              "${registry_url}"
+          )"
+          test "${registry_status}" = 200 || {
+            echo "registry fallback returned HTTP ${registry_status}" >&2
+            sed -n '1,40p' "${root}/registry.headers" >&2
+            sed -n '1,80p' "${root}/registry.json" >&2
+            exit 1
+          }
+          grep -qi '^x-zed-edge: registry' "${root}/registry.headers"
+          grep -qi '^x-zed-source: github-public' "${root}/registry.headers"
+
+          cdn_status="$(
+            curl -sS --retry 8 --retry-all-errors \
+              -D "${root}/cdn.headers" \
+              -o "${root}/cdn-asset.tar.gz" \
+              -w '%{http_code}' \
+              "${cdn_url}"
+          )"
+          test "${cdn_status}" = 200 || {
+            echo "CDN fallback returned HTTP ${cdn_status}" >&2
+            sed -n '1,40p' "${root}/cdn.headers" >&2
+            exit 1
+          }
+          grep -qi '^x-zed-edge: cdn' "${root}/cdn.headers"
+          grep -qi '^x-zed-source: github-release' "${root}/cdn.headers"
+          grep -qi '^cache-control: .*immutable' "${root}/cdn.headers"
+
+          python3 - "${root}" "${github_release}/${asset}" <<'PY'
+          import hashlib
+          import json
+          import pathlib
+          import sys
+
+          root = pathlib.Path(sys.argv[1])
+          direct_url = sys.argv[2]
+          expected = json.loads((root / "github-sidecar.json").read_text())
+          actual = json.loads((root / "registry.json").read_text())
+          direct = (root / "github-asset.tar.gz").read_bytes()
+          proxied = (root / "cdn-asset.tar.gz").read_bytes()
+          digest = hashlib.sha256(direct).hexdigest()
+
+          assert direct == proxied, "Cloudflare CDN bytes differ from GitHub"
+          assert expected["sha256"] == digest
+          assert expected["size"] == len(direct)
+          assert expected["download_url"] == direct_url
+          for key in ("org", "name", "version", "sha256", "size", "download_url"):
+              assert actual[key] == expected[key], (key, actual[key], expected[key])
+          print(
+              json.dumps(
+                  {
+                      "ok": True,
+                      "sha256": digest,
+                      "bytes": len(direct),
+                      "registry": actual,
+                  },
+                  indent=2,
+              )
+          )
+          PY
