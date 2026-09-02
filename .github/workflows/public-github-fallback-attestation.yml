@@ -1,0 +1,56 @@
+name: public GitHub fallback attestation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'workers/**'
+      - 'scripts/attest-public-github-fallback.mjs'
+      - '.github/workflows/public-github-fallback-attestation.yml'
+  pull_request:
+    paths:
+      - 'workers/**'
+      - 'scripts/attest-public-github-fallback.mjs'
+      - '.github/workflows/public-github-fallback-attestation.yml'
+  schedule:
+    - cron: '17 7 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  attest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v6.0.0
+        with:
+          node-version: '22'
+
+      - name: Prove deterministic Worker behavior
+        run: npm test --prefix workers
+
+      - name: Attest GitHub, origin-down fallback, and live Cloudflare paths
+        env:
+          # Pull requests prove the exact Worker with a deliberately dead Rust
+          # origin plus the already-live CDN route. Main/scheduled/manual runs
+          # also require the production registry hostname to carry the same
+          # evidence headers and GitHub metadata.
+          ENFORCE_LIVE_REGISTRY: ${{ github.event_name == 'pull_request' && '0' || '1' }}
+        run: |
+          set -euo pipefail
+          EVIDENCE_PATH="${RUNNER_TEMP}/public-github-fallback-attestation.json" \
+            node scripts/attest-public-github-fallback.mjs
+
+      - name: Retain the attestation even when a live boundary fails
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: public-github-fallback-attestation-${{ github.run_id }}
+          path: ${{ runner.temp }}/public-github-fallback-attestation.json
+          if-no-files-found: warn
+          retention-days: 90
