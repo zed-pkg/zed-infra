@@ -1,0 +1,146 @@
+name: harden public intake organization origin
+
+on:
+  push:
+    branches:
+      - feat/public-intake-edge-v1
+    paths:
+      - .github/workflows/harden-public-intake-org-origin.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: harden-public-intake-org-origin
+  cancel-in-progress: false
+
+jobs:
+  harden:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Check out edge branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: feat/public-intake-edge-v1
+          fetch-depth: 0
+          persist-credentials: true
+          show-progress: false
+
+      - name: Replace placeholder DNS with an explicit origin contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          variables = Path("terraform/cloudflare/variables.tf")
+          text = variables.read_text()
+          if 'variable "org_origin_hostname"' not in text:
+              text = text.rstrip() + '''
+
+          variable "org_origin_hostname" {
+            description = "Verified hostname used as the proxied CNAME origin for org.zpkg.net when provision_org_host is enabled"
+            type        = string
+            default     = ""
+
+            validation {
+              condition = var.org_origin_hostname == "" || (
+                can(regex("^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$", var.org_origin_hostname)) &&
+                !can(regex("^https?://", var.org_origin_hostname))
+              )
+              error_message = "org_origin_hostname must be an unqualified HTTPS origin hostname without a scheme."
+            }
+          }
+          '''
+          variables.write_text(text)
+
+          main = Path("terraform/cloudflare/main.tf")
+          text = main.read_text()
+          start = text.find('resource "cloudflare_dns_record" "org"')
+          if start < 0:
+              raise SystemExit("cannot locate organization DNS record")
+          next_resource = text.find('\nresource "', start + 1)
+          end = next_resource if next_resource >= 0 else len(text)
+          block = text[start:end]
+          block, type_count = re.subn(r'(?m)^\s*type\s*=\s*"A"\s*$', '  type       = "CNAME"', block, count=1)
+          block, content_count = re.subn(
+              r'(?m)^\s*content\s*=\s*"192\.0\.2\.1"\s*$',
+              '  content    = var.org_origin_hostname',
+              block,
+              count=1,
+          )
+          if type_count != 1 or content_count != 1:
+              if 'type       = "CNAME"' not in block or 'content    = var.org_origin_hostname' not in block:
+                  raise SystemExit("organization DNS record did not match the expected placeholder shape")
+          text = text[:start] + block + text[end:]
+          if 'check "public_intake_org_origin"' not in text:
+              text = text.rstrip() + '''
+
+          check "public_intake_org_origin" {
+            assert {
+              condition = !var.provision_org_host || (
+                length(trimspace(var.org_origin_hostname)) > 0 &&
+                lower(trimspace(var.org_origin_hostname)) != "org.${lower(var.zone_name)}"
+              )
+              error_message = "provision_org_host requires a verified non-self-referential org_origin_hostname; placeholder origins are forbidden."
+            }
+          }
+          '''
+          main.write_text(text)
+
+          example = Path("terraform/cloudflare/terraform.tfvars.example")
+          text = example.read_text()
+          if "org_origin_hostname" not in text:
+              text = text.rstrip() + '''
+
+          # Keep false until the origin has been verified outside-in.
+          provision_org_host = false
+          # org_origin_hostname = "web-origin.example.net"
+          '''
+          example.write_text(text)
+
+          docs = Path("docs/public-intake-edge.md")
+          if docs.exists():
+              text = docs.read_text()
+              text = text.replace(
+                  "A proxied TEST-NET placeholder is used only to attach the Worker route.",
+                  "The organization host uses an explicitly supplied, verified proxied CNAME origin; TEST-NET and self-referential placeholders are forbidden.",
+              )
+              if "org_origin_hostname" not in text:
+                  text += '''
+
+          ## Organization origin gate
+
+          `provision_org_host` must remain false until `org_origin_hostname` names a verified origin that can safely receive unmatched `org.zpkg.net` paths. Terraform rejects an empty or self-referential origin when provisioning is enabled. The Worker continues to intercept only the exact quote route family.
+          '''
+              docs.write_text(text)
+          PY
+
+          if grep -R -n --fixed-strings '192.0.2.1' \
+            terraform/cloudflare docs/public-intake-edge.md; then
+            echo "TEST-NET placeholder remains in the public-intake desired state" >&2
+            exit 1
+          fi
+          terraform fmt -recursive terraform/cloudflare
+          terraform fmt -check -recursive terraform/cloudflare
+          npm ci --prefix workers --ignore-scripts --no-audit --no-fund
+          npm test --prefix workers
+          git diff --check
+          if git grep -nE '(ghp_|github_pat_|lin_api_)[A-Za-z0-9_]+' -- . ':!workers/node_modules'; then
+            echo "credential-shaped material found" >&2
+            exit 1
+          fi
+
+      - name: Remove materializer and publish the hardened edge tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/harden-public-intake-org-origin.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "fix(edge): require a verified organization origin"
+          git push origin HEAD:feat/public-intake-edge-v1
