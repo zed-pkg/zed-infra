@@ -1,0 +1,69 @@
+# Provider-native Crossplane examples. Replace CHANGE_ME values and pin the
+# installed Upbound provider packages before applying. No credentials belong here.
+---
+apiVersion: ecr.aws.upbound.io/v1beta1
+kind: Repository
+metadata:
+  name: change-me-lambda
+  labels:
+    app.kubernetes.io/managed-by: crossplane
+    oci.oresoftware.dev/role: lambda
+spec:
+  deletionPolicy: Orphan
+  forProvider:
+    region: us-east-1
+    imageTagMutability: IMMUTABLE
+    imageScanningConfiguration:
+      - scanOnPush: true
+    encryptionConfiguration:
+      - encryptionType: AES256
+    tags:
+      managed-by: crossplane
+      oci-role: lambda
+  providerConfigRef:
+    name: aws-default
+---
+apiVersion: artifact.gcp.upbound.io/v1beta1
+kind: RegistryRepository
+metadata:
+  name: change-me-cloud-run
+  labels:
+    app.kubernetes.io/managed-by: crossplane
+    oci.oresoftware.dev/role: cloud-run
+spec:
+  deletionPolicy: Orphan
+  forProvider:
+    project: CHANGE_ME_GCP_PROJECT
+    location: us-central1
+    repositoryId: change-me-cloud-run
+    format: DOCKER
+    mode: STANDARD_REPOSITORY
+    dockerConfig:
+      - immutableTags: true
+    cleanupPolicyDryRun: true
+    labels:
+      managed-by: crossplane
+      oci-role: cloud-run
+  providerConfigRef:
+    name: gcp-default
+---
+apiVersion: containerregistry.azure.upbound.io/v1beta1
+kind: Registry
+metadata:
+  name: changemeacr
+  labels:
+    app.kubernetes.io/managed-by: crossplane
+    oci.oresoftware.dev/role: azure-mirror
+spec:
+  deletionPolicy: Orphan
+  forProvider:
+    location: East US
+    resourceGroupName: CHANGE_ME_RESOURCE_GROUP
+    sku: Basic
+    adminEnabled: false
+    publicNetworkAccessEnabled: true
+    tags:
+      managed-by: crossplane
+      oci-role: azure-mirror
+  providerConfigRef:
+    name: azure-default
