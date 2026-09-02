@@ -1,0 +1,218 @@
+name: deploy Cloudflare Workers
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'workers/**'
+      - '.github/workflows/deploy-cloudflare-workers.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: zpkg-cloudflare-workers-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_WORKERS_DEPLOY_TOKEN }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v6.0.0
+        with:
+          node-version: "22"
+
+      - name: Require the scoped Cloudflare deployment identity
+        run: |
+          set -euo pipefail
+          test -n "${CLOUDFLARE_ACCOUNT_ID}" || {
+            echo "CLOUDFLARE_ACCOUNT_ID repository variable is not configured" >&2
+            exit 1
+          }
+          test -n "${CLOUDFLARE_API_TOKEN}" || {
+            echo "CLOUDFLARE_WORKERS_DEPLOY_TOKEN repository secret is not configured" >&2
+            exit 1
+          }
+
+      - name: Prove edge contracts before deployment
+        run: npm test --prefix workers
+
+      - name: Read, lease, and deploy every canonical Worker
+        working-directory: workers
+        run: |
+          set -euo pipefail
+
+          deploy_one() {
+            local config="$1"
+            local worker="$2"
+            local snapshot
+            local modified_on
+            local deploy_status=0
+            local release_status=0
+
+            snapshot="$(node scripts/cf-lease.mjs snapshot --worker "${worker}")"
+            modified_on="$(
+              node -e '
+                const fs = require("node:fs");
+                const snapshot = JSON.parse(fs.readFileSync(0, "utf8"));
+                process.stdout.write(snapshot.live?.modified_on || "");
+              ' <<<"${snapshot}"
+            )"
+
+            if [ -n "${modified_on}" ]; then
+              node scripts/cf-lease.mjs acquire \
+                --worker "${worker}" \
+                --if-match "${modified_on}"
+            else
+              node scripts/cf-lease.mjs acquire \
+                --worker "${worker}" \
+                --create-missing
+            fi
+
+            npx --yes wrangler@4.127.1 deploy \
+              --env="" \
+              --config "${config}/wrangler.toml" || deploy_status=$?
+            node scripts/cf-lease.mjs release \
+              --worker "${worker}" || release_status=$?
+
+            if [ "${deploy_status}" -ne 0 ]; then
+              return "${deploy_status}"
+            fi
+            return "${release_status}"
+          }
+
+          deploy_one app-proxy zpkg-app-proxy
+          deploy_one user-proxy zpkg-user-proxy
+          deploy_one web-proxy zpkg-web-proxy
+          deploy_one registry-proxy zpkg-registry-proxy
+          deploy_one cdn-proxy zpkg-cdn
+
+      - name: Verify the app route no longer leaks the origin placeholder
+        run: |
+          set -euo pipefail
+          headers="${RUNNER_TEMP}/app-zpkg-net.headers"
+          body="${RUNNER_TEMP}/app-zpkg-net.html"
+          status="$(
+            curl -sS --retry 3 \
+              -H 'Accept: text/html' \
+              -D "${headers}" \
+              -o "${body}" \
+              -w '%{http_code}' \
+              https://app.zpkg.net/
+          )"
+
+          case "${status}" in
+            200|301|302|303|307|308)
+              echo "app.zpkg.net origin is serving HTTP ${status}"
+              ;;
+            503)
+              grep -qi '^retry-after: 7200' "${headers}"
+              grep -qi 'come back in about two hours' "${body}"
+              echo "app.zpkg.net is serving the reviewed maintenance fallback"
+              ;;
+            *)
+              echo "app.zpkg.net returned unexpected HTTP ${status}" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Verify public registry metadata and CDN bytes through the edge
+        env:
+          CANARY_ORG: zed-pkg-test
+          CANARY_REPO: github-api-fallback-canary
+          CANARY_PACKAGE: github-api-fallback-canary
+          CANARY_VERSION: 0.0.2
+        run: |
+          set -euo pipefail
+          root="${RUNNER_TEMP}/zed-public-fallback"
+          mkdir -p "${root}"
+
+          tag="v${CANARY_VERSION}"
+          asset="zpkg-${CANARY_ORG}-${CANARY_PACKAGE}-${CANARY_VERSION}.tar.gz"
+          sidecar="zpkg-${CANARY_ORG}-${CANARY_PACKAGE}-${CANARY_VERSION}.json"
+          github_release="https://github.com/${CANARY_ORG}/${CANARY_REPO}/releases/download/${tag}"
+          registry_url="https://registry.zpkg.net/v1/packages/${CANARY_ORG}/${CANARY_PACKAGE}/versions/${CANARY_VERSION}"
+          cdn_url="https://cdn.zpkg.net/github/${CANARY_ORG}/${CANARY_REPO}/${tag}/${asset}"
+
+          curl -fsSL --retry 8 --retry-all-errors \
+            -H 'Accept: application/json' \
+            "${github_release}/${sidecar}" \
+            -o "${root}/github-sidecar.json"
+          curl -fsSL --retry 8 --retry-all-errors \
+            "${github_release}/${asset}" \
+            -o "${root}/github-asset.tar.gz"
+
+          registry_status="$(
+            curl -sS --retry 8 --retry-all-errors \
+              -H 'Accept: application/json' \
+              -D "${root}/registry.headers" \
+              -o "${root}/registry.json" \
+              -w '%{http_code}' \
+              "${registry_url}"
+          )"
+          test "${registry_status}" = 200 || {
+            echo "registry fallback returned HTTP ${registry_status}" >&2
+            sed -n '1,40p' "${root}/registry.headers" >&2
+            sed -n '1,80p' "${root}/registry.json" >&2
+            exit 1
+          }
+          grep -qi '^x-zed-edge: registry' "${root}/registry.headers"
+          grep -qi '^x-zed-source: github-public' "${root}/registry.headers"
+
+          cdn_status="$(
+            curl -sS --retry 8 --retry-all-errors \
+              -D "${root}/cdn.headers" \
+              -o "${root}/cdn-asset.tar.gz" \
+              -w '%{http_code}' \
+              "${cdn_url}"
+          )"
+          test "${cdn_status}" = 200 || {
+            echo "CDN fallback returned HTTP ${cdn_status}" >&2
+            sed -n '1,40p' "${root}/cdn.headers" >&2
+            exit 1
+          }
+          grep -qi '^x-zed-edge: cdn' "${root}/cdn.headers"
+          grep -qi '^x-zed-source: github-release' "${root}/cdn.headers"
+          grep -qi '^cache-control: .*immutable' "${root}/cdn.headers"
+
+          python3 - "${root}" "${github_release}/${asset}" <<'PY'
+          import hashlib
+          import json
+          import pathlib
+          import sys
+
+          root = pathlib.Path(sys.argv[1])
+          direct_url = sys.argv[2]
+          expected = json.loads((root / "github-sidecar.json").read_text())
+          actual = json.loads((root / "registry.json").read_text())
+          direct = (root / "github-asset.tar.gz").read_bytes()
+          proxied = (root / "cdn-asset.tar.gz").read_bytes()
+          digest = hashlib.sha256(direct).hexdigest()
+
+          assert direct == proxied, "Cloudflare CDN bytes differ from GitHub"
+          assert expected["sha256"] == digest
+          assert expected["size"] == len(direct)
+          assert expected["download_url"] == direct_url
+          for key in ("org", "name", "version", "sha256", "size", "download_url"):
+              assert actual[key] == expected[key], (key, actual[key], expected[key])
+          print(
+              json.dumps(
+                  {
+                      "ok": True,
+                      "sha256": digest,
+                      "bytes": len(direct),
+                      "registry": actual,
+                  },
+                  indent=2,
+              )
+          )
+          PY

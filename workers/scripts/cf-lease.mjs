@@ -146,17 +146,24 @@ export async function readLiveWorker(token, worker, accountId = ACCOUNT_ID) {
   const { status, json } = await cfJson(
     token,
     "GET",
-    `${apiBase(accountId)}/workers/scripts/${encodeURIComponent(worker)}`,
+    `${apiBase(accountId)}/workers/scripts`,
   );
-  if (status === 404) return null;
   if (status !== 200 || json.success === false) {
-    throw new Error(`GET worker ${worker} returned ${status}: ${JSON.stringify(json.errors || json).slice(0, 300)}`);
+    throw new Error(`LIST workers returned ${status}: ${JSON.stringify(json.errors || json).slice(0, 300)}`);
   }
-  const result = json.result || {};
+  if (!Array.isArray(json.result)) {
+    throw new Error("LIST workers returned an unexpected body");
+  }
+  const result = json.result.find((candidate) => candidate?.id === worker);
+  if (!result) return null;
+  if (!result.modified_on) {
+    throw new Error(`LIST workers omitted modified_on for ${worker}; refusing an unguarded deploy`);
+  }
   return {
-    id: result.id || null,
-    modified_on: result.modified_on || null,
+    id: result.id,
+    modified_on: result.modified_on,
     created_on: result.created_on || null,
+    etag: result.etag || null,
   };
 }
 

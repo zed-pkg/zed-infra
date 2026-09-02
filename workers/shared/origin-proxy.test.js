@@ -9,6 +9,11 @@ afterEach(() => {
 });
 
 const worker = createOriginProxy({ label: "user.zpkg.net" });
+const appWorker = createOriginProxy({
+  label: "app.zpkg.net",
+  unavailableOnNotFoundPaths: ["/", "/login", "/signup"],
+  retryAfterSeconds: 7200,
+});
 
 test("origin proxy preserves public URL, Host, method, and body", async () => {
   const seen = [];
@@ -65,5 +70,63 @@ test("origin transport failures and Cloudflare origin codes become typed 503s", 
     assert.equal(response.status, 503);
     assert.equal(response.headers.get("x-zed-edge"), "user.zpkg.net");
     assert.equal(response.headers.get("retry-after"), "30");
+  }
+});
+
+test("app entry routes get a two-hour edge HTML 503 when the origin route is absent", async () => {
+  globalThis.fetch = async () => new Response(null, { status: 404 });
+
+  for (const path of ["/", "/login", "/signup?plan=free"]) {
+    const response = await appWorker.fetch(
+      new Request(`https://app.zpkg.net${path}`, {
+        headers: { accept: "text/html,application/xhtml+xml" },
+      }),
+      {},
+    );
+    assert.equal(response.status, 503);
+    assert.equal(response.headers.get("content-type"), "text/html; charset=utf-8");
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    assert.equal(response.headers.get("retry-after"), "7200");
+    assert.equal(response.headers.get("x-zed-edge"), "app.zpkg.net");
+    assert.equal(response.headers.get("x-robots-tag"), "noindex, nofollow");
+    assert.match(response.headers.get("content-security-policy"), /default-src 'none'/);
+    assert.match(await response.text(), /come back in about two hours/i);
+  }
+});
+
+test("app root fallback keeps a typed JSON response for non-browser clients", async () => {
+  globalThis.fetch = async () => new Response(null, { status: 404 });
+  const response = await appWorker.fetch(new Request("https://app.zpkg.net/"), {});
+  assert.equal(response.status, 503);
+  assert.equal(response.headers.get("content-type"), "application/json; charset=utf-8");
+  assert.equal(response.headers.get("retry-after"), "7200");
+  assert.match((await response.json()).message, /come back in about two hours/i);
+});
+
+test("app proxy preserves unrelated origin 404s", async () => {
+  globalThis.fetch = async () => new Response("not found", { status: 404 });
+  const response = await appWorker.fetch(new Request("https://app.zpkg.net/not-a-route"), {});
+  assert.equal(response.status, 404);
+  assert.equal(response.headers.get("x-zed-edge"), "app.zpkg.net");
+  assert.equal(await response.text(), "not found");
+});
+
+test("invalid edge-owned fallback paths are rejected at worker construction", () => {
+  assert.throws(
+    () =>
+      createOriginProxy({
+        label: "app.zpkg.net",
+        unavailableOnNotFoundPaths: ["https://example.com/login"],
+      }),
+    /absolute URL paths/,
+  );
+});
+
+test("invalid retry windows are rejected at worker construction", () => {
+  for (const retryAfterSeconds of [0, 1.5, 86401, "7200"]) {
+    assert.throws(
+      () => createOriginProxy({ label: "app.zpkg.net", retryAfterSeconds }),
+      /retryAfterSeconds must be an integer/,
+    );
   }
 });
