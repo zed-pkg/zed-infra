@@ -239,16 +239,25 @@ await record("public_site_and_github_org_link", true, async () => {
     redirect: "follow",
   });
   const html = await response.text();
-  const ok =
-    response.status === 200 &&
-    html.includes("Install packages, not repositories") &&
-    html.includes("https://github.com/zed-pkg");
+  const renderedText = html
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/\s+/g, " ")
+    .trim();
+  const titlePresent = renderedText
+    .toLowerCase()
+    .includes("install packages, not repositories");
+  const githubOrgLinkPresent = html.includes("https://github.com/zed-pkg");
+  const ok = response.status === 200 && titlePresent && githubOrgLinkPresent;
   return {
     ok,
     status: response.status,
     headers: proofHeaders(response),
-    title_present: html.includes("Install packages, not repositories"),
-    github_org_link_present: html.includes("https://github.com/zed-pkg"),
+    title_present: titlePresent,
+    github_org_link_present: githubOrgLinkPresent,
   };
 });
 
