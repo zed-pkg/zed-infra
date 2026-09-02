@@ -1,5 +1,5 @@
 name = "zpkg-registry-proxy"
-main = "src/index.js"
+main = "src/entry.js"
 compatibility_date = "2026-08-28"
 compatibility_flags = ["nodejs_compat"]
 
@@ -8,6 +8,9 @@ compatibility_flags = ["nodejs_compat"]
 # compatibility account routes that also happen to live below /v1.
 # GitHub fallback is deliberately anonymous; do not attach a token that could
 # make private repositories observable to this public edge.
+# entry.js stamps every response with x-zed-edge: registry so outside-in
+# attestations can distinguish this Worker from the Rust origin and generic
+# Cloudflare error pages.
 
 [vars]
 ORIGIN_URL = "https://api.zpkg.net"
