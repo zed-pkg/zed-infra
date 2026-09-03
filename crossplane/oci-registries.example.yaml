@@ -1,0 +1,43 @@
+# Install/configure the matching Upbound providers before applying.
+apiVersion: ecr.aws.upbound.io/v1beta1
+kind: Repository
+metadata:
+  name: example-service
+spec:
+  forProvider:
+    region: us-east-1
+    imageTagMutability: IMMUTABLE
+    imageScanningConfiguration:
+      scanOnPush: true
+  providerConfigRef:
+    name: aws-default
+---
+apiVersion: artifactregistry.gcp.upbound.io/v1beta1
+kind: Repository
+metadata:
+  name: example-service
+spec:
+  forProvider:
+    project: replace-with-project-id
+    location: us-central1
+    repositoryId: example-service
+    format: DOCKER
+    mode: STANDARD_REPOSITORY
+    dockerConfig:
+      immutableTags: true
+  providerConfigRef:
+    name: gcp-default
+---
+apiVersion: containerregistry.azure.upbound.io/v1beta1
+kind: Registry
+metadata:
+  name: exampleserviceacr
+spec:
+  forProvider:
+    location: East US
+    resourceGroupNameRef:
+      name: example-registry-rg
+    sku: Basic
+    adminEnabled: false
+  providerConfigRef:
+    name: azure-default
