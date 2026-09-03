@@ -1,0 +1,29 @@
+apiVersion: tf.upbound.io/v1beta1
+kind: Workspace
+metadata:
+  name: zed-oci-registries
+  annotations:
+    crossplane.io/external-name: zed-oci-registries
+spec:
+  forProvider:
+    source: Remote
+    # Private repositories require Git credentials supplied by the provider's
+    # approved secret configuration. Never place a PAT in this module URL.
+    module: git::https://github.com/zed-pkg/zed-infra.git//infra/oci?ref=main
+    vars:
+      - key: image_repository_name
+        value: zed
+    # Provision this secret through ores-sops/fiducia-cloud. Its key must be a
+    # terraform.tfvars.json object containing provider enablement and non-secret
+    # project/registry identifiers. Cloud credentials remain in ProviderConfig.
+    varFiles:
+      - source: SecretKey
+        secretKeyRef:
+          namespace: crossplane-system
+          name: zed-oci-registry-tfvars
+          key: terraform.tfvars.json
+  writeConnectionSecretToRef:
+    namespace: crossplane-system
+    name: zed-oci-registries
+  providerConfigRef:
+    name: default
