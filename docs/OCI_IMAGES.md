@@ -68,7 +68,7 @@ Production deployment repositories pin the emitted digest. Tags are discovery an
 
 ## R2 archive boundary
 
-After a successful real-registry push, setting `R2_ARCHIVE_BUCKET`, `R2_ENDPOINT`, and optional `R2_ARCHIVE_PREFIX` exports the complete image as an OCI archive with `skopeo`, writes a portable SHA-256 sidecar, and uploads both through the R2 S3-compatible endpoint. R2 archival is rejected when `PUSH=false` because no complete published image exists to export.
+After a successful real-registry push, setting `R2_ARCHIVE_BUCKET`, `R2_ENDPOINT`, and optional `R2_ARCHIVE_PREFIX` exports the complete image as an OCI archive with `skopeo`, writes a portable SHA-256 sidecar, and uploads both through the R2 S3-compatible endpoint. The publisher proves that neither object exists before uploading and treats an inconclusive absence check as a hard failure, so a repeated tag cannot overwrite an existing archive. R2 archival is rejected when `PUSH=false` because no complete published image exists to export.
 
 Do not configure Lambda, Cloud Run, Kubernetes, Docker, or containerd to pull directly from R2. A separately reviewed Distribution-compatible registry service would be required to expose authenticated `/v2/` semantics in front of R2.
 
@@ -80,4 +80,4 @@ bash scripts/oci/test-build-and-push.sh
 terraform fmt -recursive -check terraform/modules/oci-registry-fleet
 ```
 
-The contract tests prove that invalid Lambda indexes, invalid build arguments, and R2/local-build contradictions fail before Docker side effects. Live registry publication remains a protected environment operation and must use workload identity or an approved secret-delivery path.
+The contract tests prove that invalid Lambda indexes, invalid build arguments, and R2/local-build contradictions fail before Docker side effects. They also prove that existing R2 objects and inconclusive R2 absence checks fail before upload while a confirmed-missing archive uploads both the image and checksum. Live registry publication remains a protected environment operation and must use workload identity or an approved secret-delivery path.

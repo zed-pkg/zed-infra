@@ -185,6 +185,24 @@ if [[ -n "${R2_ARCHIVE_BUCKET:-}" ]]; then
   digest="${digest_line%% *}"
   printf '%s  image.oci.tar\n' "$digest" >"$checksum"
   key="${R2_ARCHIVE_PREFIX:-oci}/${IMAGE_NAME}/${IMAGE_TAG}/image.oci.tar"
+
+  r2_object_must_be_absent() {
+    local object_key="$1"
+    local error_file="$tmp/r2-head-object.err"
+
+    if aws --endpoint-url "$R2_ENDPOINT" s3api head-object \
+      --bucket "$R2_ARCHIVE_BUCKET" \
+      --key "$object_key" > /dev/null 2>"$error_file"; then
+      fail "R2 archive object already exists: s3://${R2_ARCHIVE_BUCKET}/${object_key}"
+    fi
+
+    if ! grep -Eq '\((404|NoSuchKey|NotFound)\)' "$error_file"; then
+      fail "unable to prove R2 archive object is absent: s3://${R2_ARCHIVE_BUCKET}/${object_key}"
+    fi
+  }
+
+  r2_object_must_be_absent "$key"
+  r2_object_must_be_absent "${key}.sha256"
   aws --endpoint-url "$R2_ENDPOINT" s3 cp "$archive" "s3://${R2_ARCHIVE_BUCKET}/${key}"
   aws --endpoint-url "$R2_ENDPOINT" s3 cp "$checksum" "s3://${R2_ARCHIVE_BUCKET}/${key}.sha256"
   printf 'archived OCI image to R2: s3://%s/%s\n' "$R2_ARCHIVE_BUCKET" "$key"
