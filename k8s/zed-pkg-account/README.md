@@ -40,10 +40,10 @@ No Secret manifests or credential values live in this repository.
 | Secret | Required keys | Owner |
 | --- | --- | --- |
 | `zed-pkg-registry-db` | `DATABASE_URL` | registry application RDS/PostgreSQL |
-| `zed-pkg-shared-auth` | `SHARED_AUTH_URL`, `SHARED_AUTH_PUBLIC_URL`, `SHARED_AUTH_SERVICE_CREDENTIAL` | Shared Auth service boundary |
+| `zed-pkg-shared-auth` | `SHARED_AUTH_URL`, `SHARED_AUTH_PUBLIC_URL`, `SHARED_AUTH_HANDOFF_CLIENT_SECRET`, `ZED_SESSION_SIGNING_SECRET`, optional `SHARED_AUTH_SERVICE_CREDENTIAL` | Shared Auth BFF + API boundary. Handoff client is `zpkg`; delegated azp is `zpkg-web`; audience is `zed-pkg`; scope must include `zpkg:account`. |
 | `zed-pkg-artifact-storage` | storage backend credentials and bucket configuration | registry artifact storage/R2 |
 | `zed-pkg-web-auth` | `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY` | browser-safe Supabase project configuration |
-| `zed-pkg-web-runtime` | `PUBLIC_BASE_URL` and optional cookie/domain overrides | web ingress/runtime configuration |
+| `zed-pkg-web-runtime` | `PUBLIC_BASE_URL` (exact `https://app.zpkg.net`) and optional cookie/domain overrides | web ingress/runtime configuration |
 
 `SUPABASE_PUBLISHABLE_KEY` is intentionally browser-safe configuration. A Supabase service-role key must never be mounted into the web pod. Shared Auth sessions and credentials remain in the dedicated customer-auth database; the registry database contains only the local user projection and product authorization data.
 
