@@ -36,7 +36,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v6.0.0
         with:
-          node-version: "22"
+          node-version: "24.19.0"
       - name: Check out the current canonical API contract
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -44,7 +44,11 @@ jobs:
           ref: main
           path: .contract/zed-api-server.rs
           persist-credentials: false
-      - name: Edge route-state, public-fallback, and R2 boundary contracts
+      - name: Install the locked Worker test runtime
+        run: npm ci --ignore-scripts --prefix workers
+      - name: Audit the locked test dependency graph
+        run: npm audit --audit-level=low --prefix workers
+      - name: Edge route-state, real WebSocket, public-fallback, and R2 contracts
         run: npm test --prefix workers
       - name: Reject edge drift from the current machine-registry OpenAPI
         run: node workers/check-api-contract.mjs .contract/zed-api-server.rs/openapi/zed.openapi.json

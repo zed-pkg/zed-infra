@@ -1,5 +1,8 @@
 .terraform/
 .wrangler/
+node_modules/
+.formal-artifacts/
+_apalache-out/
 __pycache__/
 *.py[cod]
 *.tfstate

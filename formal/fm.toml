@@ -1,0 +1,51 @@
+schema_version = 1
+project = "zed-infra"
+model = "origin-handshake-v1"
+language = "quint"
+spec = "formal/origin_handshake.qnt"
+main = "origin_handshake"
+init = "init"
+step = "step"
+invariants = ["protocol_safety"]
+witnesses = [
+  "upgrade_reached", "rejected_before_origin", "denial_preserved",
+  "redirect_preserved", "failure_unavailable", "malformed_upgrade_rejected",
+  "entry_not_found_unavailable",
+]
+
+[toolchain]
+quint = "0.32.0"
+java = ">=17"
+node = "24"
+npx = "npx"
+
+[execution]
+timeout_seconds = 600
+max_output_bytes = 8388608
+artifacts_dir = ".formal-artifacts"
+
+[simulation]
+backend = "typescript"
+max_samples = 10000
+max_steps = 4
+
+[verification]
+backend = "tlc"
+exhaustive_finite_model = true
+
+[traces]
+format = "itf"
+model_based_testing_metadata = true
+backend = "typescript"
+seed = "0x734a1c3"
+count = 16
+max_steps = 4
+max_samples = 1000
+required_actions = ["init", "step"]
+
+[adapters.typescript]
+strategy = "itf-json-driver"
+status = "active"
+command = ["node", "formal/replay.mjs"]
+observable_state = ["outcome", "status_returned", "origin_called", "upgrade_forwarded", "manual_redirect", "socket_passed"]
+implementation = "Actual shared Worker fetch handler with test-only origin responses; independent real workerd TCP/WebSocket suite"

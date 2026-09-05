@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 
 import { createOriginProxy } from "./origin-proxy.js";
+import { requestMode, responseDecision } from "./origin-transition.js";
+import { modes, statuses, observeOrigin } from "../tests/origin-observation.mjs";
 
 const realFetch = globalThis.fetch;
 afterEach(() => {
@@ -129,4 +131,110 @@ test("invalid retry windows are rejected at worker construction", () => {
       /retryAfterSeconds must be an integer/,
     );
   }
+});
+
+test("WebSocket upgrade preserves handshake, identity, and subprotocol headers", async () => {
+  let forwarded;
+  const upgraded = { status: 101, webSocket: {}, headers: new Headers() };
+  globalThis.fetch = async (input) => {
+    forwarded = input;
+    return upgraded;
+  };
+  const response = await worker.fetch(
+    new Request("https://user.zpkg.net/connect", {
+      headers: {
+        upgrade: "WebSocket",
+        connection: "keep-alive, Upgrade",
+        "keep-alive": "timeout=5",
+        "proxy-authorization": "synthetic-proxy-only",
+        origin: "https://app.zpkg.net",
+        cookie: "synthetic=session",
+        authorization: "Bearer synthetic-test-only",
+        "sec-websocket-protocol": "zed.v1",
+        "sec-websocket-version": "13",
+        "sec-websocket-key": "dGhlIHNhbXBsZSBub25jZQ==",
+      },
+    }),
+    {},
+  );
+  assert.equal(response, upgraded, "the runtime socket response must not be reconstructed");
+  assert.equal(forwarded.headers.get("upgrade"), "websocket");
+  assert.equal(forwarded.headers.get("connection"), "Upgrade");
+  for (const name of ["keep-alive", "proxy-authorization"]) {
+    assert.equal(forwarded.headers.get(name), null);
+  }
+  assert.equal(forwarded.headers.get("origin"), "https://app.zpkg.net");
+  assert.equal(forwarded.headers.get("cookie"), "synthetic=session");
+  assert.equal(forwarded.headers.get("authorization"), "Bearer synthetic-test-only");
+  assert.equal(forwarded.headers.get("sec-websocket-protocol"), "zed.v1");
+  assert.equal(forwarded.headers.get("sec-websocket-version"), "13");
+  assert.equal(forwarded.headers.get("sec-websocket-key"), "dGhlIHNhbXBsZSBub25jZQ==");
+  assert.equal(forwarded.redirect, "manual");
+});
+
+test("WebSocket transport failures become typed unavailable responses", async () => {
+  globalThis.fetch = async () => { throw new Error("synthetic origin failure"); };
+  const response = await worker.fetch(
+    new Request("https://user.zpkg.net/connect", { headers: { upgrade: "websocket" } }),
+    {},
+  );
+  assert.equal(response.status, 503);
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.equal((await response.json()).ok, false);
+});
+
+test("a completed WebSocket handshake disarms its deadline", async () => {
+  let signal;
+  globalThis.fetch = async (_input, options) => {
+    signal = options.signal;
+    return { status: 101, webSocket: {}, headers: new Headers() };
+  };
+  await worker.fetch(
+    new Request("https://user.zpkg.net/connect", { headers: { upgrade: "websocket" } }),
+    { ORIGIN_TIMEOUT_MS: "100" },
+  );
+  await new Promise((resolve) => setTimeout(resolve, 140));
+  assert.equal(signal.aborted, false, "handshake deadline must not kill an established socket");
+});
+
+test("malformed upgrade requests are rejected before origin I/O", async () => {
+  globalThis.fetch = async () => assert.fail("rejected request reached origin");
+  for (const [method, upgrade] of [
+    ["POST", "websocket"], ["HEAD", "websocket"], ["GET", "h2c"],
+    ["GET", "websocket, h2c"], ["GET", ""],
+  ]) {
+    const response = await worker.fetch(new Request("https://user.zpkg.net/connect", {
+      method, headers: { upgrade },
+    }), {});
+    assert.equal(response.status, 400);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+  }
+  assert.equal(requestMode("POST", null), "http");
+  assert.equal(requestMode("GET", "WebSocket"), "websocket");
+  assert.throws(() => responseDecision("reject", 200, false, false));
+  assert.throws(() => responseDecision("unknown", 200, false, false));
+});
+
+test("all 276 finite origin scenarios refine the real Worker handler", async () => {
+  let checked = 0;
+  const unavailableStatuses = [0, 502, 503, 504, 521, 522, 523, 524];
+  for (const mode of modes) for (const status of statuses) {
+    for (const has_socket of [false, true]) for (const edge_owned of [false, true]) {
+      const scenario = { mode, status, has_socket, edge_owned };
+      const callsOrigin = mode !== "reject";
+      const upgraded = callsOrigin && mode === "websocket" && status === 101 && has_socket;
+      const unavailable = callsOrigin && (unavailableStatuses.includes(status)
+        || (status === 101 && !upgraded) || (status === 404 && edge_owned));
+      assert.deepEqual(await observeOrigin(scenario), {
+        outcome: !callsOrigin ? "reject" : upgraded ? "upgrade" : unavailable ? "unavailable" : "http",
+        status_returned: !callsOrigin ? 400 : unavailable ? 503 : status,
+        origin_called: callsOrigin,
+        upgrade_forwarded: callsOrigin && mode === "websocket",
+        manual_redirect: callsOrigin,
+        socket_passed: upgraded,
+      }, JSON.stringify(scenario));
+      checked++;
+    }
+  }
+  assert.equal(checked, 276);
 });
