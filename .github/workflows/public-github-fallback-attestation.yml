@@ -29,7 +29,12 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v6.0.0
         with:
-          node-version: '22'
+          node-version: '24.19.0'
+
+      - name: Install and audit the locked Worker test runtime
+        run: |
+          npm ci --ignore-scripts --prefix workers
+          npm audit --audit-level=low --prefix workers
 
       - name: Prove deterministic Worker behavior
         run: npm test --prefix workers
