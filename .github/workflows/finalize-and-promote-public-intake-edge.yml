@@ -1,0 +1,228 @@
+name: finalize and promote public intake edge source
+
+on:
+  push:
+    branches:
+      - feat/public-intake-edge-v1
+    paths:
+      - .github/workflows/finalize-and-promote-public-intake-edge.yml
+
+permissions:
+  actions: read
+  checks: write
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: finalize-and-promote-public-intake-edge
+  cancel-in-progress: false
+
+jobs:
+  certify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 70
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Wait for immutable dependency promotions
+        id: dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          wait_for_merge() {
+            local repository=$1
+            local number=$2
+            local output=$3
+            for attempt in $(seq 1 180); do
+              local pr
+              pr=$(gh api "repos/${repository}/pulls/${number}")
+              if test "$(jq -r .merged <<<"$pr")" = true; then
+                local sha
+                sha=$(jq -r .merge_commit_sha <<<"$pr")
+                test -n "$sha"
+                test "$sha" != null
+                echo "${output}=${sha}" >> "$GITHUB_OUTPUT"
+                return 0
+              fi
+              if test "$(jq -r .state <<<"$pr")" = closed; then
+                echo "${repository}#${number} closed without merge" >&2
+                return 1
+              fi
+              sleep 20
+            done
+            echo "${repository}#${number} did not merge within the bounded window" >&2
+            return 1
+          }
+
+          wait_for_merge zed-pkg/zed-lib-core 30 core_sha
+          wait_for_merge zed-pkg/zed-api-server.rs 50 api_sha
+          wait_for_merge zed-pkg/zed-web-server.rs 39 web_sha
+          wait_for_merge zed-pkg/zed-interfaces 79 interfaces_sha
+          test "$(tail -n 1 "$GITHUB_OUTPUT" | cut -d= -f2)" != ""
+
+      - name: Check out edge candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: feat/public-intake-edge-v1
+          path: zed-infra
+          fetch-depth: 0
+          persist-credentials: true
+          show-progress: false
+
+      - name: Merge current infrastructure main without rewriting history
+        working-directory: zed-infra
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git merge --no-edit origin/main
+
+      - name: Check out immutable interfaces
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: zed-pkg/zed-interfaces
+          ref: ${{ steps.dependencies.outputs.interfaces_sha }}
+          path: zed-interfaces
+          persist-credentials: false
+          show-progress: false
+
+      - name: Check out immutable persistence
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: zed-pkg/zed-lib-core
+          ref: ${{ steps.dependencies.outputs.core_sha }}
+          path: zed-lib-core
+          persist-credentials: false
+          show-progress: false
+
+      - name: Check out immutable API
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: zed-pkg/zed-api-server.rs
+          ref: ${{ steps.dependencies.outputs.api_sha }}
+          path: zed-api-server
+          persist-credentials: false
+          show-progress: false
+
+      - name: Check out immutable web origin
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: zed-pkg/zed-web-server.rs
+          ref: ${{ steps.dependencies.outputs.web_sha }}
+          path: zed-web-server
+          persist-credentials: false
+          show-progress: false
+
+      - name: Install Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: "22"
+          package-manager-cache: false
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Build the final edge source tree
+        working-directory: zed-infra
+        shell: bash
+        env:
+          ZED_LIB_CORE_REV: ${{ steps.dependencies.outputs.core_sha }}
+          ZED_API_SERVER_REV: ${{ steps.dependencies.outputs.api_sha }}
+          ZED_WEB_SERVER_REV: ${{ steps.dependencies.outputs.web_sha }}
+        run: |
+          set -euo pipefail
+          python3 .github/materialize/finalize_public_intake_edge.py
+          nix develop --no-update-lock-file -c terraform fmt -recursive terraform/cloudflare
+
+      - name: Remove temporary edge orchestration
+        working-directory: zed-infra
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .github/materialize
+          rm -f \
+            .github/workflows/harden-public-intake-org-origin.yml \
+            .github/workflows/finalize-and-promote-public-intake-edge.yml
+
+      - name: Certify Worker and Terraform behavior
+        working-directory: zed-infra
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --prefix workers --ignore-scripts --no-audit --no-fund
+          npm test --prefix workers
+          nix develop --no-update-lock-file -c terraform -chdir=terraform/cloudflare fmt -check
+          nix develop --no-update-lock-file -c terraform -chdir=terraform/cloudflare init -backend=false
+          nix develop --no-update-lock-file -c terraform -chdir=terraform/cloudflare validate
+          ! grep -R -n --fixed-strings '192.0.2.1' terraform/cloudflare docs/public-intake-edge.md
+          test -s .github/workflows/public-intake-cross-repo-contract.yml
+          test -s docs/public-intake-promotion.json
+          grep -q 'source-certified-not-activated' docs/public-intake-promotion.json
+          git diff --check
+          if git grep -nE '(ghp_|github_pat_|lin_api_)[A-Za-z0-9_]+' -- . ':!workers/node_modules'; then
+            echo "credential-shaped material found" >&2
+            exit 1
+          fi
+
+      - name: Certify immutable route and trust-envelope parity
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -R -q '/v1/pre-interest' zed-interfaces/src zed-api-server/src/routes/public_intake.rs
+          grep -R -q '/v1/quote-requests' zed-interfaces/src zed-api-server/src/routes/public_intake.rs
+          grep -R -q 'x-zed-intake-body-sha256' zed-infra/workers/public-intake zed-api-server/src/routes/public_intake.rs
+          grep -R -q 'x-zed-intake-signature' zed-infra/workers/public-intake zed-api-server/src/routes/public_intake.rs
+          grep -R -q 'x-zed-intake-source-host' zed-infra/workers/public-intake zed-api-server/src/routes/public_intake.rs
+          grep -R -q 'user.zpkg.net' zed-web-server/k8s zed-infra/workers/public-intake
+          test -s zed-lib-core/src/rust-orm/sql/2026-09-02-public-intake.sql
+          test -s zed-lib-core/src/rust-orm/public_intake.rs
+          test -s zed-api-server/.github/workflows/public-intake-api-contract.yml
+          test -s zed-lib-core/.github/workflows/public-intake-persistence-contract.yml
+
+      - name: Publish exact certified edge head
+        id: publish
+        working-directory: zed-infra
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add -A
+          git diff --cached --check
+          git commit -m "feat(intake): finalize Cloudflare public intake edge"
+          HEAD_SHA=$(git rev-parse HEAD)
+          git push origin HEAD:feat/public-intake-edge-v1
+          echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Record exact-head edge certification
+        shell: bash
+        env:
+          HEAD_SHA: ${{ steps.publish.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          gh api --method POST \
+            -H "Accept: application/vnd.github+json" \
+            "repos/zed-pkg/zed-infra/check-runs" \
+            -f name="public-intake/edge-source-final" \
+            -f head_sha="$HEAD_SHA" \
+            -f status="completed" \
+            -f conclusion="success" \
+            -f 'output[title]=Cloudflare public-intake edge source certified' \
+            -f 'output[summary]=Worker tests, exact route classification, signed API envelope parity, verified-origin Terraform validation, immutable dependency receipts, Nix checks, and credential scanning passed. This is source certification, not a live deployment claim.'
+
+      - name: Promote only the exact certified edge source head
+        shell: bash
+        env:
+          HEAD_SHA: ${{ steps.publish.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          PR_NUMBER=$(gh api "repos/zed-pkg/zed-infra/pulls?state=open&head=zed-pkg:feat/public-intake-edge-v1" --jq '.[0].number')
+          test -n "$PR_NUMBER"
+          test "$(gh pr view "$PR_NUMBER" --repo zed-pkg/zed-infra --json headRefOid --jq .headRefOid)" = "$HEAD_SHA"
+          test "$(gh pr view "$PR_NUMBER" --repo zed-pkg/zed-infra --json baseRefOid --jq .baseRefOid)" = "$(gh api repos/zed-pkg/zed-infra/branches/main --jq .commit.sha)"
+          gh pr ready "$PR_NUMBER" --repo zed-pkg/zed-infra
+          gh pr merge "$PR_NUMBER" --repo zed-pkg/zed-infra --squash --match-head-commit "$HEAD_SHA"

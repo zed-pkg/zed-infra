@@ -1,0 +1,12 @@
+name = "zpkg-public-intake"
+main = "src/index.js"
+compatibility_date = "2026-09-01"
+workers_dev = false
+
+routes = [
+  { pattern = "user.zpkg.net/pre-interest*", zone_name = "zpkg.net" },
+  { pattern = "org.zpkg.net/quote*", zone_name = "zpkg.net" },
+]
+
+[vars]
+API_ORIGIN = "https://api.zpkg.net"
