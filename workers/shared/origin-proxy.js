@@ -1,4 +1,5 @@
-import { HOP_BY_HOP, originIsUnavailable } from "./github-fallback.js";
+import { HOP_BY_HOP } from "./github-fallback.js";
+import { requestMode, responseDecision } from "./origin-transition.js";
 
 /**
  * Orange-cloud origin proxy used by web.zpkg.net, app.zpkg.net, and
@@ -17,32 +18,58 @@ export function createOriginProxy({
 
   return {
     async fetch(request, env) {
+      const mode = requestMode(request.method, request.headers.get("upgrade"));
+      if (mode === "reject") {
+        return Response.json(
+          { ok: false, message: "Unsupported WebSocket upgrade request" },
+          { status: 400, headers: { "cache-control": "no-store", "x-zed-edge": label } },
+        );
+      }
       const headers = new Headers(request.headers);
       for (const name of HOP_BY_HOP) headers.delete(name);
+      if (mode === "websocket") {
+        // These two hop-by-hop headers are the new upstream handshake, not
+        // arbitrary connection metadata. Preserve Origin, cookies, bearer
+        // credentials and Sec-WebSocket-* for the origin's own auth policy.
+        headers.set("upgrade", "websocket");
+        headers.set("connection", "Upgrade");
+      }
       const forwarded = new Request(request, { headers, redirect: "manual" });
 
-      const upgrade = request.headers.get("Upgrade");
-      if (upgrade && upgrade.toLowerCase() === "websocket") {
-        return fetch(forwarded, fetchOptions(env));
-      }
-
       let originResponse;
+      let handshakeTimer;
+      const handshake = mode === "websocket" ? new AbortController() : undefined;
+      if (handshake) {
+        handshakeTimer = setTimeout(() => handshake.abort(), timeoutMilliseconds(env));
+      }
       try {
         // This Worker is attached as a Route, not a Custom Domain. Fetching
         // the original URL reaches the route's underlying DNS origin without
         // reinvoking this Worker, while preserving the public Host that the
         // Kubernetes Ingress uses to select zed-web-server.rs.
-        originResponse = await fetch(forwarded, fetchOptions(env));
+        originResponse = await fetch(forwarded, fetchOptions(env, handshake?.signal));
       } catch {
         return unavailable(label, 0, request, retryAfter);
+      } finally {
+        // AbortSignal.timeout cannot be disarmed and can close an established
+        // WebSocket. This deadline bounds setup only; the runtime owns the
+        // upgraded connection's lifetime, streaming and backpressure.
+        if (handshakeTimer !== undefined) clearTimeout(handshakeTimer);
       }
 
       const pathname = new URL(request.url).pathname;
-      if (
-        originIsUnavailable(originResponse.status) ||
-        (originResponse.status === 404 && edgeOwnedPaths.has(pathname))
-      ) {
-        return unavailable(label, originResponse.status, request, retryAfter);
+      switch (responseDecision(
+        mode, originResponse.status, Boolean(originResponse.webSocket), edgeOwnedPaths.has(pathname),
+      )) {
+        case "upgrade":
+          // Return the exact 101 Response. Rebuilding it from body/status
+          // drops Cloudflare's socket and breaks the protocol handoff.
+          return originResponse;
+        case "unavailable":
+          await originResponse.body?.cancel().catch(() => {});
+          return unavailable(label, originResponse.status, request, retryAfter);
+        case "http":
+          break;
       }
 
       const out = new Headers(originResponse.headers);
@@ -80,12 +107,14 @@ function normalizeRetryAfterSeconds(value) {
   return value;
 }
 
-function fetchOptions(env) {
+function timeoutMilliseconds(env) {
   const timeout = Number(env.ORIGIN_TIMEOUT_MS || 8000);
+  return Number.isFinite(timeout) && timeout >= 100 && timeout <= 30000 ? timeout : 8000;
+}
+
+function fetchOptions(env, handshakeSignal) {
   const options = {
-    signal: AbortSignal.timeout(
-      Number.isFinite(timeout) && timeout >= 100 && timeout <= 30000 ? timeout : 8000,
-    ),
+    signal: handshakeSignal ?? AbortSignal.timeout(timeoutMilliseconds(env)),
   };
   // Optional cutover override. Cloudflare permits this only when both the
   // request Host and override are in the same zone, so it cannot become an

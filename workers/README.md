@@ -42,6 +42,7 @@ overwriting it without `--if-match` of that `modified_on` is forbidden.
 
 ```bash
 cd workers
+npm ci --ignore-scripts
 npm test
 just cf-snapshot zpkg-cdn
 just cf-deploy cdn-proxy <modified_on from snapshot>
@@ -71,7 +72,7 @@ unknown route.
 
 ## Tests
 
-The test suite proves the registry transition table, fail-before-I/O rejects,
+The test suite covers the registry transition table, fail-before-I/O rejects,
 request-body preservation, public-only fallback checks, redirect/size bounds,
 and R2 key-space confinement without needing Cloudflare credentials.
 CI additionally checks the transition table against the current
@@ -79,5 +80,16 @@ CI additionally checks the transition table against the current
 silently unreachable (or be replaced with a broad `/v1/*` escape hatch).
 
 ```bash
-cd workers && npm test
+cd workers && npm ci --ignore-scripts && npm test
 ```
+
+Use Node 24.19.0. The locked suite includes strict TypeScript checking of the
+shared origin decision table, all 276 finite handler scenarios, and real
+workerd/TCP/WebSocket tests through the app, user, and web modules. A WebSocket
+upgrade retains its handshake and end-to-end identity headers; the origin
+remains the authentication authority. The setup deadline is disarmed after
+the handshake, and successful 101 responses keep the original runtime socket.
+
+The repository-owned [fmctl model and replay gate](../formal/README.md) verifies
+the corresponding finite protocol boundary with positive witnesses and
+negative controls. Model/fixture evidence is not proof of a live deployment.

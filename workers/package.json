@@ -2,7 +2,16 @@
   "name": "zpkg-net-edge-workers",
   "private": true,
   "type": "module",
+  "engines": { "node": ">=22.19.0" },
   "scripts": {
-    "test": "node --test shared/*.test.js registry-proxy/src/*.test.js cdn-proxy/src/*.test.js scripts/cf-lease.test.js"
+    "test": "npm run test:unit && npm run test:types && npm run test:runtime",
+    "test:unit": "node --test shared/*.test.js registry-proxy/src/*.test.js cdn-proxy/src/*.test.js scripts/cf-lease.test.js",
+    "test:types": "tsc --allowJs --noEmit --strict --target es2022 --module nodenext shared/origin-transition.js",
+    "test:runtime": "node --test tests/*.test.mjs"
+  },
+  "devDependencies": {
+    "miniflare": "5.20260828.0-alpha",
+    "typescript": "5.9.3",
+    "ws": "8.21.3"
   }
 }
