@@ -155,4 +155,6 @@ test("lease record and argv stay deterministic", () => {
   assert.equal(args.if_match, "ts");
   assert.equal(args.create_missing, true);
   assert.ok(ALLOWED_WORKERS.includes("zpkg-cdn"));
+  assert.ok(ALLOWED_WORKERS.includes("zpkg-api-proxy"));
+  assert.ok(ALLOWED_WORKERS.includes("zpkg-org-proxy"));
 });

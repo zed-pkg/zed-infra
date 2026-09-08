@@ -11,7 +11,7 @@ const syntheticHeaders = { origin: "https://app.zpkg.net", cookie: "synthetic=se
 
 // Actual TCP client -> workerd -> actual TCP origin. No deployed bindings,
 // credentials, remote hosts, database, or browser are involved.
-for (const kind of ["app", "user", "web"]) {
+for (const kind of ["api", "app", "user", "web"]) {
   test(`${kind} Worker preserves real WebSocket framing and origin decisions`, { timeout: 20_000 }, async (t) => {
     const sockets = new Set();
     const observed = [];
@@ -50,8 +50,8 @@ for (const kind of ["app", "user", "web"]) {
     });
     await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
     const upstream = `http://127.0.0.1:${server.address().port}`;
-    // Wrangler 4.127.1 pins Miniflare 5's alpha configuration boundary. Use
-    // its exported converter for the documented scriptPath-style options.
+    // The lockfile pins Miniflare 5's alpha configuration boundary. Use its
+    // exported converter for the documented scriptPath-style options.
     mf = new Miniflare(convertV4MiniflareOptions({
       workers: [{
         name: `zpkg-${kind}-proxy`,

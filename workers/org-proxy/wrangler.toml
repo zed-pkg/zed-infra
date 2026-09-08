@@ -1,0 +1,18 @@
+name = "zpkg-org-proxy"
+main = "src/index.js"
+compatibility_date = "2026-09-07"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = false
+
+# Originless organization-login entry point. Cloudflare owns this Custom
+# Domain's DNS and certificate; the Worker performs only bounded redirects to
+# app.zpkg.net and never proxies a caller-controlled origin or return URL.
+
+[observability]
+enabled = true
+head_sampling_rate = 1
+redact_query_string = true
+
+[[routes]]
+pattern = "org.zpkg.net"
+custom_domain = true

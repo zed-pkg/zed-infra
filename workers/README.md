@@ -1,17 +1,19 @@
 # zpkg.net edge workers
 
-Five Cloudflare Workers, one hostname each. A proxied (orange-cloud) DNS
+Seven Cloudflare Workers, one hostname each. A proxied (orange-cloud) DNS
 record already gives WAF and DDoS; these Workers add *logic* the DNS record
 cannot: GitHub and *public* native registries as a read-only backup when
 `registry.zpkg.net` / R2 is down.
 
 | Worker | Hostname | Role |
 | --- | --- | --- |
+| `api-proxy` | `api.zpkg.net` | Full stateful API pass-through. Authentication, authorization, and writes remain origin-owned. Transport and Cloudflare origin failures become typed, cache-disabled 503s; this hostname never substitutes GitHub content for the API. |
 | `registry-proxy` | `registry.zpkg.net` | A total `(method, path) -> action` state machine exposes only the current machine-registry routes from `zed-api-server.rs`; `/v1/account/*`, auth, admin, and unknown paths fail before origin I/O. On an origin outage, package/version reads may use anonymously proven public npm, crates.io, or GitHub data. Writes stay origin-only. |
 | `cdn-proxy` | `cdn.zpkg.net` | A zone Worker Route is the hostname's public byte boundary. Its private R2 binding exposes only content-addressed artifacts and signed metadata. Coordinate paths never read R2; they require an anonymously successful npm/crates.io or GitHub Release read. |
 | `web-proxy` | `web.zpkg.net` | Alias of `user.zpkg.net`. |
 | `app-proxy` | `app.zpkg.net` | Alias of `user.zpkg.net`; origin failures plus exact `/`, `/login`, and `/signup` origin 404s become a cache-disabled maintenance response while the app routes are unavailable. |
 | `user-proxy` | `user.zpkg.net` | Origin proxy for `zed-web-server.rs` on k8s. |
+| `org-proxy` | `org.zpkg.net` | Originless Custom Domain for organization login. `/zed-pkg`, `/orgs/zed-pkg`, and `/login?org=zed-pkg` redirect only to the fixed app sign-in origin with a validated local return path. Unknown paths and untrusted redirect input fail before I/O. |
 
 `cdn.zpkg.net` uses its existing proxied DNS record plus the exact
 `cdn.zpkg.net/*` Worker Route declared in `cdn-proxy/wrangler.toml`. The R2
@@ -33,6 +35,12 @@ remaining public backups are:
 The GitHub path is proven by `zed-pkg-test/zed-pkg-e2e`
 `scripts/github_api_fallback.py`.
 
+`org.zpkg.net` is deliberately different from the origin-backed hostnames:
+`org-proxy` is the origin, so its Wrangler Custom Domain creates the DNS record
+and certificate. It never accepts an arbitrary `next`, `return_to`, or target
+origin. `api`, `registry`, `app`, `user`, and `web` remain Worker Routes in
+front of existing proxied DNS records.
+
 ## Deploy
 
 Do **not** run raw `wrangler deploy` against a live script. Read the remote
@@ -51,13 +59,15 @@ just cf-deploy cdn-proxy <modified_on from snapshot>
 `.github/workflows/deploy-cloudflare-workers.yml` deploys every canonical
 Worker after a tested Worker change lands on `main`. It uses the same live
 snapshot and KV lease as the manual path, pins Wrangler, serializes production
-deployments, and verifies `app.zpkg.net` after promotion. Arm it with the
+deployments, and verifies the API, registry/GitHub fallback, organization
+login, app, and CDN boundaries after promotion. Arm it with the
 `CLOUDFLARE_WORKERS_DEPLOY_TOKEN` repository secret (Cloudflare's scoped
 "Edit Cloudflare Workers" token) and `CLOUDFLARE_ACCOUNT_ID` repository
-variable. DNS for `app.zpkg.net` / `user.zpkg.net` is in Terraform; Worker
-routes require those records to be proxied.
+variable. The token also needs access to the dedicated deployment-lease KV
+namespace and Workers Routes for `zpkg.net`. DNS for the origin-backed hosts
+is in Terraform; Worker Routes require those records to be proxied.
 
-The three web route Workers fetch the original public URL. On a Worker Route,
+The web and full-API route Workers fetch the original public URL. On a Worker Route,
 that reaches the underlying Terraform DNS origin while preserving the public
 Host used by Kubernetes Ingress. An optional `ORIGIN_RESOLVE_OVERRIDE` may
 select another hostname in the same Cloudflare zone during a controlled
@@ -72,7 +82,8 @@ unknown route.
 
 ## Tests
 
-The test suite covers the registry transition table, fail-before-I/O rejects,
+The test suite covers the registry transition table, API outage normalization,
+organization-login open-redirect resistance, fail-before-I/O rejects,
 request-body preservation, public-only fallback checks, redirect/size bounds,
 and R2 key-space confinement without needing Cloudflare credentials.
 CI additionally checks the transition table against the current

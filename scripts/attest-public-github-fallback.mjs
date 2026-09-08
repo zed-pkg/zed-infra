@@ -26,6 +26,7 @@ const liveCdnUrl =
 const evidencePath =
   process.env.EVIDENCE_PATH || "artifacts/public-github-fallback-attestation.json";
 const enforceLiveRegistry = process.env.ENFORCE_LIVE_REGISTRY === "1";
+const enforceLiveEdge = process.env.ENFORCE_LIVE_EDGE === "1";
 
 const evidence = {
   schema: "zpkg.public-github-fallback-attestation/v1",
@@ -233,6 +234,60 @@ await record("live_cloudflare_registry_to_github", enforceLiveRegistry, async ()
   };
 });
 
+await record("live_cloudflare_api_boundary", enforceLiveEdge, async () => {
+  const response = await fetchWithRetries("https://api.zpkg.net/healthz", {
+    headers: { Accept: "application/json" },
+    redirect: "manual",
+  });
+  const text = await response.text();
+  let body = null;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    body = null;
+  }
+
+  const typedOutage =
+    response.status === 503 && body?.ok === false && body?.host === "api.zpkg.net";
+  const ok =
+    response.headers.get("x-zed-edge") === "api.zpkg.net" &&
+    (response.status === 200 || typedOutage);
+
+  return {
+    ok,
+    enforced: enforceLiveEdge,
+    status: response.status,
+    headers: proofHeaders(response),
+    typed_outage: typedOutage,
+    body,
+    body_preview: body ? null : text.slice(0, 500),
+  };
+});
+
+await record("live_cloudflare_org_login", enforceLiveEdge, async () => {
+  const response = await fetchWithRetries(
+    "https://org.zpkg.net/login?org=zed-pkg-test",
+    { redirect: "manual" },
+  );
+  const expectedLocation =
+    "https://app.zpkg.net/auth/sign-in?return_to=%2Forgs%2Fzed-pkg-test";
+  const ok =
+    response.status === 302 &&
+    response.headers.get("x-zed-edge") === "org.zpkg.net" &&
+    response.headers.get("cache-control") === "no-store" &&
+    response.headers.get("location") === expectedLocation;
+  await response.body?.cancel();
+
+  return {
+    ok,
+    enforced: enforceLiveEdge,
+    status: response.status,
+    headers: proofHeaders(response),
+    location: response.headers.get("location"),
+    expected_location: expectedLocation,
+  };
+});
+
 await record("public_site_and_github_org_link", true, async () => {
   const response = await fetchWithRetries("https://zpkg.net/", {
     headers: { Accept: "text/html" },
@@ -265,6 +320,7 @@ evidence.summary = {
   required_failures: requiredFailures,
   all_required_checks_passed: requiredFailures === 0,
   live_registry_enforced: enforceLiveRegistry,
+  live_edge_enforced: enforceLiveEdge,
 };
 
 await mkdir(path.dirname(evidencePath), { recursive: true });

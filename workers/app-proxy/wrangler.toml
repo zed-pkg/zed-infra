@@ -2,6 +2,7 @@ name = "zpkg-app-proxy"
 main = "src/index.js"
 compatibility_date = "2026-08-28"
 compatibility_flags = ["nodejs_compat"]
+workers_dev = false
 
 # Signed-in package UI. Same origin as web.zpkg.net today; split later.
 
@@ -10,6 +11,8 @@ ORIGIN_TIMEOUT_MS = "8000"
 
 [observability]
 enabled = true
+head_sampling_rate = 1
+redact_query_string = true
 
 [[routes]]
 pattern = "app.zpkg.net/*"

@@ -11,11 +11,13 @@ output "cdn_hostname" {
 output "edge_hostnames" {
   description = "Public hostnames that Cloudflare proxies (Workers sit on these routes)"
   value = {
+    api      = cloudflare_dns_record.api.name
     registry = cloudflare_dns_record.registry.name
     cdn      = "cdn.zpkg.net"
     web      = cloudflare_dns_record.web.name
     app      = cloudflare_dns_record.app.name
     user     = cloudflare_dns_record.user.name
+    org      = "org.zpkg.net"
   }
 }
 

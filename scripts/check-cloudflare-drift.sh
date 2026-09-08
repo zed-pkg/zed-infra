@@ -16,8 +16,9 @@ set -euo pipefail
 : "${ZPKG_NET_ZONE_ID:?ZPKG_NET_ZONE_ID is required}"
 
 # name|type|content|proxied — mirrors terraform/cloudflare/main.tf.
-# cdn.zpkg.net is *not* in this table: the zpkg-cdn Worker Custom Domain creates
-# a Cloudflare-managed record (see the UNMANAGED allowlist).
+# cdn.zpkg.net is an existing route-owned DNS record. org.zpkg.net is created
+# by the zpkg-org-proxy Custom Domain. Neither is Terraform-owned; both are in
+# the narrow UNMANAGED allowlist below.
 expected="$(cat <<'TABLE'
 zpkg.net|CNAME|zed-pkg.github.io|false
 www.zpkg.net|CNAME|zed-pkg.github.io|false
@@ -87,11 +88,12 @@ done <<<"$expected"
 while IFS='|' read -r name type content proxied; do
   [ -z "$name" ] && continue
   case "$type" in TXT) [[ "$name" == _acme-challenge.* ]] && continue ;; esac
-  # cdn.zpkg.net is a Worker Custom Domain. Cloudflare creates the proxied
-  # record; its target is account-managed and is not a Terraform DNS row.
-  if [ "$name" = "cdn.zpkg.net" ]; then
-    continue
-  fi
+  # cdn.zpkg.net is the pre-existing DNS boundary for an exact Worker Route.
+  # org.zpkg.net is a Worker Custom Domain whose DNS/certificate Cloudflare
+  # manages. Neither record is a Terraform DNS row.
+  case "$name" in
+    cdn.zpkg.net|org.zpkg.net) continue ;;
+  esac
   if [ -z "$(awk -F'|' -v n="$name" -v t="$type" '$1==n && $2==t' <<<"$expected")" ]; then
     echo "UNMANAGED ${name} ${type} -> ${content} (not in terraform)"
     drift=1

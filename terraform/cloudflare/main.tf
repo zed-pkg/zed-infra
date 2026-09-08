@@ -51,11 +51,11 @@ resource "cloudflare_r2_bucket" "static_registry_e2e" {
   location   = var.r2_location
 }
 
-# The production bucket stays private. `cdn.zpkg.net` is a Worker custom
-# domain declared in workers/cdn-proxy/wrangler.toml; the Worker reads through
-# its R2 binding and exposes only the audited public key shapes. Do not attach
-# an R2 custom domain or make the bucket public: either would bypass the
-# Worker's read-only key-space confinement.
+# The production bucket stays private. `cdn.zpkg.net` is an exact Worker Route
+# declared in workers/cdn-proxy/wrangler.toml; the Worker reads through its R2
+# binding and exposes only the audited public key shapes. Do not attach an R2
+# custom domain or make the bucket public: either would bypass the Worker's
+# read-only key-space confinement.
 
 # ---------------------------------------------------------------------------
 # zpkg.net — the public domain. (zpkg.tech is parked for a future purpose and
@@ -63,12 +63,15 @@ resource "cloudflare_r2_bucket" "static_registry_e2e" {
 #
 #   zpkg.net / www.zpkg.net  -> GitHub Pages marketing site (zed-pkg.github.io)
 #   user.zpkg.net            -> zed-web-server.rs on k8s (Worker user-proxy)
-#   api.zpkg.net             -> zed-api-server.rs on k8s (full API)
+#   api.zpkg.net             -> zed-api-server.rs on k8s (full API; Worker
+#                               normalizes origin outages without fallback)
 #   registry.zpkg.net        -> same API process, explicit registry route table
 #                               (Worker + API host guard; public read fallback)
 #   web.zpkg.net / app.zpkg.net -> aliases of user.zpkg.net (same web Service)
-#   cdn.zpkg.net             -> Worker custom domain; private R2 binding first,
-#                               then explicitly public GitHub/npm/crates fallbacks
+#   org.zpkg.net             -> originless Worker Custom Domain for bounded
+#                               organization login redirects (DNS/cert Worker-owned)
+#   cdn.zpkg.net             -> Worker Route; private R2 binding first, then
+#                               explicitly public GitHub/npm/crates fallbacks
 #
 # Ordering rule (see docs/wiring-k8s-cluster.md and the canonical.plus runbook
 # in ORESoftware/k8s-cluster): app records stay DNS-only until cert-manager
@@ -126,6 +129,9 @@ resource "cloudflare_dns_record" "origin_aws" {
 # process. The registry hostname is a least-privilege API slice, enforced by
 # the Worker transition table and independently by the API's Host transition
 # table; it is not a broad /v1 prefix or a separate origin. DNS stays shared.
+# The api-proxy Worker is deliberately not a content fallback: it preserves
+# the full API origin as the sole auth/write authority and only converts raw
+# Cloudflare 52x responses to typed, cache-disabled 503s.
 resource "cloudflare_dns_record" "api" {
   zone_id = var.zone_id
   name    = "api.zpkg.net"

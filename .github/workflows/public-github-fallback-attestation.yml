@@ -43,9 +43,10 @@ jobs:
         env:
           # Pull requests prove the exact Worker with a deliberately dead Rust
           # origin plus the already-live CDN route. Main/scheduled/manual runs
-          # also require the production registry hostname to carry the same
-          # evidence headers and GitHub metadata.
+          # also require the production registry, full API, and organization
+          # login hostnames to carry their exact evidence headers/contracts.
           ENFORCE_LIVE_REGISTRY: ${{ github.event_name == 'pull_request' && '0' || '1' }}
+          ENFORCE_LIVE_EDGE: ${{ github.event_name == 'pull_request' && '0' || '1' }}
         run: |
           set -euo pipefail
           EVIDENCE_PATH="${RUNNER_TEMP}/public-github-fallback-attestation.json" \

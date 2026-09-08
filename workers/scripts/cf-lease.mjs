@@ -18,10 +18,12 @@ export const DEFAULT_TTL_SECONDS = 1800;
 export const ALLOWED_WORKERS = Object.freeze([
   "zpkg-cdn",
   "zpkg-cdn-dev",
+  "zpkg-api-proxy",
   "zpkg-registry-proxy",
   "zpkg-user-proxy",
   "zpkg-web-proxy",
   "zpkg-app-proxy",
+  "zpkg-org-proxy",
 ]);
 
 export function leaseKey(worker) {
