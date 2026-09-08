@@ -323,6 +323,18 @@ export function parseCdnPath(pathname) {
   }
   if (!path || path.includes("%") || path.includes("..") || path.includes("\\")) return null;
 
+  const githubFeed = path.match(
+    /^github\/([a-z0-9-]+)\/([a-z0-9-]+)\/releases\.atom$/,
+  );
+  if (githubFeed && isSlug(githubFeed[1]) && isSlug(githubFeed[2])) {
+    return {
+      kind: "cdn_github_release_feed",
+      owner: githubFeed[1],
+      repo: githubFeed[2],
+      key: path,
+    };
+  }
+
   const github = path.match(
     /^github\/([a-z0-9-]+)\/([a-z0-9-]+)\/([^/]+)\/([^/]+)$/,
   );
@@ -330,6 +342,7 @@ export function parseCdnPath(pathname) {
     github &&
     isSlug(github[1]) &&
     isSlug(github[2]) &&
+    github[3] !== "releases.atom" &&
     isSafeSegment(github[3], GIT_REF) &&
     isSafeSegment(github[4], FILENAME)
   ) {
@@ -378,6 +391,9 @@ export function parseCdnPath(pathname) {
 
 export function githubFallbackUrlsForCdn(parsed) {
   if (!parsed) return [];
+  if (parsed.kind === "cdn_github_release_feed") {
+    return [`${GITHUB_WEB}/${parsed.owner}/${parsed.repo}/releases.atom`];
+  }
   if (parsed.kind === "cdn_github_object") {
     return [
       githubReleaseDownloadUrl(

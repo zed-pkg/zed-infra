@@ -268,22 +268,37 @@ async function githubPublicFallback(route, env) {
 }
 
 async function packageFromGithubReleaseFeed(identity, env) {
-  const feedUrl = `${GITHUB_WEB}/${identity.owner}/${identity.repo}/releases.atom`;
-  let response;
-  try {
-    response = await fetch(feedUrl, {
-      headers: { Accept: "application/atom+xml", "User-Agent": USER_AGENT },
-      redirect: "error",
-      signal: AbortSignal.timeout(timeout(env, "FALLBACK_TIMEOUT_MS", 4000)),
-    });
-  } catch {
-    return null;
+  const candidates = [
+    {
+      fetcher: env?.CDN?.fetch ? env.CDN : { fetch },
+      url: `https://cdn.zpkg.net/github/${identity.owner}/${identity.repo}/releases.atom`,
+    },
+    {
+      fetcher: { fetch },
+      url: `${GITHUB_WEB}/${identity.owner}/${identity.repo}/releases.atom`,
+    },
+  ];
+  let text = null;
+  for (const candidate of candidates) {
+    try {
+      const response = await candidate.fetcher.fetch(candidate.url, {
+        headers: { Accept: "application/atom+xml", "User-Agent": USER_AGENT },
+        redirect: "error",
+        signal: AbortSignal.timeout(timeout(env, "FALLBACK_TIMEOUT_MS", 4000)),
+      });
+      if (!response.ok) continue;
+      const contentType = response.headers.get("content-type") || "";
+      if (!/^application\/atom\+xml(?:\s*;|$)/i.test(contentType)) continue;
+      const candidateText = await readBoundedText(response, MAX_GITHUB_FEED_BYTES);
+      if (candidateText !== null && feedIdentifiesRepository(candidateText, identity)) {
+        text = candidateText;
+        break;
+      }
+    } catch {
+      // Continue to the independent direct public GitHub path.
+    }
   }
-  if (!response.ok) return null;
-  const contentType = response.headers.get("content-type") || "";
-  if (!/^application\/atom\+xml(?:\s*;|$)/i.test(contentType)) return null;
-  const text = await readBoundedText(response, MAX_GITHUB_FEED_BYTES);
-  if (text === null || !feedIdentifiesRepository(text, identity)) return null;
+  if (text === null) return null;
 
   const versions = versionsFromReleaseFeed(text, identity);
   if (versions.length === 0) return null;

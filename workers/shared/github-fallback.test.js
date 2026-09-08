@@ -147,6 +147,20 @@ test("parseCdnPath matches guessable R2 keys", () => {
   assert.equal(parseCdnPath("/github/zed-pkg-test/node-lib/v1.0.0/../secret"), null);
 });
 
+test("the CDN parser recognizes only an exact GitHub release feed path", () => {
+  assert.deepEqual(
+    parseCdnPath("/github/zed-pkg-test/public-lib/releases.atom"),
+    {
+      kind: "cdn_github_release_feed",
+      owner: "zed-pkg-test",
+      repo: "public-lib",
+      key: "github/zed-pkg-test/public-lib/releases.atom",
+    },
+  );
+  assert.equal(parseCdnPath("/github/zed-pkg-test/public-lib/branches.atom"), null);
+  assert.equal(parseCdnPath("/github/zed-pkg-test/public-lib/releases.atom/extra"), null);
+});
+
 test("asset names and tags match the CLI contract", () => {
   assert.deepEqual(gitTagsForVersion("1.0.0"), ["v1.0.0", "1.0.0"]);
   assert.equal(versionFromGitTag("v1.0.0"), "1.0.0");

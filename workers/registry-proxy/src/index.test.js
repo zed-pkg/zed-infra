@@ -151,6 +151,61 @@ test("registry Wrangler config binds the audited CDN Worker directly", async () 
   assert.match(config, /pattern\s*=\s*"registry\.zpkg\.net\/\*"/);
 });
 
+test("a package index resolves from the bound CDN release feed without GitHub REST", async () => {
+  const feed = `<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <id>tag:github.com,2008:https://github.com/acme/public-lib/releases</id>
+  <entry><link href="https://github.com/acme/public-lib/releases/tag/v1.2.0"/></entry>
+  <entry><link href="https://github.com/acme/public-lib/releases/tag/v1.1.0"/></entry>
+</feed>`;
+  const cdnCalls = [];
+  const publicCalls = [];
+  globalThis.fetch = async (input) => {
+    const url = input instanceof Request ? input.url : String(input);
+    publicCalls.push(url);
+    if (url.startsWith("https://api.zpkg.net/")) return new Response(null, { status: 503 });
+    if (url === "https://raw.githubusercontent.com/acme/public-lib/v1.2.0/.zpkg.toml") {
+      return new Response('description = "public library"\n', {
+        headers: { "content-type": "text/plain", "content-length": "31" },
+      });
+    }
+    throw new Error(`unexpected public fetch ${url}`);
+  };
+  const response = await worker.fetch(request("/v1/packages/acme/public-lib"), {
+    ORIGIN_URL: "https://api.zpkg.net",
+    CDN: {
+      async fetch(input) {
+        const url = input instanceof Request ? input.url : String(input);
+        cdnCalls.push(url);
+        return new Response(feed, {
+          headers: {
+            "content-type": "application/atom+xml; charset=utf-8",
+            "content-length": String(new TextEncoder().encode(feed).byteLength),
+          },
+        });
+      },
+    },
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("x-zed-source"), "github-public");
+  assert.deepEqual(await response.json(), {
+    org: "acme",
+    name: "public-lib",
+    description: "public library",
+    vcs: "git",
+    repo_url: "https://github.com/acme/public-lib",
+    latest: "1.2.0",
+    tags: [],
+    versions: ["1.2.0", "1.1.0"],
+  });
+  assert.deepEqual(cdnCalls, ["https://cdn.zpkg.net/github/acme/public-lib/releases.atom"]);
+  assert.deepEqual(publicCalls, [
+    "https://api.zpkg.net/v1/packages/acme/public-lib",
+    "https://raw.githubusercontent.com/acme/public-lib/v1.2.0/.zpkg.toml",
+  ]);
+});
+
 test("a private GitHub repository is never used as public fallback", async () => {
   const seen = [];
   globalThis.fetch = async (input, init = {}) => {
@@ -180,5 +235,5 @@ test("a private GitHub repository is never used as public fallback", async () =>
   });
   assert.equal(response.status, 503);
   assert.ok(seen.every((call) => call.authorization === null));
-  assert.equal(seen.length, 3);
+  assert.equal(seen.length, 4);
 });

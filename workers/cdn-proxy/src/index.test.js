@@ -152,6 +152,48 @@ test("an anonymous allowlisted GitHub release response is its own public proof",
   ]);
 });
 
+test("an exact public GitHub release feed is bounded and never reads R2", async () => {
+  const feed =
+    '<feed><id>tag:github.com,2008:https://github.com/acme/public-lib/releases</id></feed>';
+  globalThis.fetch = async (input, init = {}) => {
+    const url = input instanceof Request ? input.url : String(input);
+    const headers = new Headers(input instanceof Request ? input.headers : init.headers);
+    assert.equal(url, "https://github.com/acme/public-lib/releases.atom");
+    assert.equal(headers.get("authorization"), null);
+    return new Response(feed, {
+      headers: {
+        "content-type": "application/atom+xml; charset=utf-8",
+        "content-length": String(new TextEncoder().encode(feed).byteLength),
+      },
+    });
+  };
+
+  const { response, store } = await call("/github/acme/public-lib/releases.atom");
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), feed);
+  assert.equal(response.headers.get("x-zed-source"), "github-release-feed");
+  assert.match(response.headers.get("cache-control"), /max-age=60/);
+  assert.deepEqual(store.reads, []);
+});
+
+test("GitHub release feeds with unsafe metadata are refused without reading R2", async () => {
+  for (const headers of [
+    {
+      "content-type": "text/html; charset=utf-8",
+      "content-length": "7",
+    },
+    {
+      "content-type": "application/atom+xml",
+      "content-length": String(1024 * 1024 + 1),
+    },
+  ]) {
+    globalThis.fetch = async () => new Response("refused", { headers });
+    const { response, store } = await call("/github/acme/public-lib/releases.atom");
+    assert.equal(response.status, 404);
+    assert.deepEqual(store.reads, []);
+  }
+});
+
 test("npm artifact fallback is anonymous, bounded, and uses the exact canonical URL", async () => {
   const seen = [];
   globalThis.fetch = async (input, init = {}) => {
