@@ -1,0 +1,8 @@
+{
+  "contract":"SharedAuthTopology","version":1,"githubOrg":"zed-pkg","integration":"ores-middleware",
+  "supabase":{"runtimeOrg":"oresoftware","targetOrg":"zed-pkg","placement":"shared-org-schema","schema":"zed_pkg","authDatabaseUrlEnv":"SUPABASE_AUTH_DATABASE_URL","adminDatabaseUrlEnv":"SUPABASE_ADMIN_DATABASE_URL"},
+  "neon":{"runtimeOrg":"zed-pkg","targetOrg":"zed-pkg","placement":"dedicated-org","authDatabaseUrlEnv":"NEON_AUTH_DATABASE_URL","adminDatabaseUrlEnv":"NEON_ADMIN_DATABASE_URL"},
+  "requestPolicy":{"requireBothProvidersConfigured":true,"customerMode":"availability-first","adminMode":"strict-paired","sensitiveMode":"strict-paired"},
+  "roles":{"webServer":{"dataPlane":"customer-auth","supabaseDatabaseUrlEnv":"SUPABASE_AUTH_DATABASE_URL","neonDatabaseUrlEnv":"NEON_AUTH_DATABASE_URL"},"apiServer":{"dataPlane":"customer-auth","supabaseDatabaseUrlEnv":"SUPABASE_AUTH_DATABASE_URL","neonDatabaseUrlEnv":"NEON_AUTH_DATABASE_URL"},"adminWebServer":{"dataPlane":"admin-auth","supabaseDatabaseUrlEnv":"SUPABASE_ADMIN_DATABASE_URL","neonDatabaseUrlEnv":"NEON_ADMIN_DATABASE_URL"},"adminApiServer":{"dataPlane":"admin-auth","supabaseDatabaseUrlEnv":"SUPABASE_ADMIN_DATABASE_URL","neonDatabaseUrlEnv":"NEON_ADMIN_DATABASE_URL"}},
+  "auditRepositories":["zed-pkg/zed-web-server.rs","zed-pkg/zed-api-server.rs","zed-pkg/zed-admin-web-server.rs","zed-pkg/zed-admin-api-server.rs","zed-pkg/zed-infra"]
+}
