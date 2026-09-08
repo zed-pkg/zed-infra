@@ -162,6 +162,44 @@ test("the production CDN service binding supplies validated GitHub sidecars", as
   assert.equal((await response.json()).sha256, digest);
 });
 
+test("the package index uses the public GitHub release feed without REST quota", async () => {
+  const calls = [];
+  globalThis.fetch = async (input) => {
+    const url = input instanceof Request ? input.url : String(input);
+    calls.push(url);
+    if (url.startsWith("https://api.zpkg.net/")) {
+      throw new TypeError("simulated Rust origin outage");
+    }
+    if (url.endsWith("/releases.atom")) {
+      return new Response(
+        `<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <id>tag:github.com,2008:https://github.com/zed-pkg-test/github-api-fallback-canary/releases</id>
+  <entry><link rel="alternate" type="text/html" href="https://github.com/zed-pkg-test/github-api-fallback-canary/releases/tag/v0.0.2"/></entry>
+  <entry><link rel="alternate" type="text/html" href="https://github.com/zed-pkg-test/github-api-fallback-canary/releases/tag/v0.0.1"/></entry>
+</feed>`,
+        { headers: { "content-type": "application/atom+xml; charset=utf-8" } },
+      );
+    }
+    if (url.endsWith("/v0.0.2/.zpkg.toml")) {
+      return new Response('description = "public fallback canary"\n', {
+        headers: { "content-type": "text/plain" },
+      });
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  };
+
+  const response = await worker.fetch(
+    request("/v1/packages/zed-pkg-test/github-api-fallback-canary"),
+    { ORIGIN_URL: "https://api.zpkg.net" },
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("x-zed-source"), "github-public");
+  assert.deepEqual((await response.json()).versions, ["0.0.2", "0.0.1"]);
+  assert.ok(calls.every((url) => !url.startsWith("https://api.github.com/")));
+});
+
 test("a public sidecar cannot point at another repository's release", async () => {
   const digest = "b05c249a8a9cd0a383d042580b6dbaa4e828dd5ec201936d865055f26a023f43";
   globalThis.fetch = async (input) => {

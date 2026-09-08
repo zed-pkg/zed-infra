@@ -34,9 +34,11 @@ import {
 } from "../../shared/native-public.js";
 
 const MAX_GITHUB_JSON_BYTES = 1024 * 1024;
+const MAX_GITHUB_FEED_BYTES = 1024 * 1024;
 const MAX_MANIFEST_BYTES = 64 * 1024;
 const MAX_NATIVE_DIGEST_BYTES = 32 * 1024 * 1024;
 const SHA256 = /^[a-f0-9]{64}$/;
+const PUBLIC_VERSION = /^[0-9A-Za-z][0-9A-Za-z.+-]{0,127}$/;
 
 export default {
   async fetch(request, env) {
@@ -251,6 +253,11 @@ async function githubPublicFallback(route, env) {
     if (sidecar) return sidecar;
   }
 
+  if (route.kind === "get_package") {
+    const feed = await packageFromGithubReleaseFeed(identity, env);
+    if (feed) return feed;
+  }
+
   const repo = await publicGithubRepo(identity, env);
   if (!repo) return null;
   if (route.kind === "get_package") return packageFromGithub(identity, repo, env);
@@ -258,6 +265,89 @@ async function githubPublicFallback(route, env) {
     return versionFromGithub(identity, route.version, env);
   }
   return null;
+}
+
+async function packageFromGithubReleaseFeed(identity, env) {
+  const feedUrl = `${GITHUB_WEB}/${identity.owner}/${identity.repo}/releases.atom`;
+  let response;
+  try {
+    response = await fetch(feedUrl, {
+      headers: { Accept: "application/atom+xml", "User-Agent": USER_AGENT },
+      redirect: "error",
+      signal: AbortSignal.timeout(timeout(env, "FALLBACK_TIMEOUT_MS", 4000)),
+    });
+  } catch {
+    return null;
+  }
+  if (!response.ok) return null;
+  const contentType = response.headers.get("content-type") || "";
+  if (!/^application\/atom\+xml(?:\s*;|$)/i.test(contentType)) return null;
+  const text = await readBoundedText(response, MAX_GITHUB_FEED_BYTES);
+  if (text === null || !feedIdentifiesRepository(text, identity)) return null;
+
+  const versions = versionsFromReleaseFeed(text, identity);
+  if (versions.length === 0) return null;
+
+  let description = null;
+  try {
+    const responseManifest = await fetch(githubRawManifestUrl(identity, `v${versions[0]}`), {
+      headers: { Accept: "text/plain", "User-Agent": USER_AGENT },
+      redirect: "error",
+      signal: AbortSignal.timeout(timeout(env, "FALLBACK_TIMEOUT_MS", 4000)),
+    });
+    if (responseManifest.ok) {
+      const manifest = await readBoundedText(responseManifest, MAX_MANIFEST_BYTES);
+      description = manifest?.match(/^description\s*=\s*"([^"]+)"/m)?.[1] || null;
+    }
+  } catch {
+    // The public release list is sufficient package proof. Description is
+    // optional, so a transient raw-content failure must not break resolution.
+  }
+
+  return jsonResponse(
+    {
+      org: identity.owner,
+      name: identity.repo,
+      description,
+      vcs: "git",
+      repo_url: `${GITHUB_WEB}/${identity.owner}/${identity.repo}`,
+      latest: versions[0],
+      tags: [],
+      versions,
+    },
+    200,
+    { source: "github-public" },
+  );
+}
+
+function feedIdentifiesRepository(text, identity) {
+  const expected = `${GITHUB_WEB}/${identity.owner}/${identity.repo}/releases`;
+  return text.includes(`<id>tag:github.com,2008:${expected}</id>`);
+}
+
+function versionsFromReleaseFeed(text, identity) {
+  const escapedOwner = escapeRegExp(identity.owner);
+  const escapedRepo = escapeRegExp(identity.repo);
+  const links = new RegExp(
+    `href="https://github\\.com/${escapedOwner}/${escapedRepo}/releases/tag/([^"/]+)"`,
+    "g",
+  );
+  const versions = new Set();
+  for (const match of text.matchAll(links)) {
+    let tag;
+    try {
+      tag = decodeURIComponent(match[1]);
+    } catch {
+      continue;
+    }
+    const version = versionFromGitTag(tag);
+    if (PUBLIC_VERSION.test(version) && !version.includes("..")) versions.add(version);
+  }
+  return [...versions].sort((a, b) => (a < b ? 1 : a > b ? -1 : 0));
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 async function versionFromGithubSidecar(identity, version, env) {

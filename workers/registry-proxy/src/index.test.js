@@ -158,6 +158,9 @@ test("a private GitHub repository is never used as public fallback", async () =>
     const headers = new Headers(input instanceof Request ? input.headers : init.headers);
     seen.push({ url, authorization: headers.get("authorization") });
     if (url.startsWith("https://api.zpkg.net/")) return new Response(null, { status: 503 });
+    if (url === "https://github.com/acme/private-lib/releases.atom") {
+      return new Response(null, { status: 404 });
+    }
     if (url === "https://api.github.com/repos/acme/private-lib") {
       return new Response(
         JSON.stringify({
@@ -177,5 +180,5 @@ test("a private GitHub repository is never used as public fallback", async () =>
   });
   assert.equal(response.status, 503);
   assert.ok(seen.every((call) => call.authorization === null));
-  assert.equal(seen.length, 2);
+  assert.equal(seen.length, 3);
 });
