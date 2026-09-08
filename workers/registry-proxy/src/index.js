@@ -268,23 +268,61 @@ async function versionFromGithubSidecar(identity, version, env) {
       version,
     )) {
       const url = githubReleaseDownloadUrl(identity, tag, sidecar);
-      let response;
-      try {
-        response = await fetch(url, {
-          headers: { Accept: "application/json", "User-Agent": USER_AGENT },
-          redirect: "follow",
-          signal: AbortSignal.timeout(timeout(env, "FALLBACK_TIMEOUT_MS", 4000)),
-        });
-      } catch {
-        continue;
-      }
-      if (!response.ok || !isGithubAssetResponse(response.url)) continue;
-      const metadata = await readBoundedJson(response, MAX_GITHUB_JSON_BYTES);
+      const response = await fetchGithubReleaseSidecar(url, env);
+      if (!response?.ok) continue;
+      const metadata = await readBoundedSidecarJson(response, MAX_GITHUB_JSON_BYTES);
       const validated = validateSidecar(metadata, identity, version);
       if (validated) return jsonResponse(validated, 200, { source: "github-public" });
     }
   }
   return null;
+}
+
+async function fetchGithubReleaseSidecar(url, env) {
+  let current = url;
+  for (let redirects = 0; redirects <= 3; redirects += 1) {
+    if (!isAllowedGithubReleaseRedirect(current)) return null;
+    let response;
+    try {
+      response = await fetch(current, {
+        headers: { Accept: "application/json", "User-Agent": USER_AGENT },
+        redirect: "manual",
+        signal: AbortSignal.timeout(timeout(env, "FALLBACK_TIMEOUT_MS", 4000)),
+      });
+    } catch {
+      return null;
+    }
+    if ([301, 302, 303, 307, 308].includes(response.status)) {
+      const location = response.headers.get("location");
+      if (!location || redirects === 3) return null;
+      current = new URL(location, current).toString();
+      continue;
+    }
+    return response;
+  }
+  return null;
+}
+
+async function readBoundedSidecarJson(response, maxBytes) {
+  // GitHub release assets are served as application/octet-stream even when
+  // the named asset is JSON. The exact release URL and every redirect remain
+  // allowlisted; accepting this one media type does not weaken schema checks.
+  const contentType = response.headers.get("content-type") || "";
+  if (
+    !/^application\/(?:[a-z0-9.+-]*\+)?json(?:\s*;|$)/i.test(contentType) &&
+    !/^application\/octet-stream(?:\s*;|$)/i.test(contentType)
+  ) {
+    return null;
+  }
+  const declared = Number(response.headers.get("content-length") || 0);
+  if (declared > maxBytes) return null;
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  if (bytes.byteLength > maxBytes) return null;
+  try {
+    return JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    return null;
+  }
 }
 
 async function publicGithubRepo(identity, env) {
@@ -459,14 +497,18 @@ function isExpectedGithubDownload(identity, tag, asset, rawUrl) {
   );
 }
 
-function isGithubAssetResponse(rawUrl) {
+function isAllowedGithubReleaseRedirect(rawUrl) {
   try {
     const url = new URL(rawUrl);
     return (
       url.protocol === "https:" &&
+      !url.username &&
+      !url.password &&
+      !url.port &&
       ["github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com"].includes(
         url.hostname,
-      )
+      ) &&
+      (url.hostname !== "github.com" || url.pathname.includes("/releases/download/"))
     );
   } catch {
     return false;

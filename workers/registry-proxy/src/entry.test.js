@@ -47,6 +47,15 @@ test("a public GitHub release serves package metadata when the Rust origin is do
       url ===
       "https://github.com/zed-pkg-test/github-api-fallback-canary/releases/download/v0.0.2/zpkg-zed-pkg-test-github-api-fallback-canary-0.0.2.json"
     ) {
+      return new Response(null, {
+        status: 302,
+        headers: {
+          location:
+            "https://release-assets.githubusercontent.com/public-sidecar.json?signed=1",
+        },
+      });
+    }
+    if (url === "https://release-assets.githubusercontent.com/public-sidecar.json?signed=1") {
       const response = new Response(
         JSON.stringify({
           org: "zed-pkg-test",
@@ -61,11 +70,8 @@ test("a public GitHub release serves package metadata when the Rust origin is do
           published_at: "2026-09-01T21:16:46Z",
           yanked: false,
         }),
-        { status: 200, headers: { "content-type": "application/json" } },
+        { status: 200, headers: { "content-type": "application/octet-stream" } },
       );
-      Object.defineProperty(response, "url", {
-        value: "https://release-assets.githubusercontent.com/public-sidecar.json",
-      });
       return response;
     }
     throw new Error(`unexpected fetch ${url}`);
@@ -91,6 +97,7 @@ test("a public GitHub release serves package metadata when the Rust origin is do
     [
       "https://api.zpkg.net/v1/packages/zed-pkg-test/github-api-fallback-canary/versions/0.0.2",
       "https://github.com/zed-pkg-test/github-api-fallback-canary/releases/download/v0.0.2/zpkg-zed-pkg-test-github-api-fallback-canary-0.0.2.json",
+      "https://release-assets.githubusercontent.com/public-sidecar.json?signed=1",
     ],
   );
 
