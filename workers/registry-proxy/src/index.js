@@ -8,6 +8,7 @@ import {
   githubIdentity,
   githubRawManifestUrl,
   githubReleaseAssetNames,
+  githubReleaseDownloadUrl,
   githubReleaseSidecarNames,
   gitTagsForVersion,
   HOP_BY_HOP,
@@ -241,11 +242,47 @@ async function completeNativeDownload(host, name, version, candidate, env) {
 
 async function githubPublicFallback(route, env) {
   const identity = githubIdentity(route.org, route.name);
+  // A successful anonymous read of the deterministic GitHub Release sidecar
+  // is its own public-access proof and avoids coupling version installs to
+  // GitHub REST's shared unauthenticated rate limit. The sidecar is accepted
+  // only after its identity, digest, size, and download URL are confined.
+  if (route.kind === "get_version") {
+    const sidecar = await versionFromGithubSidecar(identity, route.version, env);
+    if (sidecar) return sidecar;
+  }
+
   const repo = await publicGithubRepo(identity, env);
   if (!repo) return null;
   if (route.kind === "get_package") return packageFromGithub(identity, repo, env);
   if (route.kind === "get_version") {
     return versionFromGithub(identity, route.version, env);
+  }
+  return null;
+}
+
+async function versionFromGithubSidecar(identity, version, env) {
+  for (const tag of gitTagsForVersion(version)) {
+    for (const sidecar of githubReleaseSidecarNames(
+      identity.owner,
+      identity.repo,
+      version,
+    )) {
+      const url = githubReleaseDownloadUrl(identity, tag, sidecar);
+      let response;
+      try {
+        response = await fetch(url, {
+          headers: { Accept: "application/json", "User-Agent": USER_AGENT },
+          redirect: "follow",
+          signal: AbortSignal.timeout(timeout(env, "FALLBACK_TIMEOUT_MS", 4000)),
+        });
+      } catch {
+        continue;
+      }
+      if (!response.ok || !isGithubAssetResponse(response.url)) continue;
+      const metadata = await readBoundedJson(response, MAX_GITHUB_JSON_BYTES);
+      const validated = validateSidecar(metadata, identity, version);
+      if (validated) return jsonResponse(validated, 200, { source: "github-public" });
+    }
   }
   return null;
 }
@@ -361,7 +398,9 @@ function validateSidecar(metadata, identity, version) {
   if (metadata.org !== identity.owner || metadata.name !== identity.repo) return null;
   if (metadata.version !== version || !SHA256.test(metadata.sha256 || "")) return null;
   if (!Number.isSafeInteger(metadata.size) || metadata.size < 0) return null;
-  if (!isAllowedPublishedDownload(metadata.download_url, metadata.sha256)) return null;
+  if (!isAllowedPublishedDownload(metadata.download_url, metadata.sha256, identity, version)) {
+    return null;
+  }
   return {
     org: metadata.org,
     name: metadata.name,
@@ -385,7 +424,7 @@ function validateSidecar(metadata, identity, version) {
   };
 }
 
-function isAllowedPublishedDownload(rawUrl, sha256) {
+function isAllowedPublishedDownload(rawUrl, sha256, identity, version) {
   let url;
   try {
     url = new URL(rawUrl);
@@ -396,7 +435,14 @@ function isAllowedPublishedDownload(rawUrl, sha256) {
   if (url.hostname === "cdn.zpkg.net") {
     return url.pathname === `/artifacts/${sha256}.tar.gz` || url.pathname === `/artifacts/${sha256}.zip`;
   }
-  return url.hostname === "github.com" && url.pathname.includes("/releases/download/");
+  if (url.hostname !== "github.com") return false;
+  const assets = [
+    ...githubReleaseAssetNames(identity.owner, identity.repo, version, "tar.gz"),
+    ...githubReleaseAssetNames(identity.owner, identity.repo, version, "zip"),
+  ];
+  return gitTagsForVersion(version).some((tag) =>
+    assets.some((asset) => isExpectedGithubDownload(identity, tag, asset, rawUrl)),
+  );
 }
 
 function isExpectedGithubDownload(identity, tag, asset, rawUrl) {
