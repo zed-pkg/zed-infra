@@ -45,6 +45,12 @@ test("a public GitHub release serves package metadata when the Rust origin is do
     }
     if (
       url ===
+      "https://cdn.zpkg.net/github/zed-pkg-test/github-api-fallback-canary/v0.0.2/zpkg-zed-pkg-test-github-api-fallback-canary-0.0.2.json"
+    ) {
+      return new Response(null, { status: 503 });
+    }
+    if (
+      url ===
       "https://github.com/zed-pkg-test/github-api-fallback-canary/releases/download/v0.0.2/zpkg-zed-pkg-test-github-api-fallback-canary-0.0.2.json"
     ) {
       return new Response(null, {
@@ -96,6 +102,7 @@ test("a public GitHub release serves package metadata when the Rust origin is do
     seen.map((call) => call.url),
     [
       "https://api.zpkg.net/v1/packages/zed-pkg-test/github-api-fallback-canary/versions/0.0.2",
+      "https://cdn.zpkg.net/github/zed-pkg-test/github-api-fallback-canary/v0.0.2/zpkg-zed-pkg-test-github-api-fallback-canary-0.0.2.json",
       "https://github.com/zed-pkg-test/github-api-fallback-canary/releases/download/v0.0.2/zpkg-zed-pkg-test-github-api-fallback-canary-0.0.2.json",
       "https://release-assets.githubusercontent.com/public-sidecar.json?signed=1",
     ],
@@ -108,6 +115,51 @@ test("a public GitHub release serves package metadata when the Rust origin is do
   assert.equal(metadata.sha256, digest);
   assert.equal(metadata.size, 1578807);
   assert.equal(metadata.download_url, downloadUrl);
+});
+
+test("the production CDN service binding supplies validated GitHub sidecars", async () => {
+  const digest = "b05c249a8a9cd0a383d042580b6dbaa4e828dd5ec201936d865055f26a023f43";
+  const downloadUrl =
+    "https://github.com/zed-pkg-test/github-api-fallback-canary/releases/download/v0.0.2/zpkg-zed-pkg-test-github-api-fallback-canary-0.0.2.tar.gz";
+  const serviceCalls = [];
+
+  globalThis.fetch = async (input) => {
+    const url = input instanceof Request ? input.url : String(input);
+    assert.match(url, /^https:\/\/api\.zpkg\.net\//);
+    throw new TypeError("simulated Rust origin outage");
+  };
+
+  const response = await worker.fetch(
+    request("/v1/packages/zed-pkg-test/github-api-fallback-canary/versions/0.0.2"),
+    {
+      ORIGIN_URL: "https://api.zpkg.net",
+      CDN: {
+        async fetch(input) {
+          serviceCalls.push(String(input));
+          return new Response(
+            JSON.stringify({
+              org: "zed-pkg-test",
+              name: "github-api-fallback-canary",
+              version: "0.0.2",
+              sha256: digest,
+              size: 1578807,
+              format: "tar.gz",
+              download_url: downloadUrl,
+              yanked: false,
+            }),
+            { headers: { "content-type": "application/octet-stream" } },
+          );
+        },
+      },
+    },
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("x-zed-source"), "github-public");
+  assert.deepEqual(serviceCalls, [
+    "https://cdn.zpkg.net/github/zed-pkg-test/github-api-fallback-canary/v0.0.2/zpkg-zed-pkg-test-github-api-fallback-canary-0.0.2.json",
+  ]);
+  assert.equal((await response.json()).sha256, digest);
 });
 
 test("a public sidecar cannot point at another repository's release", async () => {

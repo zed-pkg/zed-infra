@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { afterEach, test } from "node:test";
 
 import worker from "./index.js";
@@ -140,6 +141,14 @@ test("npm version fallback computes the transport sha256 and exact compressed si
   assert.equal(metadata.size, artifact.byteLength);
   assert.match(metadata.sha256, /^[a-f0-9]{64}$/);
   assert.equal(metadata.download_url, "https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz");
+});
+
+test("registry Wrangler config binds the audited CDN Worker directly", async () => {
+  const config = await readFile(new URL("../wrangler.toml", import.meta.url), "utf8");
+  assert.match(config, /workers_dev\s*=\s*false/);
+  assert.match(config, /\[\[services\]\][\s\S]*binding\s*=\s*"CDN"/);
+  assert.match(config, /service\s*=\s*"zpkg-cdn"/);
+  assert.match(config, /pattern\s*=\s*"registry\.zpkg\.net\/\*"/);
 });
 
 test("a private GitHub repository is never used as public fallback", async () => {

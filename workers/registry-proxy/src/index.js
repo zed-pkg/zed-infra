@@ -267,15 +267,40 @@ async function versionFromGithubSidecar(identity, version, env) {
       identity.repo,
       version,
     )) {
-      const url = githubReleaseDownloadUrl(identity, tag, sidecar);
-      const response = await fetchGithubReleaseSidecar(url, env);
-      if (!response?.ok) continue;
-      const metadata = await readBoundedSidecarJson(response, MAX_GITHUB_JSON_BYTES);
-      const validated = validateSidecar(metadata, identity, version);
-      if (validated) return jsonResponse(validated, 200, { source: "github-public" });
+      const candidates = [
+        { kind: "cdn", url: cdnReleaseSidecarUrl(identity, tag, sidecar) },
+        { kind: "github", url: githubReleaseDownloadUrl(identity, tag, sidecar) },
+      ];
+      for (const candidate of candidates) {
+        const response =
+          candidate.kind === "cdn"
+            ? await fetchCdnReleaseSidecar(candidate.url, env)
+            : await fetchGithubReleaseSidecar(candidate.url, env);
+        if (!response?.ok) continue;
+        const metadata = await readBoundedSidecarJson(response, MAX_GITHUB_JSON_BYTES);
+        const validated = validateSidecar(metadata, identity, version);
+        if (validated) return jsonResponse(validated, 200, { source: "github-public" });
+      }
     }
   }
   return null;
+}
+
+function cdnReleaseSidecarUrl(identity, tag, sidecar) {
+  return `https://cdn.zpkg.net/github/${encodeURIComponent(identity.owner)}/${encodeURIComponent(identity.repo)}/${encodeURIComponent(tag)}/${encodeURIComponent(sidecar)}`;
+}
+
+async function fetchCdnReleaseSidecar(url, env) {
+  try {
+    const fetcher = env?.CDN?.fetch ? env.CDN : { fetch };
+    return await fetcher.fetch(url, {
+      headers: { Accept: "application/octet-stream", "User-Agent": USER_AGENT },
+      redirect: "error",
+      signal: AbortSignal.timeout(timeout(env, "FALLBACK_TIMEOUT_MS", 4000)),
+    });
+  } catch {
+    return null;
+  }
 }
 
 async function fetchGithubReleaseSidecar(url, env) {

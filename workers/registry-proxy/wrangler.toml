@@ -23,6 +23,12 @@ enabled = true
 head_sampling_rate = 1
 redact_query_string = true
 
+# The registry consumes public, bounded GitHub release sidecars through the
+# already-audited CDN Worker without making a recursive same-zone subrequest.
+[[services]]
+binding = "CDN"
+service = "zpkg-cdn"
+
 [[routes]]
 pattern = "registry.zpkg.net/*"
 zone_name = "zpkg.net"
