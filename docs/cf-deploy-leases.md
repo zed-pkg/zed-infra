@@ -39,12 +39,14 @@ node workers/scripts/cf-lease.mjs snapshot --worker zpkg-cdn
 # Lock, then and only then wrangler. Release even if deploy fails.
 node workers/scripts/cf-lease.mjs acquire --worker zpkg-cdn \
   --if-match 2026-08-29T19:10:25.251597Z
-npx wrangler deploy --config workers/cdn-proxy/wrangler.toml
+npx --yes wrangler@4.129.1 deploy --env="" \
+  --config workers/cdn-proxy/wrangler.toml
 node workers/scripts/cf-lease.mjs release --worker zpkg-cdn
 ```
 
-`just cf-deploy cdn-proxy` wraps acquire → deploy → release. It fails closed
-when the sops token is still `PLACEHOLDER`.
+`just cf-deploy cdn-proxy 2026-08-29T19:10:25.251597Z` wraps acquire →
+explicit production deploy → release. Replace that timestamp with the fresh
+snapshot value; it fails closed when the sops token is still `PLACEHOLDER`.
 
 KV has no compare-and-swap. The script re-reads the lease key immediately
 before PUT and refuses a foreign unexpired holder. That is a short race, not

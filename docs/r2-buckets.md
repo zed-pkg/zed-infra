@@ -45,7 +45,7 @@ the Worker. Wrangler must report the exact `cdn.zpkg.net/*` zone route.
 ```sh
 cd workers
 npm test
-npx wrangler deploy --config cdn-proxy/wrangler.toml
+npx --yes wrangler@4.129.1 deploy --env="" --config cdn-proxy/wrangler.toml
 ```
 
 The production worker keeps `workers_dev = true` deliberately. The resulting
