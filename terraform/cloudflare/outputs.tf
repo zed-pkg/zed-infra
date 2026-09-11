@@ -1,6 +1,6 @@
-output "artifacts_bucket" {
-  description = "Production R2 bucket name for zed-api-server S3_BUCKET"
-  value       = cloudflare_r2_bucket.artifacts.name
+output "cdn_hostname" {
+  description = "Public Cloudflare-proxied origin for R2 objects (independent of the registry origin)"
+  value       = cloudflare_r2_custom_domain.cdn.domain
 }
 
 output "artifacts_bucket_dev" {
