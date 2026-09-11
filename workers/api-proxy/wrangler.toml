@@ -1,0 +1,21 @@
+name = "zpkg-api-proxy"
+main = "src/index.js"
+compatibility_date = "2026-09-07"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = false
+
+# Full stateful API route. The Worker does not implement or fall back any API
+# operation; it preserves the k8s origin as the sole auth and write authority
+# and only normalizes origin outages into a typed, cache-disabled 503.
+
+[vars]
+ORIGIN_TIMEOUT_MS = "8000"
+
+[observability]
+enabled = true
+head_sampling_rate = 1
+redact_query_string = true
+
+[[routes]]
+pattern = "api.zpkg.net/*"
+zone_name = "zpkg.net"

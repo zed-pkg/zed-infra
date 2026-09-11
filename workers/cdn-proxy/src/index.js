@@ -19,6 +19,7 @@ const IMMUTABLE = "public, max-age=31536000, immutable";
 const METADATA_CACHE = "public, max-age=60, stale-while-revalidate=600";
 const NO_STORE = "no-store";
 const MAX_PUBLIC_ARTIFACT_BYTES = 110 * 1024 * 1024;
+const MAX_PUBLIC_METADATA_BYTES = 1024 * 1024;
 
 const SECURITY_HEADERS = Object.freeze({
   "x-content-type-options": "nosniff",
@@ -145,6 +146,17 @@ async function getNativePublic(parsed, request, env) {
 }
 
 async function getGithubPublic(parsed, request, env) {
+  if (parsed.kind === "cdn_github_release_feed") {
+    const [url] = githubFallbackUrlsForCdn(parsed);
+    const response = await fetchWithValidatedRedirects(
+      url,
+      request.method,
+      { Accept: "application/atom+xml", "User-Agent": USER_AGENT },
+      (candidate) => isAllowedGithubReleaseFeedUrl(parsed, candidate),
+      timeout(env),
+    );
+    return sanitizePublicReleaseFeed(response, request.method);
+  }
   if (parsed.kind === "cdn_package_object") {
     if (publicNativeHostFromOrg(parsed.org)) return null;
   } else if (parsed.kind !== "cdn_github_object") {
@@ -169,6 +181,51 @@ async function getGithubPublic(parsed, request, env) {
     if (sanitized) return sanitized;
   }
   return null;
+}
+
+function isAllowedGithubReleaseFeedUrl(parsed, rawUrl) {
+  try {
+    const url = new URL(rawUrl);
+    return (
+      url.protocol === "https:" &&
+      !url.username &&
+      !url.password &&
+      !url.port &&
+      url.hostname === "github.com" &&
+      url.pathname === `/${parsed.owner}/${parsed.repo}/releases.atom` &&
+      !url.search &&
+      !url.hash
+    );
+  } catch {
+    return false;
+  }
+}
+
+async function sanitizePublicReleaseFeed(response, method) {
+  if (!response?.ok || originIsUnavailable(response.status)) return null;
+  const contentType = response.headers.get("content-type") || "";
+  if (!/^application\/atom\+xml(?:\s*;|$)/i.test(contentType)) return null;
+  const declared = Number(response.headers.get("content-length") || 0);
+  if (
+    !Number.isSafeInteger(declared) ||
+    declared <= 0 ||
+    declared > MAX_PUBLIC_METADATA_BYTES
+  ) {
+    return null;
+  }
+  let bytes = null;
+  if (method !== "HEAD") {
+    bytes = new Uint8Array(await response.arrayBuffer());
+    if (bytes.byteLength !== declared || bytes.byteLength > MAX_PUBLIC_METADATA_BYTES) return null;
+  }
+  const headers = securityHeaders();
+  headers.set("cache-control", METADATA_CACHE);
+  headers.set("content-length", String(declared));
+  headers.set("content-type", contentType);
+  headers.set("x-zed-edge", "cdn");
+  headers.set("x-zed-source", "github-release-feed");
+  headers.set("x-zpkg-mirror", "github-release-feed");
+  return new Response(method === "HEAD" ? null : bytes, { status: 200, headers });
 }
 
 async function fetchWithValidatedRedirects(url, method, headers, allowUrl, timeoutMs) {

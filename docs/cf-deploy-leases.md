@@ -12,13 +12,15 @@ unread live code.
    If the remote moved, stop and re-read. Do not "just deploy".
 3. **Lease.** Exclusive key in KV namespace `zed-pkg-deploy-leases`
    (`064c38e7ffbf406c94167542ede580e8`), key `lease:worker:<name>`, TTL 30m.
-4. **Allowlist.** Only `zpkg-cdn`, `zpkg-cdn-dev`, `zpkg-registry-proxy`,
-   `zpkg-user-proxy`, `zpkg-web-proxy`, `zpkg-app-proxy`. Refuse everything
-   else (including `sonusauris-app-proxy`).
+4. **Allowlist.** Only `zpkg-cdn`, `zpkg-cdn-dev`, `zpkg-api-proxy`,
+   `zpkg-registry-proxy`, `zpkg-user-proxy`, `zpkg-web-proxy`,
+   `zpkg-app-proxy`, and `zpkg-org-proxy`. Refuse everything else (including
+   `sonusauris-app-proxy`).
 5. **Create is still a lock.** A Worker that does not exist yet requires
    `--create-missing` after a 404 snapshot. Attaching a route to an existing
-   hostname (`registry.zpkg.net`) is a live traffic change; treat it like an
-   overwrite of that hostname's behavior.
+   hostname (`registry.zpkg.net`) or creating the `org.zpkg.net` Custom Domain
+   is a live traffic change; treat it like an overwrite of that hostname's
+   behavior.
 6. **Do not write prod R2** (`zed-pkg-artifacts`) as a side channel for locks.
    Leases live in the dedicated KV namespace only.
 
@@ -37,12 +39,14 @@ node workers/scripts/cf-lease.mjs snapshot --worker zpkg-cdn
 # Lock, then and only then wrangler. Release even if deploy fails.
 node workers/scripts/cf-lease.mjs acquire --worker zpkg-cdn \
   --if-match 2026-08-29T19:10:25.251597Z
-npx wrangler deploy --config workers/cdn-proxy/wrangler.toml
+npx --yes wrangler@4.129.1 deploy --env="" \
+  --config workers/cdn-proxy/wrangler.toml
 node workers/scripts/cf-lease.mjs release --worker zpkg-cdn
 ```
 
-`just cf-deploy cdn-proxy` wraps acquire → deploy → release. It fails closed
-when the sops token is still `PLACEHOLDER`.
+`just cf-deploy cdn-proxy 2026-08-29T19:10:25.251597Z` wraps acquire →
+explicit production deploy → release. Replace that timestamp with the fresh
+snapshot value; it fails closed when the sops token is still `PLACEHOLDER`.
 
 KV has no compare-and-swap. The script re-reads the lease key immediately
 before PUT and refuses a foreign unexpired holder. That is a short race, not

@@ -20,10 +20,11 @@ deliberately stay dashboard-managed.
 | --- | --- | --- |
 | `zpkg.net` (+ `www`) | Marketing site | GitHub Pages (`zed-pkg/zed-pkg.github.io`) |
 | `user.zpkg.net` | Signed-in web UI | `zed-web-server.rs` on k8s; Worker `user-proxy` |
-| `api.zpkg.net` | Full JSON API | `zed-api-server.rs` on k8s (port 8080) |
+| `api.zpkg.net` | Full JSON API | `zed-api-server.rs` on k8s (port 8080); Worker `api-proxy` converts raw origin 52x failures to typed, cache-disabled 503s without substituting data. |
 | `registry.zpkg.net` | Registry slice only | Same API process; Worker transition table and API Host guard allow only current machine-registry method/path pairs. Public GitHub/npm/crates.io fallback on origin outage. |
 | `web.zpkg.net` / `app.zpkg.net` | Aliases of `user.zpkg.net` | Same `zed-web-server` Service |
 | `cdn.zpkg.net` | Public artifacts | Exact `cdn.zpkg.net/*` Worker Route for `zpkg-cdn`, with a private `zed-pkg-artifacts` binding. **Not** an R2 custom domain or k8s origin. |
+| `org.zpkg.net` | Organization login | Originless `zpkg-org-proxy` Custom Domain. Cloudflare creates DNS and TLS; redirects are confined to the fixed app sign-in origin and validated local org paths. |
 | `api./registry./web.<cloud>.zpkg.net` | Per-cloud canary/debug | `k8s/overlays/{aws,hetzner}` in the app repos |
 | `origin-hetzner.zpkg.net`, `origin-aws.zpkg.net` | Origin A records, never proxied | Cluster edge nodes (ORESoftware/k8s-cluster) |
 
@@ -38,7 +39,8 @@ Worker boundary above, not a rewrite of the registry origin.
 
 The cluster/app records are declared in Terraform and checked by the drift
 script. `cdn.zpkg.net` is allowlisted separately because its existing proxied
-record is intercepted by a Worker Route. On 2026-08-29 the apex still served
+record is intercepted by a Worker Route; `org.zpkg.net` is allowlisted because
+its Worker Custom Domain owns the record. On 2026-08-29 the apex still served
 GitHub Pages, `api.zpkg.net` and `registry.zpkg.net` returned an origin 502,
 and the CDN Worker answered through both the zone route and Workers.dev. The
 2026-08-08 publish → install →
@@ -149,10 +151,12 @@ one zone will silently fight.
 ```sh
 dig +short zpkg.net            # GitHub Pages IPs (185.199.108-111.153)
 dig +short web.zpkg.net        # origin-hetzner (or CF proxy IPs once flipped)
+dig +short org.zpkg.net        # Cloudflare edge IPs after org-proxy deployment
 curl -sI https://zpkg.net | head -3
 curl -s https://web.zpkg.net/healthz
 curl -s https://api.zpkg.net/healthz        # only after DEN-534/535 promotion
 curl -s https://registry.zpkg.net/healthz   # same root as api.zpkg.net today
+curl -sI 'https://org.zpkg.net/login?org=zed-pkg'
 # After workers/cdn-proxy is deployed:
 curl -sI https://cdn.zpkg.net/ | head -5    # 404 on missing key is success; not an origin error
 ```

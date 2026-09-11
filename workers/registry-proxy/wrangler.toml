@@ -2,6 +2,7 @@ name = "zpkg-registry-proxy"
 main = "src/entry.js"
 compatibility_date = "2026-08-28"
 compatibility_flags = ["nodejs_compat"]
+workers_dev = false
 
 # Hostname is the explicit machine-registry route set of zed-api-server.rs.
 # The Worker rejects account/auth/admin paths before origin I/O, including
@@ -19,6 +20,14 @@ FALLBACK_TIMEOUT_MS = "4000"
 
 [observability]
 enabled = true
+head_sampling_rate = 1
+redact_query_string = true
+
+# The registry consumes public, bounded GitHub release sidecars through the
+# already-audited CDN Worker without making a recursive same-zone subrequest.
+[[services]]
+binding = "CDN"
+service = "zpkg-cdn"
 
 [[routes]]
 pattern = "registry.zpkg.net/*"

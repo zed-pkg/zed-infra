@@ -83,7 +83,7 @@ jobs:
                 --create-missing
             fi
 
-            npx --yes wrangler@4.127.1 deploy \
+            npx --yes wrangler@4.129.1 deploy \
               --env="" \
               --config "${config}/wrangler.toml" || deploy_status=$?
             node scripts/cf-lease.mjs release \
@@ -98,7 +98,9 @@ jobs:
           deploy_one app-proxy zpkg-app-proxy
           deploy_one user-proxy zpkg-user-proxy
           deploy_one web-proxy zpkg-web-proxy
+          deploy_one api-proxy zpkg-api-proxy
           deploy_one registry-proxy zpkg-registry-proxy
+          deploy_one org-proxy zpkg-org-proxy
           deploy_one cdn-proxy zpkg-cdn
 
       - name: Verify the app route no longer leaks the origin placeholder
@@ -129,6 +131,49 @@ jobs:
               exit 1
               ;;
           esac
+          grep -qi '^x-zed-edge: app.zpkg.net' "${headers}"
+
+      - name: Verify typed API outages and bounded organization login
+        run: |
+          set -euo pipefail
+
+          api_headers="${RUNNER_TEMP}/api-zpkg-net.headers"
+          api_body="${RUNNER_TEMP}/api-zpkg-net.json"
+          api_status="$(
+            curl -sS --retry 8 --retry-all-errors --retry-delay 3 \
+              -H 'Accept: application/json' \
+              -D "${api_headers}" \
+              -o "${api_body}" \
+              -w '%{http_code}' \
+              https://api.zpkg.net/healthz
+          )"
+          grep -qi '^x-zed-edge: api.zpkg.net' "${api_headers}"
+          case "${api_status}" in
+            200)
+              echo "api.zpkg.net origin is healthy behind the Worker"
+              ;;
+            503)
+              jq -e '.ok == false and .host == "api.zpkg.net"' "${api_body}" >/dev/null
+              echo "api.zpkg.net is serving the reviewed typed outage response"
+              ;;
+            *)
+              echo "api.zpkg.net returned unexpected HTTP ${api_status}" >&2
+              exit 1
+              ;;
+          esac
+
+          org_headers="${RUNNER_TEMP}/org-zpkg-net.headers"
+          org_status="$(
+            curl -sS --retry 20 --retry-all-errors --retry-delay 5 \
+              -D "${org_headers}" \
+              -o /dev/null \
+              -w '%{http_code}' \
+              'https://org.zpkg.net/login?org=zed-pkg-test'
+          )"
+          test "${org_status}" = 302
+          grep -qi '^x-zed-edge: org.zpkg.net' "${org_headers}"
+          grep -q '^location: https://app.zpkg.net/auth/sign-in?return_to=%2Forgs%2Fzed-pkg-test' "${org_headers}"
+          echo "org.zpkg.net is serving the bounded organization-login redirect"
 
       - name: Verify public registry metadata and CDN bytes through the edge
         env:

@@ -91,9 +91,9 @@ errors, so the Worker goes first.
 
 ```sh
 # 1. The Worker, and the route it claims.
-cd cloudflare/workers/zpkg-cdn
-npm test                      # 13 tests, no network, no wrangler
-npx wrangler deploy           # needs CLOUDFLARE_API_TOKEN with Workers + R2
+npm test --prefix workers
+just cf-snapshot zpkg-cdn
+just cf-deploy cdn-proxy <modified_on-from-snapshot>
 
 # 2. Note the workers.dev hostname it prints. It belongs in
 #    zed-interfaces DEFAULT_CDN_ALTERNATE_URL and in the MIRRORS binding.
