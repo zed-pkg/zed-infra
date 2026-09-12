@@ -2,7 +2,9 @@
   "name": "zpkg-net-edge-workers",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=22.19.0" },
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "scripts": {
     "test": "npm run test:unit && npm run test:types && npm run test:runtime",
     "test:unit": "node --test shared/*.test.js api-proxy/src/*.test.js registry-proxy/src/*.test.js cdn-proxy/src/*.test.js org-proxy/src/*.test.js scripts/cf-lease.test.js",

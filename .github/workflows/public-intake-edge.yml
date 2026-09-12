@@ -1,0 +1,53 @@
+name: public intake edge
+
+on:
+  pull_request:
+    paths:
+      - "workers/public-intake/**"
+      - "workers/package.json"
+      - "terraform/cloudflare/public-intake.tf"
+      - ".github/workflows/public-intake-edge.yml"
+  push:
+    branches: [main]
+    paths:
+      - "workers/public-intake/**"
+      - "workers/package.json"
+      - "terraform/cloudflare/public-intake.tf"
+      - ".github/workflows/public-intake-edge.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-intake-edge-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          show-progress: false
+
+      - name: Install Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v6.0.0
+        with:
+          node-version: "22"
+
+      - name: Run the complete Worker contract suite
+        run: npm test --prefix workers
+
+      - name: Bundle the public-intake Worker without provider writes
+        working-directory: workers
+        run: |
+          npx --yes wrangler@4.127.1 deploy \
+            --dry-run \
+            --env="" \
+            --config public-intake/wrangler.toml \
+            --var TURNSTILE_SITE_KEY:1x00000000000000000000AA \
+            --var CONSENT_REVISION:privacy-2026-09-01 \
+            --var MARKETING_CONSENT_REVISION:marketing-2026-09-01
