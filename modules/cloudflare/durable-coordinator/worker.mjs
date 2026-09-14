@@ -1,82 +1,75 @@
-const JSON_HEADERS = { "content-type": "application/json; charset=utf-8" };
-const MAX_BODY_BYTES = 64 * 1024;
+import { DurableObject } from "cloudflare:workers";
+import { leaseIsLive, normalizeExpectedVersion, normalizeKey, normalizeTtlMs } from "./protocol.mjs";
 
-function json(value, init = {}) {
-  return new Response(JSON.stringify(value), {
-    ...init,
-    headers: { ...JSON_HEADERS, ...(init.headers || {}) },
-  });
-}
-
-function stateKey(url) {
-  const prefix = "/state/";
-  if (!url.pathname.startsWith(prefix)) return null;
-  const key = decodeURIComponent(url.pathname.slice(prefix.length));
-  if (!key || key.length > 256 || key.includes("\0")) return null;
-  return `kv:${key}`;
-}
-
-function expectedVersion(request) {
-  const raw = request.headers.get("if-match");
-  if (!raw || raw === "*") return null;
-  const normalized = raw.replace(/^W\//, "").replace(/^"|"$/g, "");
-  const version = Number(normalized);
-  return Number.isSafeInteger(version) && version >= 0 ? version : NaN;
-}
-
-export class ZedPackageCoordinator {
-  constructor(ctx, env) {
-    this.ctx = ctx;
-    this.env = env;
+export class ZedPackageCoordinator extends DurableObject {
+  async health() {
+    return { ok: true, project: "zed-pkg", durable_object: "ZedPackageCoordinator", storage: "sqlite", rpc: true };
   }
 
-  async fetch(request) {
-    const url = new URL(request.url);
-    if (request.method === "GET" && url.pathname === "/health") {
-      return json({ ok: true, project: "zed-pkg", durable_object: "ZedPackageCoordinator", storage: "sqlite" });
-    }
+  async getState(key) {
+    return (await this.ctx.storage.get(`kv:${normalizeKey(key)}`)) ?? null;
+  }
 
-    const key = stateKey(url);
-    if (!key) return json({ error: "not_found" }, { status: 404 });
+  async compareAndSet(key, expectedVersion, value) {
+    const storageKey = `kv:${normalizeKey(key)}`;
+    const expected = normalizeExpectedVersion(expectedVersion);
+    return this.ctx.storage.transaction(async (txn) => {
+      const current = (await txn.get(storageKey)) ?? null;
+      const actualVersion = current?.version ?? 0;
+      if (expected !== null && expected !== actualVersion) throw new Error(`version_conflict:${actualVersion}`);
+      const record = { value, version: actualVersion + 1, updated_at: new Date().toISOString() };
+      await txn.put(storageKey, record);
+      return record;
+    });
+  }
 
-    if (request.method === "GET") {
-      const record = await this.ctx.storage.get(key);
-      if (record === undefined) return json({ error: "not_found" }, { status: 404 });
-      return json(record, { headers: { etag: `"${record.version}"` } });
-    }
-
-    if (request.method === "PUT") {
-      const expected = expectedVersion(request);
-      if (Number.isNaN(expected)) return json({ error: "invalid_if_match" }, { status: 400 });
-      const raw = await request.text();
-      if (new TextEncoder().encode(raw).byteLength > MAX_BODY_BYTES) return json({ error: "payload_too_large" }, { status: 413 });
-      let value;
-      try { value = JSON.parse(raw); } catch { return json({ error: "invalid_json" }, { status: 400 }); }
-      const current = await this.ctx.storage.get(key);
-      const currentVersion = current?.version ?? 0;
-      if (expected !== null && expected !== currentVersion) {
-        return json({ error: "version_mismatch", expected, actual: currentVersion }, { status: 412, headers: { etag: `"${currentVersion}"` } });
+  async acquireLease(resource, holder, ttlMs) {
+    const normalizedResource = normalizeKey(resource);
+    const normalizedHolder = normalizeKey(holder);
+    const ttl = normalizeTtlMs(ttlMs);
+    return this.ctx.storage.transaction(async (txn) => {
+      const leaseKey = `lease:${normalizedResource}`;
+      const counterKey = `lease-counter:${normalizedResource}`;
+      const now = Date.now();
+      const current = (await txn.get(leaseKey)) ?? null;
+      if (leaseIsLive(current, now)) {
+        if (current.holder !== normalizedHolder) return { acquired: false, lease: current };
+        const renewed = { ...current, expires_at: now + ttl };
+        await txn.put(leaseKey, renewed);
+        return { acquired: true, lease: renewed };
       }
-      const record = { value, version: currentVersion + 1, updated_at: new Date().toISOString() };
-      await this.ctx.storage.put(key, record);
-      return json(record, { status: current ? 200 : 201, headers: { etag: `"${record.version}"` } });
-    }
+      const counter = (await txn.get(counterKey)) ?? 0;
+      const fencingToken = Math.max(counter, current?.fencing_token ?? 0) + 1;
+      const lease = { resource: normalizedResource, holder: normalizedHolder, fencing_token: fencingToken, expires_at: now + ttl };
+      await txn.put(counterKey, fencingToken);
+      await txn.put(leaseKey, lease);
+      return { acquired: true, lease };
+    });
+  }
 
-    if (request.method === "DELETE") {
-      const deleted = await this.ctx.storage.delete(key);
-      return new Response(null, { status: deleted ? 204 : 404 });
-    }
-
-    return json({ error: "method_not_allowed" }, { status: 405, headers: { allow: "GET, PUT, DELETE" } });
+  async releaseLease(resource, holder, fencingToken) {
+    const normalizedResource = normalizeKey(resource);
+    const normalizedHolder = normalizeKey(holder);
+    if (!Number.isSafeInteger(fencingToken) || fencingToken <= 0) return false;
+    return this.ctx.storage.transaction(async (txn) => {
+      const leaseKey = `lease:${normalizedResource}`;
+      const current = (await txn.get(leaseKey)) ?? null;
+      if (!current || current.holder !== normalizedHolder || current.fencing_token !== fencingToken) return false;
+      await txn.delete(leaseKey);
+      return true;
+    });
   }
 }
 
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    const objectName = url.searchParams.get("object") || "default";
-    if (objectName.length > 256) return json({ error: "invalid_object_name" }, { status: 400 });
-    const id = env.COORDINATOR.idFromName(objectName);
-    return env.COORDINATOR.get(id).fetch(request);
+    if (url.pathname === "/health") return Response.json({ ok: true, service: "zed-package-coordinator" });
+    if (url.pathname === "/do-health") {
+      const name = url.searchParams.get("object") || "default";
+      if (name.length > 256) return Response.json({ error: "invalid_object_name" }, { status: 400 });
+      return Response.json(await env.COORDINATOR.getByName(name).health());
+    }
+    return new Response("Not Found", { status: 404 });
   },
 };
