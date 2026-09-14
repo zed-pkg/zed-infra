@@ -8,12 +8,8 @@ on:
       - "environments/**"
       - ".github/workflows/infra-layout-validate.yml"
   push:
-    branches:
-      - main
-    paths:
-      - ".ores-infra.toml"
-      - "modules/**"
-      - "environments/**"
+    branches: [main]
+    paths: [".ores-infra.toml", "modules/**", "environments/**"]
 
 permissions:
   contents: read
@@ -25,21 +21,17 @@ concurrency:
 jobs:
   terraform:
     name: Terraform / ${{ matrix.environment }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        environment:
-          - preview
-          - staging
-          - production
+        environment: [preview, staging, production]
     steps:
-      - uses: actions/checkout@v4
-      - uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: 1.16.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with: { persist-credentials: false }
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with: { terraform_version: 1.16.2, terraform_wrapper: false }
       - name: Check Terraform formatting
-        shell: bash
         run: |
           terraform fmt -check -recursive modules/cloudflare/terraform
           terraform fmt -check -recursive "environments/${{ matrix.environment }}"
@@ -51,21 +43,14 @@ jobs:
         run: terraform validate -no-color
 
   cloudflare-worker:
-    name: Cloudflare Worker dry run
-    runs-on: ubuntu-latest
+    name: Cloudflare RPC / dry run
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - name: Validate Worker if present
-        shell: bash
-        run: |
-          if [[ ! -f modules/cloudflare/durable-coordinator/package.json ]]; then
-            echo "No durable-coordinator in this repo; skipping."
-            exit 0
-          fi
-          cd modules/cloudflare/durable-coordinator
-          node --check worker.mjs
-          npm install --ignore-scripts --no-audit --no-fund
-          npm run check
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with: { node-version: "22.22.1" }
+      - working-directory: modules/cloudflare/durable-coordinator
+        run: npm install --package-lock=false --ignore-scripts --no-audit --no-fund
+      - working-directory: modules/cloudflare/durable-coordinator
+        run: npm run check
