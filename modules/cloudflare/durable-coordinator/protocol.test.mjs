@@ -4,7 +4,11 @@ import { MAX_LEASE_TTL_MS, leaseIsLive, normalizeExpectedVersion, normalizeKey, 
 
 test("normalizes safe keys and rejects traversal", () => {
   assert.equal(normalizeKey(" package:scope/name "), "package:scope/name");
+  assert.equal(normalizeKey("@scope/package"), "@scope/package");
+  assert.equal(normalizeKey("package:@scope/package"), "package:@scope/package");
+  assert.equal(normalizeKey("formula:libfoo+ssl"), "formula:libfoo+ssl");
   assert.throws(() => normalizeKey("../escape"), TypeError);
+  assert.throws(() => normalizeKey("package:@scope/../escape"), TypeError);
   assert.throws(() => normalizeKey(""), TypeError);
 });
 
