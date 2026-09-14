@@ -1,0 +1,51 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "zed-pkg-coordinator",
+  "main": "./worker.mjs",
+  "compatibility_date": "2026-09-14",
+  "workers_dev": false,
+  "preview_urls": false,
+  "durable_objects": {
+    "bindings": [
+      { "name": "COORDINATOR", "class_name": "ZedPackageCoordinator" }
+    ]
+  },
+  "exports": {
+    "ZedPackageCoordinator": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    }
+  },
+  "env": {
+    "preview": {
+      "name": "zed-pkg-coordinator-preview",
+      "workers_dev": false,
+      "preview_urls": true,
+      "durable_objects": {
+        "bindings": [
+          { "name": "COORDINATOR", "class_name": "ZedPackageCoordinator" }
+        ]
+      }
+    },
+    "staging": {
+      "name": "zed-pkg-coordinator-staging",
+      "workers_dev": false,
+      "preview_urls": false,
+      "durable_objects": {
+        "bindings": [
+          { "name": "COORDINATOR", "class_name": "ZedPackageCoordinator" }
+        ]
+      }
+    },
+    "production": {
+      "name": "zed-pkg-coordinator-production",
+      "workers_dev": false,
+      "preview_urls": false,
+      "durable_objects": {
+        "bindings": [
+          { "name": "COORDINATOR", "class_name": "ZedPackageCoordinator" }
+        ]
+      }
+    }
+  }
+}

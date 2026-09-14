@@ -1,0 +1,71 @@
+name: infra-layout-validate
+
+on:
+  pull_request:
+    paths:
+      - ".ores-infra.toml"
+      - "modules/**"
+      - "environments/**"
+      - ".github/workflows/infra-layout-validate.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - ".ores-infra.toml"
+      - "modules/**"
+      - "environments/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: infra-layout-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  terraform:
+    name: Terraform / ${{ matrix.environment }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        environment:
+          - preview
+          - staging
+          - production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.16.2
+      - name: Check Terraform formatting
+        shell: bash
+        run: |
+          terraform fmt -check -recursive modules/cloudflare/terraform
+          terraform fmt -check -recursive "environments/${{ matrix.environment }}"
+      - name: Initialize without remote backend
+        working-directory: environments/${{ matrix.environment }}
+        run: terraform init -backend=false -input=false
+      - name: Validate
+        working-directory: environments/${{ matrix.environment }}
+        run: terraform validate -no-color
+
+  cloudflare-worker:
+    name: Cloudflare Worker dry run
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Validate Worker if present
+        shell: bash
+        run: |
+          if [[ ! -f modules/cloudflare/durable-coordinator/package.json ]]; then
+            echo "No durable-coordinator in this repo; skipping."
+            exit 0
+          fi
+          cd modules/cloudflare/durable-coordinator
+          node --check worker.mjs
+          npm install --ignore-scripts --no-audit --no-fund
+          npm run check
