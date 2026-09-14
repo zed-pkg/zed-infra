@@ -3,7 +3,11 @@ export const MAX_LEASE_TTL_MS = 300_000;
 
 export function normalizeKey(value) {
   const key = String(value).trim();
-  if (!/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/.test(key) || key.includes("..")) {
+  // Zed coordinates package resources across multiple ecosystems. In particular,
+  // npm-compatible scoped names such as @scope/package are valid lock keys.
+  // Keep the alphabet deliberately small while permitting @ as a package-name
+  // character; traversal remains forbidden independently.
+  if (!/^[A-Za-z0-9@][A-Za-z0-9@._:/+-]{0,255}$/.test(key) || key.includes("..")) {
     throw new TypeError("key must be a safe 1-256 character identifier");
   }
   return key;
