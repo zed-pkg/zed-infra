@@ -3,13 +3,14 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "engines": { "node": ">=22" },
   "scripts": {
-    "check": "node --check worker.mjs && wrangler deploy --dry-run --env preview",
+    "test": "node --test protocol.test.mjs",
+    "cf:types": "wrangler types --env-interface CloudflareBindings",
+    "check": "npm test && npm run cf:types && wrangler deploy --dry-run --env preview --outdir .wrangler/dry-run",
     "deploy:preview": "wrangler deploy --env preview",
     "deploy:staging": "wrangler deploy --env staging",
     "deploy:production": "wrangler deploy --env production"
   },
-  "devDependencies": {
-    "wrangler": "4.131.1"
-  }
+  "devDependencies": { "wrangler": "4.131.1" }
 }
