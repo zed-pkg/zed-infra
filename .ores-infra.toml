@@ -1,24 +1,37 @@
 schema_version = 1
+contract = "provider-sync-adapters-v1"
 layout = "modules"
 modules_root = "modules"
 environments_root = "environments"
 
-# This file is an ORESoftware convention/validation manifest. Provider-native
-# Git integrations still use the directory settings documented below.
-
-[providers.cloudflare]
-canonical_path = "modules/cloudflare"
-native_root_directory = "modules/cloudflare"
-native_sync = "root-directory"
-config_globs = ["wrangler.toml", "wrangler.json", "wrangler.jsonc"]
+[layout]
+modules_dir = "modules"
+environments_dir = "environments"
 
 [providers.supabase]
+working_directory = "modules"
+native_directory = "supabase"
+native_config = "supabase/config.toml"
+module_directory = "modules/supabase"
 canonical_path = "modules/supabase"
 native_working_directory = "modules"
 native_expected_directory = "supabase"
 native_sync = "working-directory"
 
+[providers.cloudflare]
+root_directory_strategy = "directory-containing-wrangler-config"
+native_config_names = ["wrangler.jsonc", "wrangler.json", "wrangler.toml"]
+root_candidates = ["modules/cloudflare", "cloudflare", "workers", "."]
+module_directory = "modules/cloudflare"
+canonical_path = "modules/cloudflare"
+native_root_directory = "modules/cloudflare"
+native_sync = "root-directory"
+config_globs = ["wrangler.toml", "wrangler.json", "wrangler.jsonc"]
+
 [providers.neon]
+working_directory = "modules/neon"
+native_config = "neon.ts"
+module_directory = "modules/neon"
 canonical_path = "modules/neon"
 project_root = "modules/neon"
 config = "modules/neon/neon.ts"
