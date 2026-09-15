@@ -1,0 +1,36 @@
+[platform]
+version = 1
+profile = "standard"
+owner = "zed-pkg"
+event_bus = "nats-jetstream"
+table_format = "iceberg"
+
+[[pipeline]]
+name = "package-events-bronze"
+owner = "zed-pkg"
+mode = "streaming"
+engine = "rust"
+source = { kind = "nats-jetstream", subject = "ores.dp.zed-pkg.packages.>.v1" }
+sink = { tier = "bronze", format = "jsonl", dataset = "zed.package_events_raw" }
+quality = { reject_unknown_schema = true, require_event_id = true, require_event_time = true }
+lineage = { enabled = true, standard = "openlineage" }
+
+[[pipeline]]
+name = "package-ecosystem-silver"
+owner = "zed-pkg"
+mode = "microbatch"
+engine = "duckdb"
+source = { kind = "object-storage", dataset = "zed.package_events_raw" }
+sink = { tier = "silver", format = "iceberg", dataset = "zed.package_events" }
+quality = { reject_unknown_schema = true, require_event_id = true, require_event_time = true }
+lineage = { enabled = true, standard = "openlineage" }
+
+[[pipeline]]
+name = "dependency-health-gold"
+owner = "zed-pkg"
+mode = "batch"
+engine = "sql"
+source = { kind = "object-storage", dataset = "zed.package_events" }
+sink = { tier = "gold", format = "iceberg", dataset = "zed.dependency_health" }
+quality = { reject_unknown_schema = true, require_event_id = true, require_event_time = true }
+lineage = { enabled = true, standard = "openlineage" }
