@@ -10,7 +10,7 @@ name = "package-events-bronze"
 owner = "zed-pkg"
 mode = "streaming"
 engine = "rust"
-source = { kind = "nats-jetstream", subject = "ores.dp.zed-pkg.packages.>.v1" }
+source = { kind = "nats-jetstream", subject = "ores.dp.zed-pkg.packages.*.v1" }
 sink = { tier = "bronze", format = "jsonl", dataset = "zed.package_events_raw" }
 quality = { reject_unknown_schema = true, require_event_id = true, require_event_time = true }
 lineage = { enabled = true, standard = "openlineage" }
