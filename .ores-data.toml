@@ -1,28 +1,173 @@
+# Governed data-platform declaration for Zed Package Registry.
+# Shared contract authority: ores-data-platform/ores-dp-interfaces@ef0b19df1736ad6dcd8aaf2fa1be78c8b28e53e2
+# Desired dataflow only: no provider credentials, stream creation, or cloud/database apply occurs here.
+
 [platform]
 version = 1
 profile = "standard"
 owner = "zed-pkg"
 event_bus = "nats-jetstream"
 table_format = "iceberg"
+default_privacy = "internal"
+default_retention = { class = "standard", days = 400, legal_hold = false }
 
+# Package lifecycle and registry metadata.
 [[pipeline]]
 name = "package-events-bronze"
 owner = "zed-pkg"
 mode = "streaming"
 engine = "rust"
-source = { kind = "nats-jetstream", subject = "ores.dp.zed-pkg.packages.*.v1" }
-sink = { tier = "bronze", format = "jsonl", dataset = "zed.package_events_raw" }
-quality = { reject_unknown_schema = true, require_event_id = true, require_event_time = true }
+replayable = true
+source = { kind = "nats-jetstream", subject = "ores.dp.zed-pkg.packages.*.v1", partition_key = "packageId", contract = "PackageEvent@1" }
+sink = { tier = "bronze", format = "jsonl", dataset = "zed.package_events_raw", contract = "PackageEvent@1", privacy = "none", retention = { class = "standard", days = 400 } }
+quality = { reject_unknown_schema = true, require_event_id = true, require_event_time = true, require_idempotency_key = true, require_privacy_classification = true }
 lineage = { enabled = true, standard = "openlineage" }
 
 [[pipeline]]
-name = "package-ecosystem-silver"
+name = "package-events-silver"
 owner = "zed-pkg"
 mode = "microbatch"
 engine = "duckdb"
-source = { kind = "object-storage", dataset = "zed.package_events_raw" }
-sink = { tier = "silver", format = "iceberg", dataset = "zed.package_events" }
-quality = { reject_unknown_schema = true, require_event_id = true, require_event_time = true }
+replayable = true
+source = { kind = "object-storage", dataset = "zed.package_events_raw", partition_key = "packageId", contract = "PackageEvent@1" }
+sink = { tier = "silver", format = "iceberg", dataset = "zed.package_events", contract = "PackageEvent@1", privacy = "none", retention = { class = "long", days = 2555 } }
+quality = { reject_unknown_schema = true, require_event_id = true, require_event_time = true, require_idempotency_key = true, require_privacy_classification = true }
+lineage = { enabled = true, standard = "openlineage" }
+
+[[pipeline]]
+name = "package-adoption-gold"
+owner = "zed-pkg"
+mode = "batch"
+engine = "sql"
+replayable = true
+source = { kind = "object-storage", dataset = "zed.package_events", contract = "PackageEvent@1" }
+sink = { tier = "gold", format = "iceberg", dataset = "zed.package_adoption_daily", contract = "PackageAdoptionDaily@1", privacy = "none", retention = { class = "long", days = 2555 } }
+quality = { reject_unknown_schema = true, require_event_id = true, require_event_time = true, require_idempotency_key = true, require_privacy_classification = true }
+lineage = { enabled = true, standard = "openlineage" }
+
+# Installs: resolved version, client/release metadata, outcome and duration; never credentials or package-manager tokens.
+[[pipeline]]
+name = "install-events-bronze"
+owner = "zed-pkg"
+mode = "streaming"
+engine = "rust"
+replayable = true
+source = { kind = "nats-jetstream", subject = "ores.dp.zed-pkg.installs.*.v1", partition_key = "tenantId", contract = "InstallEvent@1" }
+sink = { tier = "bronze", format = "jsonl", dataset = "zed.install_events_raw", contract = "InstallEvent@1", privacy = "personal", retention = { class = "standard", days = 400 } }
+quality = { reject_unknown_schema = true, require_event_id = true, require_event_time = true, require_idempotency_key = true, require_privacy_classification = true }
+lineage = { enabled = true, standard = "openlineage" }
+
+[[pipeline]]
+name = "install-events-silver"
+owner = "zed-pkg"
+mode = "microbatch"
+engine = "duckdb"
+replayable = true
+source = { kind = "object-storage", dataset = "zed.install_events_raw", partition_key = "tenantId", contract = "InstallEvent@1" }
+sink = { tier = "silver", format = "iceberg", dataset = "zed.install_events", contract = "InstallEvent@1", privacy = "personal", retention = { class = "standard", days = 400 } }
+quality = { reject_unknown_schema = true, require_event_id = true, require_event_time = true, require_idempotency_key = true, require_privacy_classification = true }
+lineage = { enabled = true, standard = "openlineage" }
+
+[[pipeline]]
+name = "install-health-gold"
+owner = "zed-pkg"
+mode = "batch"
+engine = "sql"
+replayable = true
+source = { kind = "object-storage", dataset = "zed.install_events", contract = "InstallEvent@1" }
+sink = { tier = "gold", format = "iceberg", dataset = "zed.install_health_daily", contract = "InstallHealthDaily@1", privacy = "personal", retention = { class = "long", days = 2555 } }
+quality = { reject_unknown_schema = true, require_event_id = true, require_event_time = true, require_idempotency_key = true, require_privacy_classification = true }
+lineage = { enabled = true, standard = "openlineage" }
+
+# Downloads: package/version/artifact/outcome metadata. Raw network addresses must be excluded or irreversibly transformed before analytics ingestion.
+[[pipeline]]
+name = "download-events-bronze"
+owner = "zed-pkg"
+mode = "streaming"
+engine = "rust"
+replayable = true
+source = { kind = "nats-jetstream", subject = "ores.dp.zed-pkg.downloads.*.v1", partition_key = "tenantId", contract = "DownloadEvent@1" }
+sink = { tier = "bronze", format = "jsonl", dataset = "zed.download_events_raw", contract = "DownloadEvent@1", privacy = "personal", retention = { class = "standard", days = 400 } }
+quality = { reject_unknown_schema = true, require_event_id = true, require_event_time = true, require_idempotency_key = true, require_privacy_classification = true }
+lineage = { enabled = true, standard = "openlineage" }
+
+[[pipeline]]
+name = "download-events-silver"
+owner = "zed-pkg"
+mode = "microbatch"
+engine = "duckdb"
+replayable = true
+source = { kind = "object-storage", dataset = "zed.download_events_raw", partition_key = "tenantId", contract = "DownloadEvent@1" }
+sink = { tier = "silver", format = "iceberg", dataset = "zed.download_events", contract = "DownloadEvent@1", privacy = "personal", retention = { class = "standard", days = 400 } }
+quality = { reject_unknown_schema = true, require_event_id = true, require_event_time = true, require_idempotency_key = true, require_privacy_classification = true }
+lineage = { enabled = true, standard = "openlineage" }
+
+[[pipeline]]
+name = "download-adoption-gold"
+owner = "zed-pkg"
+mode = "batch"
+engine = "sql"
+replayable = true
+source = { kind = "object-storage", dataset = "zed.download_events", contract = "DownloadEvent@1" }
+sink = { tier = "gold", format = "iceberg", dataset = "zed.download_adoption_daily", contract = "DownloadAdoptionDaily@1", privacy = "personal", retention = { class = "long", days = 2555 } }
+quality = { reject_unknown_schema = true, require_event_id = true, require_event_time = true, require_idempotency_key = true, require_privacy_classification = true }
+lineage = { enabled = true, standard = "openlineage" }
+
+# Builds: reproducibility, target/toolchain, cache and failure metadata; no build secrets or environment values.
+[[pipeline]]
+name = "build-events-bronze"
+owner = "zed-pkg"
+mode = "streaming"
+engine = "rust"
+replayable = true
+source = { kind = "nats-jetstream", subject = "ores.dp.zed-pkg.builds.*.v1", partition_key = "projectId", contract = "BuildEvent@1" }
+sink = { tier = "bronze", format = "jsonl", dataset = "zed.build_events_raw", contract = "BuildEvent@1", privacy = "internal", retention = { class = "standard", days = 400 } }
+quality = { reject_unknown_schema = true, require_event_id = true, require_event_time = true, require_idempotency_key = true, require_privacy_classification = true }
+lineage = { enabled = true, standard = "openlineage" }
+
+[[pipeline]]
+name = "build-events-silver"
+owner = "zed-pkg"
+mode = "microbatch"
+engine = "duckdb"
+replayable = true
+source = { kind = "object-storage", dataset = "zed.build_events_raw", partition_key = "projectId", contract = "BuildEvent@1" }
+sink = { tier = "silver", format = "iceberg", dataset = "zed.build_events", contract = "BuildEvent@1", privacy = "internal", retention = { class = "standard", days = 400 } }
+quality = { reject_unknown_schema = true, require_event_id = true, require_event_time = true, require_idempotency_key = true, require_privacy_classification = true }
+lineage = { enabled = true, standard = "openlineage" }
+
+[[pipeline]]
+name = "build-reliability-gold"
+owner = "zed-pkg"
+mode = "batch"
+engine = "sql"
+replayable = true
+source = { kind = "object-storage", dataset = "zed.build_events", contract = "BuildEvent@1" }
+sink = { tier = "gold", format = "iceberg", dataset = "zed.build_reliability_daily", contract = "BuildReliabilityDaily@1", privacy = "internal", retention = { class = "long", days = 2555 } }
+quality = { reject_unknown_schema = true, require_event_id = true, require_event_time = true, require_idempotency_key = true, require_privacy_classification = true }
+lineage = { enabled = true, standard = "openlineage" }
+
+# Dependency resolution: graph edges, requested/resolved constraints, solver outcomes and immutable provenance.
+[[pipeline]]
+name = "dependency-resolution-bronze"
+owner = "zed-pkg"
+mode = "streaming"
+engine = "rust"
+replayable = true
+source = { kind = "nats-jetstream", subject = "ores.dp.zed-pkg.dependencies.*.v1", partition_key = "projectId", contract = "DependencyResolutionEvent@1" }
+sink = { tier = "bronze", format = "jsonl", dataset = "zed.dependency_resolution_raw", contract = "DependencyResolutionEvent@1", privacy = "internal", retention = { class = "standard", days = 400 } }
+quality = { reject_unknown_schema = true, require_event_id = true, require_event_time = true, require_idempotency_key = true, require_privacy_classification = true }
+lineage = { enabled = true, standard = "openlineage" }
+
+[[pipeline]]
+name = "dependency-resolution-silver"
+owner = "zed-pkg"
+mode = "microbatch"
+engine = "duckdb"
+replayable = true
+source = { kind = "object-storage", dataset = "zed.dependency_resolution_raw", partition_key = "projectId", contract = "DependencyResolutionEvent@1" }
+sink = { tier = "silver", format = "iceberg", dataset = "zed.dependency_resolution", contract = "DependencyResolutionEvent@1", privacy = "internal", retention = { class = "long", days = 2555 } }
+quality = { reject_unknown_schema = true, require_event_id = true, require_event_time = true, require_idempotency_key = true, require_privacy_classification = true }
 lineage = { enabled = true, standard = "openlineage" }
 
 [[pipeline]]
@@ -30,7 +175,8 @@ name = "dependency-health-gold"
 owner = "zed-pkg"
 mode = "batch"
 engine = "sql"
-source = { kind = "object-storage", dataset = "zed.package_events" }
-sink = { tier = "gold", format = "iceberg", dataset = "zed.dependency_health" }
-quality = { reject_unknown_schema = true, require_event_id = true, require_event_time = true }
+replayable = true
+source = { kind = "object-storage", dataset = "zed.dependency_resolution", contract = "DependencyResolutionEvent@1" }
+sink = { tier = "gold", format = "iceberg", dataset = "zed.dependency_health", contract = "DependencyHealth@1", privacy = "internal", retention = { class = "long", days = 2555 } }
+quality = { reject_unknown_schema = true, require_event_id = true, require_event_time = true, require_idempotency_key = true, require_privacy_classification = true }
 lineage = { enabled = true, standard = "openlineage" }
