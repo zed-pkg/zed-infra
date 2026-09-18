@@ -237,3 +237,110 @@ test("a private GitHub repository is never used as public fallback", async () =>
   assert.ok(seen.every((call) => call.authorization === null));
   assert.equal(seen.length, 4);
 });
+
+test("a digest-named release asset answers a version read while the origin is down", async () => {
+  // What `zed publish` actually uploads: one asset named after its own
+  // content address, with no conventionally named asset and no sidecar.
+  const sha = "fea1f81d31f220bc2c4bdb548546b52e4d7c929e12b64b590143fe75b184ae75";
+  const asset = `zpkg-${sha}.tar.gz`;
+  const downloadUrl =
+    `https://github.com/ores-wasm-loaders/owls-interfaces/releases/download/v0.1.1/${asset}`;
+  const seen = [];
+  globalThis.fetch = async (input) => {
+    const url = input instanceof Request ? input.url : String(input);
+    seen.push(url);
+    if (url.startsWith("https://api.zpkg.net")) {
+      return new Response("origin down", { status: 503 });
+    }
+    if (url === "https://api.github.com/repos/ores-wasm-loaders/owls-interfaces") {
+      return new Response(
+        JSON.stringify({
+          private: false,
+          visibility: "public",
+          owner: { login: "ores-wasm-loaders" },
+          name: "owls-interfaces",
+          default_branch: "main",
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    if (
+      url ===
+      "https://api.github.com/repos/ores-wasm-loaders/owls-interfaces/releases/tags/v0.1.1"
+    ) {
+      return new Response(
+        JSON.stringify({
+          draft: false,
+          published_at: "2026-09-13T00:00:00Z",
+          target_commitish: "291406191b55606e34b7980b42112e9c77ab690b",
+          assets: [
+            { name: asset, browser_download_url: downloadUrl, size: 5659, digest: `sha256:${sha}` },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    return new Response("not found", { status: 404 });
+  };
+
+  const response = await worker.fetch(
+    request("/v1/packages/ores-wasm-loaders/owls-interfaces/versions/0.1.1"),
+    { ORIGIN_URL: "https://api.zpkg.net" },
+  );
+
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.sha256, sha);
+  assert.equal(body.size, 5659);
+  assert.equal(body.download_url, downloadUrl);
+  assert.equal(body.vcs_tag, "v0.1.1");
+  assert.equal(body.format, "tar.gz");
+  // The bytes must be served straight from github.com, never from our origin.
+  assert.ok(seen.some((url) => url.startsWith("https://api.github.com/repos/")));
+});
+
+test("a digest-named asset whose reported digest disagrees is refused", async () => {
+  const sha = "a".repeat(64);
+  const asset = `zpkg-${sha}.tar.gz`;
+  globalThis.fetch = async (input) => {
+    const url = input instanceof Request ? input.url : String(input);
+    if (url.startsWith("https://api.zpkg.net")) {
+      return new Response("origin down", { status: 503 });
+    }
+    if (url === "https://api.github.com/repos/acme/http-kit") {
+      return new Response(
+        JSON.stringify({
+          private: false,
+          visibility: "public",
+          owner: { login: "acme" },
+          name: "http-kit",
+          default_branch: "main",
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    if (url === "https://api.github.com/repos/acme/http-kit/releases/tags/v1.2.0") {
+      return new Response(
+        JSON.stringify({
+          draft: false,
+          assets: [
+            {
+              name: asset,
+              browser_download_url: `https://github.com/acme/http-kit/releases/download/v1.2.0/${asset}`,
+              size: 10,
+              // GitHub disagrees with the name: the asset is not what it claims.
+              digest: `sha256:${"b".repeat(64)}`,
+            },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    return new Response("not found", { status: 404 });
+  };
+
+  const response = await worker.fetch(request("/v1/packages/acme/http-kit/versions/1.2.0"), {
+    ORIGIN_URL: "https://api.zpkg.net",
+  });
+  assert.equal(response.status, 503);
+});

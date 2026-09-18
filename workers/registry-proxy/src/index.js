@@ -7,6 +7,7 @@ import {
   githubHeaders,
   githubIdentity,
   githubRawManifestUrl,
+  digestFromReleaseAssetName,
   githubReleaseAssetNames,
   githubReleaseDownloadUrl,
   githubReleaseSidecarNames,
@@ -531,10 +532,28 @@ async function versionFromGithub(identity, version, env) {
     }
 
     const wanted = new Set(githubReleaseAssetNames(identity.owner, identity.repo, version));
-    const artifact = assets.find((asset) => wanted.has(asset.name));
-    const digest = String(artifact?.digest || "").replace(/^sha256:/, "");
+    const named = assets.find((asset) => wanted.has(asset.name));
+    // `zed publish` names the packed artifact after its own digest, so a real
+    // release usually carries `zpkg-<sha256>.tar.gz` and no conventionally
+    // named asset at all. Accept that form: the digest is the content address
+    // itself, and GitHub's reported digest must agree when it sends one.
+    const addressed = named
+      ? null
+      : assets.find(
+          (asset) =>
+            digestFromReleaseAssetName(asset?.name, "tar.gz") ||
+            digestFromReleaseAssetName(asset?.name, "zip"),
+        );
+    const artifact = named || addressed;
+    const reported = String(artifact?.digest || "").replace(/^sha256:/, "");
+    const addressedDigest = addressed
+      ? digestFromReleaseAssetName(addressed.name, addressed.name.endsWith(".zip") ? "zip" : "tar.gz")
+      : null;
+    const digest = addressed ? addressedDigest : reported;
+    const digestAgrees = !addressed || !reported || reported === addressedDigest;
     if (
       artifact &&
+      digestAgrees &&
       SHA256.test(digest) &&
       isExpectedGithubDownload(identity, tag, artifact.name, artifact.browser_download_url)
     ) {
@@ -607,6 +626,10 @@ function isAllowedPublishedDownload(rawUrl, sha256, identity, version) {
   const assets = [
     ...githubReleaseAssetNames(identity.owner, identity.repo, version, "tar.gz"),
     ...githubReleaseAssetNames(identity.owner, identity.repo, version, "zip"),
+    // The digest-named form a sidecar may legitimately point at. The name is
+    // the content address the caller already committed to verifying.
+    `zpkg-${sha256}.tar.gz`,
+    `zpkg-${sha256}.zip`,
   ];
   return gitTagsForVersion(version).some((tag) =>
     assets.some((asset) => isExpectedGithubDownload(identity, tag, asset, rawUrl)),

@@ -65,6 +65,21 @@ export function githubReleaseSidecarNames(org, name, version) {
   return names;
 }
 
+/**
+ * `zed publish` names a packed artifact after its own digest
+ * (`zpkg-<sha256>.tar.gz`), so the published asset name carries the exact
+ * content address and does not embed org, name, or version. Return that digest
+ * for such an asset, or null. Callers still verify the asset's reported digest
+ * and its download URL before trusting it.
+ */
+export function digestFromReleaseAssetName(name, ext = "tar.gz") {
+  if (typeof name !== "string") return null;
+  const suffix = `.${ext}`;
+  if (!name.startsWith("zpkg-") || !name.endsWith(suffix)) return null;
+  const digest = name.slice("zpkg-".length, name.length - suffix.length);
+  return isSha256(digest) ? digest : null;
+}
+
 export function githubIdentity(org, name) {
   return { owner: org, repo: name };
 }
