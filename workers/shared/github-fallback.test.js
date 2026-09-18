@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   classifyRegistryRequest,
+  digestFromReleaseAssetName,
   githubFallbackUrlsForCdn,
   githubReleaseAssetNames,
   githubReleaseSidecarNames,
@@ -188,4 +189,19 @@ test("cdn package keys fall back to GitHub Release download URLs", () => {
       "https://github.com/zed-pkg-test/node-lib/releases/download/v1.0.0/node-lib-1.0.0.tar.gz",
     ),
   );
+});
+
+test("digest-named release assets carry their own content address", () => {
+  const sha = "f".repeat(64);
+  assert.equal(digestFromReleaseAssetName(`zpkg-${sha}.tar.gz`), sha);
+  assert.equal(digestFromReleaseAssetName(`zpkg-${sha}.zip`, "zip"), sha);
+  // Wrong extension for the requested form, and conventional names, are not
+  // content addresses.
+  assert.equal(digestFromReleaseAssetName(`zpkg-${sha}.zip`), null);
+  assert.equal(digestFromReleaseAssetName("zpkg-acme-http-kit-1.2.0.tar.gz"), null);
+  // Anything that is not a full lowercase sha256 must not be mistaken for one.
+  assert.equal(digestFromReleaseAssetName(`zpkg-${"F".repeat(64)}.tar.gz`), null);
+  assert.equal(digestFromReleaseAssetName(`zpkg-${"a".repeat(63)}.tar.gz`), null);
+  assert.equal(digestFromReleaseAssetName("zpkg-../../etc/passwd.tar.gz"), null);
+  assert.equal(digestFromReleaseAssetName(null), null);
 });
