@@ -4,9 +4,11 @@ compatibility_date = "2026-08-28"
 compatibility_flags = ["nodejs_compat"]
 workers_dev = false
 
-# Hostname is the explicit machine-registry route set of zed-api-server.rs.
-# The Worker rejects account/auth/admin paths before origin I/O, including
-# compatibility account routes that also happen to live below /v1.
+# Hostnames are the explicit machine-registry routes set of zed-api-server.rs.
+# `zpkg.net/v1/*` is the canonical CLI/SDK entry point; the dedicated
+# `registry.zpkg.net/*` hostname remains as a compatibility route. The Worker
+# rejects account/auth/admin paths before origin I/O, including compatibility
+# account routes that also happen to live below /v1.
 # GitHub fallback is deliberately anonymous; do not attach a token that could
 # make private repositories observable to this public edge.
 # entry.js stamps every response with x-zed-edge: registry so outside-in
@@ -29,6 +31,13 @@ redact_query_string = true
 binding = "CDN"
 service = "zpkg-cdn"
 
+# Canonical client route. Keep this path-scoped so the zpkg.net website can
+# continue to own non-registry paths on the apex hostname.
+[[routes]]
+pattern = "zpkg.net/v1/*"
+zone_name = "zpkg.net"
+
+# Legacy/dedicated machine hostname kept for compatibility with older clients.
 [[routes]]
 pattern = "registry.zpkg.net/*"
 zone_name = "zpkg.net"
