@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  holderId,
   ALLOWED_WORKERS,
   buildLeaseRecord,
   decideAcquire,
@@ -157,4 +158,29 @@ test("lease record and argv stay deterministic", () => {
   assert.ok(ALLOWED_WORKERS.includes("zpkg-cdn"));
   assert.ok(ALLOWED_WORKERS.includes("zpkg-api-proxy"));
   assert.ok(ALLOWED_WORKERS.includes("zpkg-org-proxy"));
+});
+
+test("a lease holder identifies the deploy, not the process that wrote it", () => {
+  // Acquire and release are separate processes. Whatever identity they derive
+  // has to agree, or release refuses the lease its own deploy just took.
+  const ci = {
+    GITHUB_RUN_ID: "35380822981",
+    GITHUB_RUN_ATTEMPT: "1",
+    GITHUB_REPOSITORY: "zed-pkg/zed-infra",
+    USER: "runner",
+  };
+  assert.equal(holderId(ci), holderId({ ...ci }));
+  assert.equal(holderId(ci), "gha:zed-pkg/zed-infra#35380822981.1");
+  // A retried run is a different deploy and must not inherit the lease.
+  assert.notEqual(holderId(ci), holderId({ ...ci, GITHUB_RUN_ATTEMPT: "2" }));
+
+  const local = { USER: "alex", HOSTNAME: "citadel" };
+  assert.equal(holderId(local), "alex@citadel");
+  assert.equal(holderId(local), holderId({ ...local }));
+
+  // An explicit holder still wins, and no identity embeds a process id.
+  assert.equal(holderId({ ...ci, ZED_CF_LEASE_HOLDER: "operator" }), "operator");
+  for (const env of [ci, local, {}]) {
+    assert.ok(!holderId(env).includes(String(process.pid)), JSON.stringify(env));
+  }
 });
