@@ -17,8 +17,28 @@ workers_dev = false
 
 [vars]
 ORIGIN_URL = "https://api.zpkg.net"
+# Where published artifacts are advertised for download. The CDN Worker serves
+# this bucket's content-addressed objects, so an install never depends on the
+# registry host being reachable.
+CDN_PUBLIC_URL = "https://cdn.zpkg.net"
 ORIGIN_TIMEOUT_MS = "4000"
 FALLBACK_TIMEOUT_MS = "4000"
+
+# Publishing while no zed-api-server origin is running. The Worker writes the
+# same content-addressed keys the CDN already serves, so nothing else has to
+# change for a published package to be installable.
+#
+# The write path stays closed until an operator sets the publish secret:
+#
+#     wrangler secret put EDGE_PUBLISH_TOKEN --name zpkg-registry-proxy
+#
+# Without it the Worker keeps answering 503 for writes. The token authorizes
+# publishing; it does not prove org ownership, which only the origin's account
+# database can answer, so treat it as an operator credential and rotate it when
+# the origin takes publishing back.
+[[r2_buckets]]
+binding = "ARTIFACTS"
+bucket_name = "zed-pkg-artifacts"
 
 [observability]
 enabled = true

@@ -21,6 +21,13 @@ import {
   versionFromGitTag,
 } from "../../shared/github-fallback.js";
 import {
+  artifactKey,
+  edgePublishEnabled,
+  handleEdgePublish,
+  r2PackageIndex,
+  r2VersionMetadata,
+} from "../../shared/edge-publish.js";
+import {
   downloadFromNativeVersion,
   isAllowedNativeDownloadUrl,
   isPrivateOrUnpublished,
@@ -68,6 +75,25 @@ export default {
 
     if (decision.action === REGISTRY_ACTION.ORIGIN_WRITE) {
       if (originAvailable) return withEdge(origin, "origin", request.method);
+
+      // Publishing is the one write this edge can complete by itself: the
+      // bucket is the same one the CDN serves, and the uploaded bytes carry
+      // their own proof in the digest. It stays closed unless an operator
+      // configured a publish token, so the default remains "writes need the
+      // origin". Every other write still does.
+      const writeRoute = parseRegistryPath(url.pathname);
+      if (request.method === "PUT" && writeRoute?.kind === "get_version" && edgePublishEnabled(env)) {
+        const result = await handleEdgePublish(request, env, writeRoute);
+        // The response body stays exactly the published contract; the mirror
+        // outcome rides in a header so an operator can see it without the
+        // client having to understand a new field.
+        const annotations = { source: "edge-r2", headers: {} };
+        if (result.ghcr) {
+          annotations.headers["x-zpkg-ghcr"] = result.ghcr.ok ? "mirrored" : result.ghcr.reason;
+        }
+        return jsonResponse(result.body, result.status, annotations);
+      }
+
       return problem(
         503,
         "registry_origin_unavailable",
@@ -102,6 +128,15 @@ export default {
 
     if (decision.action === REGISTRY_ACTION.ORIGIN_READ) {
       if (originAvailable) return withEdge(origin, "origin", request.method);
+
+      // Content-addressed bytes need no origin to be trustworthy: the caller
+      // asked for a specific digest, and only that object can answer.
+      const readRoute = parseRegistryPath(url.pathname);
+      if (readRoute?.kind === "get_artifact" && env.ARTIFACTS) {
+        const artifact = await r2Artifact(env, readRoute.sha256, request);
+        if (artifact) return artifact;
+      }
+
       return problem(503, "registry_origin_unavailable", "registry read origin is unavailable", {
         "retry-after": "30",
       });
@@ -110,6 +145,13 @@ export default {
     const route = parseRegistryPath(url.pathname);
     if (!route || (route.kind !== "get_package" && route.kind !== "get_version")) {
       return problem(500, "invalid_edge_state", "registry edge reached an invalid state");
+    }
+
+    try {
+      const published = await r2PublishedFallback(route, env);
+      if (published) return responseForMethod(request.method, published);
+    } catch {
+      // A bucket problem must not deny the remaining public sources.
     }
 
     try {
@@ -136,6 +178,57 @@ export default {
     );
   },
 };
+
+/**
+ * Answer from what this edge itself published.
+ *
+ * Authoritative for zed-native coordinates: these documents were written by a
+ * publish that verified the digest, so they are consulted before third-party
+ * registries and before guessing at GitHub.
+ */
+async function r2PublishedFallback(route, env) {
+  if (!env.ARTIFACTS) return null;
+  if (route.kind === "get_version") {
+    const metadata = await r2VersionMetadata(env, route);
+    if (metadata) return jsonResponse(metadata, 200, { source: "edge-r2" });
+    return null;
+  }
+  if (route.kind === "get_package") {
+    const index = await r2PackageIndex(env, route);
+    if (index) return jsonResponse(index, 200, { source: "edge-r2" });
+  }
+  return null;
+}
+
+async function r2Artifact(env, sha256, request) {
+  // Both formats share one digest namespace, so the key is whichever object
+  // exists for it.
+  for (const format of ["tar.gz", "zip"]) {
+    const key = artifactKey(sha256, format);
+    if (!key) continue;
+    let object;
+    try {
+      object = await env.ARTIFACTS.get(key, { range: request.headers, onlyIf: request.headers });
+    } catch {
+      object = null;
+    }
+    if (!object) continue;
+    const headers = new Headers({
+      "content-type": key.endsWith(".zip") ? "application/zip" : "application/gzip",
+      "cache-control": "public, max-age=31536000, immutable",
+      "accept-ranges": "bytes",
+      "x-zed-source": "edge-r2",
+    });
+    if (typeof object.writeHttpMetadata === "function") object.writeHttpMetadata(headers);
+    if (object.httpEtag) headers.set("etag", object.httpEtag);
+    if (request.method === "HEAD") {
+      if ("size" in object) headers.set("content-length", String(object.size));
+      return new Response(null, { status: 200, headers });
+    }
+    return new Response(object.body, { status: 200, headers });
+  }
+  return null;
+}
 
 async function tryOrigin(request, env) {
   if (!env.ORIGIN_URL) return null;
