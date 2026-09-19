@@ -9,8 +9,8 @@ import {
   buildVersionMetadata,
   edgePublishEnabled,
   handleEdgePublish,
-  mergeVersionIntoIndex,
   packageIndexKey,
+  r2PackageMetadata,
   secretsMatch,
   sha256Hex,
   validatePublishMeta,
@@ -20,41 +20,82 @@ import {
 const TOKEN = "edge-publish-token-value";
 const ROUTE = { org: "oresoftware", name: "k8s-telemetry-rs", version: "0.2.0" };
 
-/** Minimal in-memory stand-in for the R2 binding. */
+/**
+ * In-memory stand-in for the R2 binding. It models `If-None-Match: *` so the
+ * handler's control flow can be unit tested; that R2 really evaluates it
+ * atomically is proven against workerd in tests/edge-publish.test.mjs.
+ */
 function fakeBucket(seed = {}) {
   const objects = new Map(Object.entries(seed));
+  const uploaded = new Map();
+  let clock = 0;
   return {
     objects,
-    async head(key) {
-      return objects.has(key) ? { key } : null;
-    },
     async get(key) {
       if (!objects.has(key)) return null;
       const value = objects.get(key);
-      return { async text() { return typeof value === "string" ? value : new TextDecoder().decode(value); } };
+      return {
+        async text() {
+          return typeof value === "string" ? value : new TextDecoder().decode(value);
+        },
+      };
     },
-    async put(key, value) {
+    async put(key, value, options = {}) {
+      const createOnly =
+        options.onlyIf instanceof Headers && options.onlyIf.get("if-none-match") === "*";
+      if (createOnly && objects.has(key)) return null;
       objects.set(key, value);
+      clock += 1;
+      uploaded.set(key, new Date(clock * 1000));
+      return { key };
+    },
+    async list({ prefix }) {
+      return {
+        truncated: false,
+        objects: [...objects.keys()]
+          .filter((key) => key.startsWith(prefix))
+          .map((key) => ({ key, uploaded: uploaded.get(key) })),
+      };
     },
   };
 }
 
-async function publishRequest(bytes, meta, token = TOKEN) {
+function enabledEnv(extra = {}) {
+  return {
+    ARTIFACTS: fakeBucket(),
+    EDGE_PUBLISH_TOKEN: TOKEN,
+    EDGE_PUBLISH_ENABLED: "true",
+    ...extra,
+  };
+}
+
+async function publishRequest(bytes, meta, token = TOKEN, { declareLength = true } = {}) {
   const form = new FormData();
   form.set("meta", JSON.stringify(meta));
   form.set("artifact", new Blob([bytes], { type: "application/gzip" }), "pkg.tar.gz");
-  const headers = new Headers();
+  const encoded = new Response(form);
+  const body = new Uint8Array(await encoded.arrayBuffer());
+  const headers = new Headers({ "content-type": encoded.headers.get("content-type") });
+  if (declareLength) headers.set("content-length", String(body.byteLength));
   if (token) headers.set("authorization", `Bearer ${token}`);
   return new Request("https://zpkg.net/v1/packages/oresoftware/k8s-telemetry-rs/versions/0.2.0", {
     method: "PUT",
-    body: form,
+    body,
     headers,
   });
 }
 
 async function metaFor(bytes, overrides = {}) {
   return {
-    manifest: { package: { org: ROUTE.org, name: ROUTE.name, version: ROUTE.version } },
+    manifest: {
+      package: {
+        org: ROUTE.org,
+        name: ROUTE.name,
+        version: ROUTE.version,
+        description: "fixture",
+        repository: { vcs: "git", url: "https://github.com/ORESoftware/k8s-libs-and-shared-defs" },
+      },
+    },
     vcs_tag: "v0.2.0",
     sha256: await sha256Hex(bytes),
     size: bytes.byteLength,
@@ -112,7 +153,12 @@ test("publishing is off unless an operator configured a secret and a bucket", as
   assert.equal(edgePublishEnabled({}), false);
   assert.equal(edgePublishEnabled({ ARTIFACTS: fakeBucket() }), false);
   assert.equal(edgePublishEnabled({ EDGE_PUBLISH_TOKEN: TOKEN }), false);
-  assert.equal(edgePublishEnabled({ ARTIFACTS: fakeBucket(), EDGE_PUBLISH_TOKEN: TOKEN }), true);
+  // A secret alone is not enough: the reviewed flag has to be on as well, so
+  // closing the path never depends on a secret having been deleted elsewhere.
+  assert.equal(edgePublishEnabled({ ARTIFACTS: fakeBucket(), EDGE_PUBLISH_TOKEN: TOKEN }), false);
+  assert.equal(edgePublishEnabled(enabledEnv({ EDGE_PUBLISH_ENABLED: "false" })), false);
+  assert.equal(edgePublishEnabled(enabledEnv({ EDGE_PUBLISH_ENABLED: "TRUE" })), false);
+  assert.equal(edgePublishEnabled(enabledEnv()), true);
 
   // An unconfigured edge keeps saying the origin is required, rather than
   // quietly accepting anonymous writes.
@@ -129,7 +175,7 @@ test("publishing is off unless an operator configured a secret and a bucket", as
 test("a wrong or missing token cannot publish", async () => {
   const bytes = new TextEncoder().encode("payload");
   const meta = await metaFor(bytes);
-  const env = { ARTIFACTS: fakeBucket(), EDGE_PUBLISH_TOKEN: TOKEN };
+  const env = enabledEnv();
 
   for (const token of [null, "wrong-token", TOKEN.slice(0, -1)]) {
     const response = await handleEdgePublish(await publishRequest(bytes, meta, token), env, ROUTE);
@@ -141,7 +187,7 @@ test("a wrong or missing token cannot publish", async () => {
 
 test("declared metadata must describe the bytes and the coordinates", async () => {
   const bytes = new TextEncoder().encode("payload");
-  const env = () => ({ ARTIFACTS: fakeBucket(), EDGE_PUBLISH_TOKEN: TOKEN });
+  const env = () => (enabledEnv());
 
   const mismatchedDigest = await metaFor(bytes, { sha256: "b".repeat(64) });
   let response = await handleEdgePublish(
@@ -170,7 +216,7 @@ test("declared metadata must describe the bytes and the coordinates", async () =
 test("a successful publish writes the artifact, the version and the index", async () => {
   const bytes = new TextEncoder().encode("a real tarball would go here");
   const meta = await metaFor(bytes);
-  const env = { ARTIFACTS: fakeBucket(), EDGE_PUBLISH_TOKEN: TOKEN };
+  const env = enabledEnv();
 
   const response = await handleEdgePublish(await publishRequest(bytes, meta), env, ROUTE);
   assert.equal(response.status, 201);
@@ -183,7 +229,6 @@ test("a successful publish writes the artifact, the version and the index", asyn
 
   const objectKey = `artifacts/${meta.sha256}.tar.gz`;
   const versionKey = "metadata/oresoftware/k8s-telemetry-rs/versions/0.2.0.json";
-  const indexKey = "metadata/oresoftware/k8s-telemetry-rs/index.json";
   assert.ok(env.ARTIFACTS.objects.has(objectKey), "artifact bytes are stored content addressed");
   assert.ok(env.ARTIFACTS.objects.has(versionKey), "version document is stored");
 
@@ -195,12 +240,24 @@ test("a successful publish writes the artifact, the version and the index", asyn
   // depend on the very service that is down.
   assert.equal(stored.download_url, `https://cdn.zpkg.net/artifacts/${meta.sha256}.tar.gz`);
 
-  assert.deepEqual(JSON.parse(env.ARTIFACTS.objects.get(indexKey)).versions, ["0.2.0"]);
+  // No index document is stored: it would be a read-modify-write that two
+  // concurrent publishes could lose an entry from.
+  assert.ok(
+    ![...env.ARTIFACTS.objects.keys()].some((key) => key.endsWith("/index.json")),
+    "the listing is derived, never stored",
+  );
+  const listing = await r2PackageMetadata(env, ROUTE);
+  assert.deepEqual(listing.versions, ["0.2.0"]);
+  assert.equal(listing.latest, "0.2.0");
+  // Required by the client's PackageMetadata; a listing without them does not
+  // deserialize.
+  assert.equal(listing.vcs, "git");
+  assert.equal(listing.repo_url, "https://github.com/ORESoftware/k8s-libs-and-shared-defs");
 });
 
 test("versions are immutable once published", async () => {
   const first = new TextEncoder().encode("first bytes");
-  const env = { ARTIFACTS: fakeBucket(), EDGE_PUBLISH_TOKEN: TOKEN };
+  const env = enabledEnv();
   const created = await handleEdgePublish(
     await publishRequest(first, await metaFor(first)),
     env,
@@ -226,7 +283,7 @@ test("versions are immutable once published", async () => {
 });
 
 test("an empty or oversized artifact is refused", async () => {
-  const env = { ARTIFACTS: fakeBucket(), EDGE_PUBLISH_TOKEN: TOKEN };
+  const env = enabledEnv();
   const empty = new Uint8Array(0);
   const response = await handleEdgePublish(
     await publishRequest(empty, await metaFor(empty)),
@@ -260,19 +317,20 @@ test("publisher signatures and mirrors survive the round trip", () => {
   assert.equal(metadata.download_url, `https://cdn.zpkg.net/artifacts/${"d".repeat(64)}.tar.gz`);
 });
 
-test("the package index keeps newest first and tolerates a corrupt prior index", () => {
-  const version = { org: "o", name: "p", version: "2.0.0" };
-  assert.deepEqual(mergeVersionIntoIndex({ versions: ["1.0.0"] }, version).versions, [
-    "2.0.0",
-    "1.0.0",
-  ]);
-  // Republishing the same version must not duplicate it.
-  assert.deepEqual(mergeVersionIntoIndex({ versions: ["2.0.0", "1.0.0"] }, version).versions, [
-    "2.0.0",
-    "1.0.0",
-  ]);
-  assert.deepEqual(mergeVersionIntoIndex(null, version).versions, ["2.0.0"]);
-  assert.deepEqual(mergeVersionIntoIndex("garbage", version).versions, ["2.0.0"]);
+test("a publish that does not declare its length is refused unread", async () => {
+  const bytes = new TextEncoder().encode("payload");
+  const env = enabledEnv();
+  const response = await handleEdgePublish(
+    await publishRequest(bytes, await metaFor(bytes), TOKEN, { declareLength: false }),
+    env,
+    ROUTE,
+  );
+  assert.equal(response.status, 411);
+  assert.equal(env.ARTIFACTS.objects.size, 0);
+});
+
+test("a package with no published versions has no listing", async () => {
+  assert.equal(await r2PackageMetadata(enabledEnv(), ROUTE), null);
 });
 
 test("metadata validation rejects the fields consumers depend on being sane", () => {
@@ -303,11 +361,7 @@ test("the GitHub Packages mirror never decides whether a publish succeeds", asyn
     return new Response(null, { status: 500 });
   };
   try {
-    const env = {
-      ARTIFACTS: fakeBucket(),
-      EDGE_PUBLISH_TOKEN: TOKEN,
-      GITHUB_PACKAGES_TOKEN: "github-pat",
-    };
+    const env = enabledEnv({ GITHUB_PACKAGES_TOKEN: "github-pat" });
     const response = await handleEdgePublish(await publishRequest(bytes, meta), env, ROUTE);
     assert.equal(response.status, 201);
     assert.equal(response.ghcr.ok, false);
@@ -331,7 +385,7 @@ test("no mirror is attempted when GitHub Packages is not configured", async () =
     return new Response(null, { status: 500 });
   };
   try {
-    const env = { ARTIFACTS: fakeBucket(), EDGE_PUBLISH_TOKEN: TOKEN };
+    const env = enabledEnv();
     const response = await handleEdgePublish(
       await publishRequest(bytes, await metaFor(bytes)),
       env,

@@ -21,10 +21,9 @@ import {
   versionFromGitTag,
 } from "../../shared/github-fallback.js";
 import {
-  artifactKey,
   edgePublishEnabled,
   handleEdgePublish,
-  r2PackageIndex,
+  r2PackageMetadata,
   r2VersionMetadata,
 } from "../../shared/edge-publish.js";
 import {
@@ -70,19 +69,27 @@ export default {
       });
     }
 
-    const origin = await tryOrigin(request, env);
-    const originAvailable = origin && !originIsUnavailable(origin.status);
-
-    if (decision.action === REGISTRY_ACTION.ORIGIN_WRITE) {
-      if (originAvailable) return withEdge(origin, "origin", request.method);
-
-      // Publishing is the one write this edge can complete by itself: the
-      // bucket is the same one the CDN serves, and the uploaded bytes carry
-      // their own proof in the digest. It stays closed unless an operator
-      // configured a publish token, so the default remains "writes need the
-      // origin". Every other write still does.
-      const writeRoute = parseRegistryPath(url.pathname);
-      if (request.method === "PUT" && writeRoute?.kind === "get_version" && edgePublishEnabled(env)) {
+    // Publishing is the one write this edge can complete by itself: the
+    // bucket is the same one the CDN serves, and the uploaded bytes carry
+    // their own proof in their digest. It stays closed unless an operator
+    // enabled it, so the default remains "writes need the origin". Every
+    // other write still does.
+    //
+    // A request body can be read once. Forwarding a publish to the origin
+    // first would consume it, leaving nothing for the edge to store when the
+    // origin turns out to be down — and would stream a whole artifact at a
+    // dead host before finding that out. So a publish asks the origin whether
+    // it is up with a bodiless probe, and only then decides who gets the body.
+    const writeRoute =
+      decision.action === REGISTRY_ACTION.ORIGIN_WRITE && request.method === "PUT"
+        ? parseRegistryPath(url.pathname)
+        : null;
+    if (writeRoute?.kind === "get_version" && edgePublishEnabled(env)) {
+      const probe = await tryOrigin(
+        new Request(new URL("/healthz", request.url), { method: "GET" }),
+        env,
+      );
+      if (!probe || originIsUnavailable(probe.status)) {
         const result = await handleEdgePublish(request, env, writeRoute);
         // The response body stays exactly the published contract; the mirror
         // outcome rides in a header so an operator can see it without the
@@ -93,7 +100,13 @@ export default {
         }
         return jsonResponse(result.body, result.status, annotations);
       }
+    }
 
+    const origin = await tryOrigin(request, env);
+    const originAvailable = origin && !originIsUnavailable(origin.status);
+
+    if (decision.action === REGISTRY_ACTION.ORIGIN_WRITE) {
+      if (originAvailable) return withEdge(origin, "origin", request.method);
       return problem(
         503,
         "registry_origin_unavailable",
@@ -132,8 +145,8 @@ export default {
       // Content-addressed bytes need no origin to be trustworthy: the caller
       // asked for a specific digest, and only that object can answer.
       const readRoute = parseRegistryPath(url.pathname);
-      if (readRoute?.kind === "get_artifact" && env.ARTIFACTS) {
-        const artifact = await r2Artifact(env, readRoute.sha256, request);
+      if (readRoute?.kind === "get_artifact") {
+        const artifact = await cdnArtifact(env, readRoute.sha256, request);
         if (artifact) return artifact;
       }
 
@@ -194,40 +207,49 @@ async function r2PublishedFallback(route, env) {
     return null;
   }
   if (route.kind === "get_package") {
-    const index = await r2PackageIndex(env, route);
-    if (index) return jsonResponse(index, 200, { source: "edge-r2" });
+    const listing = await r2PackageMetadata(env, route);
+    if (listing) return jsonResponse(listing, 200, { source: "edge-r2" });
   }
   return null;
 }
 
-async function r2Artifact(env, sha256, request) {
-  // Both formats share one digest namespace, so the key is whichever object
-  // exists for it.
-  for (const format of ["tar.gz", "zip"]) {
-    const key = artifactKey(sha256, format);
-    if (!key) continue;
-    let object;
-    try {
-      object = await env.ARTIFACTS.get(key, { range: request.headers, onlyIf: request.headers });
-    } catch {
-      object = null;
-    }
-    if (!object) continue;
-    const headers = new Headers({
-      "content-type": key.endsWith(".zip") ? "application/zip" : "application/gzip",
-      "cache-control": "public, max-age=31536000, immutable",
-      "accept-ranges": "bytes",
-      "x-zed-source": "edge-r2",
+/**
+ * Content-addressed bytes, served by the CDN Worker over the service binding.
+ *
+ * The CDN already implements ranges, conditional requests, ETags and the
+ * security headers for exactly these objects, and that implementation is the
+ * audited one. Reading the bucket a second way here would be a second place
+ * for `206`/`304` behaviour to be subtly wrong.
+ */
+async function cdnArtifact(env, sha256, request) {
+  if (!env.CDN) return null;
+  const base = (env.CDN_PUBLIC_URL || "https://cdn.zpkg.net").replace(/\/+$/, "");
+  // Both formats share one digest namespace, so the object is whichever exists.
+  for (const extension of ["tar.gz", "zip"]) {
+    const forwarded = new Request(`${base}/artifacts/${sha256}.${extension}`, {
+      method: request.method,
+      headers: conditionalHeaders(request.headers),
     });
-    if (typeof object.writeHttpMetadata === "function") object.writeHttpMetadata(headers);
-    if (object.httpEtag) headers.set("etag", object.httpEtag);
-    if (request.method === "HEAD") {
-      if ("size" in object) headers.set("content-length", String(object.size));
-      return new Response(null, { status: 200, headers });
+    let response;
+    try {
+      response = await env.CDN.fetch(forwarded);
+    } catch {
+      return null;
     }
-    return new Response(object.body, { status: 200, headers });
+    // 206 and 304 are answers, not misses.
+    if (response.status !== 404) return response;
   }
   return null;
+}
+
+/** Only the headers that select or validate a representation are forwarded. */
+function conditionalHeaders(headers) {
+  const forwarded = new Headers();
+  for (const name of ["range", "if-none-match", "if-match", "if-modified-since", "if-range"]) {
+    const value = headers.get(name);
+    if (value) forwarded.set(name, value);
+  }
+  return forwarded;
 }
 
 async function tryOrigin(request, env) {

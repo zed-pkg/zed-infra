@@ -7,15 +7,25 @@
  * database. None of that exists here, so this path is deliberately narrower
  * than the origin's:
  *
- * - It is off unless an operator sets `EDGE_PUBLISH_TOKEN`. A registry that
+ * - It is off unless `EDGE_PUBLISH_ENABLED` is exactly "true" *and* an operator
+ *   set `EDGE_PUBLISH_TOKEN`. Two switches on purpose: the flag is reviewed
+ *   configuration, so turning the path off is a one-line rollback that does
+ *   not depend on a secret having been deleted somewhere else. A registry that
  *   accepts anonymous writes is a supply-chain attack waiting to happen, so
- *   absence of the secret keeps the old 503 rather than opening the door.
+ *   either one missing keeps the old 503.
  * - The token is a single operator credential. It proves "may publish", not
  *   "owns this org" — the edge has no account database to answer ownership
  *   with, and pretending otherwise would be worse than saying so.
- * - Versions are immutable. An existing version is never overwritten, because
- *   consumers pin `sha256` and a silent swap is indistinguishable from an
- *   attack.
+ * - Versions are immutable, and atomically so. The version document is
+ *   written with `If-None-Match: *`, which R2 evaluates as a single
+ *   create-if-absent operation: of any number of concurrent publishes of one
+ *   coordinate exactly one establishes it and the rest get 409. A
+ *   check-then-write would let two racers both observe absence and the last
+ *   writer win, which is precisely the swap consumers pin `sha256` against.
+ * - There is no stored package index. A listing kept as a document is a
+ *   read-modify-write, and two concurrent publishes of *different* versions
+ *   could each erase the other from it. The listing is derived from the
+ *   version documents instead, so it cannot disagree with them.
  * - The uploaded bytes are hashed here and must match the digest the client
  *   declared, which is what the origin does and what `zed publish` documents.
  *
@@ -29,8 +39,13 @@ import { ghcrRepositoryPath, pushArtifactToGhcr } from "./ghcr.js";
 export const PUBLISH_META_FIELD = "meta";
 export const PUBLISH_ARTIFACT_FIELD = "artifact";
 
-/** Matches the CDN Worker's public artifact ceiling. */
-export const MAX_PUBLISH_ARTIFACT_BYTES = 110 * 1024 * 1024;
+/**
+ * Deliberately far below the CDN's 110 MiB read ceiling. Multipart parsing
+ * buffers the body and hashing needs the bytes, so an upload is resident more
+ * than once inside a Worker's memory limit. Packages larger than this publish
+ * through the origin, which streams.
+ */
+export const MAX_PUBLISH_ARTIFACT_BYTES = 32 * 1024 * 1024;
 export const MAX_PUBLISH_META_BYTES = 1024 * 1024;
 
 const ORG_NAME = /^[a-z0-9][a-z0-9-]*$/;
@@ -103,7 +118,9 @@ export function bearerToken(request) {
 
 /** Whether edge publishing is configured at all. */
 export function edgePublishEnabled(env) {
-  return Boolean(env && env.ARTIFACTS && env.EDGE_PUBLISH_TOKEN);
+  return Boolean(
+    env && env.ARTIFACTS && env.EDGE_PUBLISH_TOKEN && env.EDGE_PUBLISH_ENABLED === "true",
+  );
 }
 
 export async function authorizePublish(request, env) {
@@ -175,6 +192,18 @@ export function buildVersionMetadata({ route, meta, sha256, size, cdnBase, publi
   if (typeof meta.vcs_commit === "string" && meta.vcs_commit !== "") {
     metadata.vcs_commit = meta.vcs_commit;
   }
+  // The facts a package listing needs, kept on the version that declared them
+  // so the listing can be derived instead of separately maintained.
+  const repository = meta.manifest?.package?.repository;
+  if (repository && typeof repository.url === "string") {
+    metadata.package = {
+      repo_url: repository.url,
+      vcs: typeof repository.vcs === "string" ? repository.vcs : "git",
+    };
+    if (typeof meta.manifest.package.description === "string") {
+      metadata.package.description = meta.manifest.package.description;
+    }
+  }
   if (Array.isArray(meta.mirrors) && meta.mirrors.length > 0) metadata.mirrors = meta.mirrors;
   // Signatures are carried through untouched. The edge cannot add trust it
   // does not have, but it must not drop trust the publisher established.
@@ -182,27 +211,6 @@ export function buildVersionMetadata({ route, meta, sha256, size, cdnBase, publi
     metadata.signatures = meta.signatures;
   }
   return metadata;
-}
-
-/**
- * Fold a newly published version into the package index, newest first.
- *
- * A corrupt or absent index is rebuilt from this version rather than failing
- * the publish: the version document is the record of truth, and the index is
- * a convenience listing derived from it.
- */
-export function mergeVersionIntoIndex(existing, version) {
-  const base =
-    existing && typeof existing === "object" && !Array.isArray(existing) ? { ...existing } : {};
-  const versions = Array.isArray(base.versions)
-    ? base.versions.filter((value) => typeof value === "string" && value !== version.version)
-    : [];
-  return {
-    ...base,
-    org: version.org,
-    name: version.name,
-    versions: [version.version, ...versions],
-  };
 }
 
 /**
@@ -219,11 +227,50 @@ export async function r2VersionMetadata(env, route) {
   return readJsonObject(env, key);
 }
 
-export async function r2PackageIndex(env, route) {
+/**
+ * The package listing, derived from the version documents.
+ *
+ * Newest first by upload time. The package-level facts come from the newest
+ * version, which is the most recent statement the publisher made about them.
+ */
+export async function r2PackageMetadata(env, route) {
   if (!env || !env.ARTIFACTS) return null;
-  const key = packageIndexKey(route.org, route.name);
-  if (!key) return null;
-  return readJsonObject(env, key);
+  const indexKey = packageIndexKey(route.org, route.name);
+  if (!indexKey) return null;
+  const prefix = `metadata/${route.org}/${route.name}/versions/`;
+
+  const objects = [];
+  let cursor;
+  do {
+    let page;
+    try {
+      page = await env.ARTIFACTS.list({ prefix, cursor, limit: 1000 });
+    } catch {
+      return null;
+    }
+    objects.push(...page.objects);
+    cursor = page.truncated ? page.cursor : undefined;
+  } while (cursor);
+
+  const published = objects
+    .filter((object) => object.key.endsWith(".json"))
+    .sort((a, b) => new Date(b.uploaded).getTime() - new Date(a.uploaded).getTime());
+  if (published.length === 0) return null;
+
+  const versions = published.map((object) => object.key.slice(prefix.length, -".json".length));
+  const newest = await readJsonObject(env, published[0].key);
+  const facts = newest && typeof newest.package === "object" ? newest.package : {};
+  const metadata = {
+    org: route.org,
+    name: route.name,
+    vcs: typeof facts.vcs === "string" ? facts.vcs : "git",
+    repo_url: typeof facts.repo_url === "string" ? facts.repo_url : "",
+    latest: versions[0],
+    tags: [],
+    versions,
+  };
+  if (typeof facts.description === "string") metadata.description = facts.description;
+  return metadata;
 }
 
 async function readJsonObject(env, key) {
@@ -274,7 +321,17 @@ export async function handleEdgePublish(request, env, route, now = () => new Dat
     };
   }
 
-  const declaredLength = Number(request.headers.get("content-length") || 0);
+  // Parsing multipart buffers the whole body, so the bound has to be enforced
+  // before that starts. A request that does not declare its length cannot be
+  // bounded in advance and is refused rather than read.
+  const rawLength = request.headers.get("content-length");
+  const declaredLength = Number(rawLength);
+  if (rawLength === null || !Number.isInteger(declaredLength) || declaredLength < 0) {
+    return {
+      status: 411,
+      body: { error: "length_required", detail: "edge publishing requires Content-Length" },
+    };
+  }
   if (declaredLength > MAX_PUBLISH_ARTIFACT_BYTES + MAX_PUBLISH_META_BYTES) {
     return {
       status: 413,
@@ -351,24 +408,6 @@ export async function handleEdgePublish(request, env, route, now = () => new Dat
     return { status: 400, body: { error: "invalid_publish_target", detail: "unroutable coordinates" } };
   }
 
-  // Immutability: consumers pin a digest, so republishing a version under
-  // different bytes is indistinguishable from an attack.
-  let existing;
-  try {
-    existing = await env.ARTIFACTS.head(versionKey);
-  } catch {
-    existing = null;
-  }
-  if (existing) {
-    return {
-      status: 409,
-      body: {
-        error: "version_already_published",
-        detail: "this version already exists and versions are immutable",
-      },
-    };
-  }
-
   const publishedAt =
     typeof meta.published_at === "string" && meta.published_at !== ""
       ? meta.published_at
@@ -384,27 +423,31 @@ export async function handleEdgePublish(request, env, route, now = () => new Dat
   });
 
   // The artifact is written first: a version document that points at absent
-  // bytes would advertise an install that cannot complete.
+  // bytes would advertise an install that cannot complete. The key is the
+  // digest, so a concurrent or repeated write stores identical bytes and an
+  // abandoned one is unreferenced garbage, never a wrong answer.
   await env.ARTIFACTS.put(objectKey, bytes, {
     httpMetadata: {
       contentType: objectKey.endsWith(".zip") ? "application/zip" : "application/gzip",
       cacheControl: "public, max-age=31536000, immutable",
     },
   });
-  await env.ARTIFACTS.put(versionKey, JSON.stringify(versionMetadata), {
-    httpMetadata: { contentType: "application/json" },
-  });
 
-  // The index is a derived listing; a failure to refresh it must not fail a
-  // publish whose authoritative documents are already stored.
-  try {
-    const indexKey = packageIndexKey(route.org, route.name);
-    const index = mergeVersionIntoIndex(await readJsonObject(env, indexKey), versionMetadata);
-    await env.ARTIFACTS.put(indexKey, JSON.stringify(index), {
-      httpMetadata: { contentType: "application/json" },
-    });
-  } catch {
-    // Intentionally ignored; see above.
+  // The claim. `If-None-Match: *` makes this one create-if-absent operation in
+  // R2, so exactly one of any number of concurrent publishes establishes the
+  // version. `put` answers null when the precondition fails.
+  const claimed = await env.ARTIFACTS.put(versionKey, JSON.stringify(versionMetadata), {
+    httpMetadata: { contentType: "application/json" },
+    onlyIf: new Headers({ "If-None-Match": "*" }),
+  });
+  if (claimed === null) {
+    return {
+      status: 409,
+      body: {
+        error: "version_already_published",
+        detail: "this version already exists and versions are immutable",
+      },
+    };
   }
 
   // GitHub Packages is a second home for the same bytes, so the package
