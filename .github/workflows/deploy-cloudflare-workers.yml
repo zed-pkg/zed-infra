@@ -103,6 +103,22 @@ jobs:
           deploy_one org-proxy zpkg-org-proxy
           deploy_one cdn-proxy zpkg-cdn
 
+      # The Worker's secrets are made *equal* to what this repository declares,
+      # not merely topped up. A sync that only writes cannot take access away:
+      # deleting EDGE_PUBLISH_TOKEN here would otherwise leave the old
+      # credential live on the Worker with the write path still open. Absent or
+      # empty means revoked, and a revocation that fails fails the deploy.
+      #
+      # Values reach the script through the environment only; it never logs
+      # them and never puts them in argv. The reviewed EDGE_PUBLISH_ENABLED
+      # flag in wrangler.toml is the second, independent switch.
+      - name: Reconcile registry edge secrets
+        working-directory: workers
+        env:
+          EDGE_PUBLISH_TOKEN: ${{ secrets.EDGE_PUBLISH_TOKEN }}
+          GITHUB_PACKAGES_TOKEN: ${{ secrets.ZPKG_GITHUB_PACKAGES_TOKEN }}
+        run: node scripts/sync-worker-secrets.mjs zpkg-registry-proxy
+
       - name: Verify the app route no longer leaks the origin placeholder
         run: |
           set -euo pipefail
