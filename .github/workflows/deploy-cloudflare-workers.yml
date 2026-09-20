@@ -125,7 +125,8 @@ jobs:
           headers="${RUNNER_TEMP}/app-zpkg-net.headers"
           body="${RUNNER_TEMP}/app-zpkg-net.html"
           status="$(
-            curl -sS --retry 3 \
+            curl -sS --connect-timeout 5 --max-time 30 \
+              --retry 3 --retry-all-errors --retry-delay 2 \
               -H 'Accept: text/html' \
               -D "${headers}" \
               -o "${body}" \
@@ -156,7 +157,8 @@ jobs:
           api_headers="${RUNNER_TEMP}/api-zpkg-net.headers"
           api_body="${RUNNER_TEMP}/api-zpkg-net.json"
           api_status="$(
-            curl -sS --retry 8 --retry-all-errors --retry-delay 3 \
+            curl -sS --connect-timeout 5 --max-time 30 \
+              --retry 8 --retry-all-errors --retry-delay 3 \
               -H 'Accept: application/json' \
               -D "${api_headers}" \
               -o "${api_body}" \
@@ -180,7 +182,8 @@ jobs:
 
           org_headers="${RUNNER_TEMP}/org-zpkg-net.headers"
           org_status="$(
-            curl -sS --retry 20 --retry-all-errors --retry-delay 5 \
+            curl -sS --connect-timeout 5 --max-time 30 \
+              --retry 8 --retry-all-errors --retry-delay 5 \
               -D "${org_headers}" \
               -o /dev/null \
               -w '%{http_code}' \
@@ -209,16 +212,19 @@ jobs:
           registry_url="https://registry.zpkg.net/v1/packages/${CANARY_ORG}/${CANARY_PACKAGE}/versions/${CANARY_VERSION}"
           cdn_url="https://cdn.zpkg.net/github/${CANARY_ORG}/${CANARY_REPO}/${tag}/${asset}"
 
-          curl -fsSL --retry 8 --retry-all-errors \
+          curl -fsSL --connect-timeout 5 --max-time 30 \
+            --retry 8 --retry-all-errors \
             -H 'Accept: application/json' \
             "${github_release}/${sidecar}" \
             -o "${root}/github-sidecar.json"
-          curl -fsSL --retry 8 --retry-all-errors \
+          curl -fsSL --connect-timeout 5 --max-time 30 \
+            --retry 8 --retry-all-errors \
             "${github_release}/${asset}" \
             -o "${root}/github-asset.tar.gz"
 
           registry_status="$(
-            curl -sS --retry 8 --retry-all-errors \
+            curl -sS --connect-timeout 5 --max-time 30 \
+              --retry 8 --retry-all-errors \
               -H 'Accept: application/json' \
               -D "${root}/registry.headers" \
               -o "${root}/registry.json" \
@@ -235,7 +241,8 @@ jobs:
           grep -qi '^x-zed-source: github-public' "${root}/registry.headers"
 
           cdn_status="$(
-            curl -sS --retry 8 --retry-all-errors \
+            curl -sS --connect-timeout 5 --max-time 30 \
+              --retry 8 --retry-all-errors \
               -D "${root}/cdn.headers" \
               -o "${root}/cdn-asset.tar.gz" \
               -w '%{http_code}' \
