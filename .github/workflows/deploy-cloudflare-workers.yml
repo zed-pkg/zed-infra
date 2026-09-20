@@ -124,15 +124,26 @@ jobs:
           set -euo pipefail
           headers="${RUNNER_TEMP}/app-zpkg-net.headers"
           body="${RUNNER_TEMP}/app-zpkg-net.html"
+
+          timeout --foreground 15s getent ahosts app.zpkg.net >/dev/null || {
+            echo "app.zpkg.net did not resolve within 15 seconds" >&2
+            exit 1
+          }
+
           status="$(
-            curl -sS --connect-timeout 5 --max-time 30 \
-              --retry 3 --retry-all-errors --retry-delay 2 \
-              -H 'Accept: text/html' \
-              -D "${headers}" \
-              -o "${body}" \
-              -w '%{http_code}' \
-              https://app.zpkg.net/
-          )"
+            timeout --foreground 120s \
+              curl -sS --connect-timeout 5 --max-time 30 \
+                --retry 3 --retry-all-errors --retry-delay 2 --retry-max-time 90 \
+                -H 'Accept: text/html' \
+                -D "${headers}" \
+                -o "${body}" \
+                -w '%{http_code}' \
+                https://app.zpkg.net/
+          )" || {
+            code=$?
+            echo "app.zpkg.net smoke request failed or exceeded the 120-second process deadline (exit ${code})" >&2
+            exit "${code}"
+          }
 
           case "${status}" in
             200|301|302|303|307|308)
@@ -154,17 +165,29 @@ jobs:
         run: |
           set -euo pipefail
 
+          for host in api.zpkg.net org.zpkg.net; do
+            timeout --foreground 15s getent ahosts "${host}" >/dev/null || {
+              echo "${host} did not resolve within 15 seconds" >&2
+              exit 1
+            }
+          done
+
           api_headers="${RUNNER_TEMP}/api-zpkg-net.headers"
           api_body="${RUNNER_TEMP}/api-zpkg-net.json"
           api_status="$(
-            curl -sS --connect-timeout 5 --max-time 30 \
-              --retry 8 --retry-all-errors --retry-delay 3 \
-              -H 'Accept: application/json' \
-              -D "${api_headers}" \
-              -o "${api_body}" \
-              -w '%{http_code}' \
-              https://api.zpkg.net/healthz
-          )"
+            timeout --foreground 120s \
+              curl -sS --connect-timeout 5 --max-time 30 \
+                --retry 8 --retry-all-errors --retry-delay 3 --retry-max-time 90 \
+                -H 'Accept: application/json' \
+                -D "${api_headers}" \
+                -o "${api_body}" \
+                -w '%{http_code}' \
+                https://api.zpkg.net/healthz
+          )" || {
+            code=$?
+            echo "api.zpkg.net smoke request failed or exceeded the 120-second process deadline (exit ${code})" >&2
+            exit "${code}"
+          }
           grep -qi '^x-zed-edge: api.zpkg.net' "${api_headers}"
           case "${api_status}" in
             200)
@@ -182,13 +205,18 @@ jobs:
 
           org_headers="${RUNNER_TEMP}/org-zpkg-net.headers"
           org_status="$(
-            curl -sS --connect-timeout 5 --max-time 30 \
-              --retry 8 --retry-all-errors --retry-delay 5 \
-              -D "${org_headers}" \
-              -o /dev/null \
-              -w '%{http_code}' \
-              'https://org.zpkg.net/login?org=zed-pkg-test'
-          )"
+            timeout --foreground 120s \
+              curl -sS --connect-timeout 5 --max-time 30 \
+                --retry 8 --retry-all-errors --retry-delay 5 --retry-max-time 90 \
+                -D "${org_headers}" \
+                -o /dev/null \
+                -w '%{http_code}' \
+                'https://org.zpkg.net/login?org=zed-pkg-test'
+          )" || {
+            code=$?
+            echo "org.zpkg.net smoke request failed or exceeded the 120-second process deadline (exit ${code})" >&2
+            exit "${code}"
+          }
           test "${org_status}" = 302
           grep -qi '^x-zed-edge: org.zpkg.net' "${org_headers}"
           grep -q '^location: https://app.zpkg.net/auth/sign-in?return_to=%2Forgs%2Fzed-pkg-test' "${org_headers}"
@@ -205,6 +233,13 @@ jobs:
           root="${RUNNER_TEMP}/zed-public-fallback"
           mkdir -p "${root}"
 
+          for host in registry.zpkg.net cdn.zpkg.net github.com; do
+            timeout --foreground 15s getent ahosts "${host}" >/dev/null || {
+              echo "${host} did not resolve within 15 seconds" >&2
+              exit 1
+            }
+          done
+
           tag="v${CANARY_VERSION}"
           asset="zpkg-${CANARY_ORG}-${CANARY_PACKAGE}-${CANARY_VERSION}.tar.gz"
           sidecar="zpkg-${CANARY_ORG}-${CANARY_PACKAGE}-${CANARY_VERSION}.json"
@@ -212,25 +247,32 @@ jobs:
           registry_url="https://registry.zpkg.net/v1/packages/${CANARY_ORG}/${CANARY_PACKAGE}/versions/${CANARY_VERSION}"
           cdn_url="https://cdn.zpkg.net/github/${CANARY_ORG}/${CANARY_REPO}/${tag}/${asset}"
 
-          curl -fsSL --connect-timeout 5 --max-time 30 \
-            --retry 8 --retry-all-errors \
-            -H 'Accept: application/json' \
-            "${github_release}/${sidecar}" \
-            -o "${root}/github-sidecar.json"
-          curl -fsSL --connect-timeout 5 --max-time 30 \
-            --retry 8 --retry-all-errors \
-            "${github_release}/${asset}" \
-            -o "${root}/github-asset.tar.gz"
+          timeout --foreground 120s \
+            curl -fsSL --connect-timeout 5 --max-time 30 \
+              --retry 8 --retry-all-errors --retry-max-time 90 \
+              -H 'Accept: application/json' \
+              "${github_release}/${sidecar}" \
+              -o "${root}/github-sidecar.json"
+          timeout --foreground 120s \
+            curl -fsSL --connect-timeout 5 --max-time 30 \
+              --retry 8 --retry-all-errors --retry-max-time 90 \
+              "${github_release}/${asset}" \
+              -o "${root}/github-asset.tar.gz"
 
           registry_status="$(
-            curl -sS --connect-timeout 5 --max-time 30 \
-              --retry 8 --retry-all-errors \
-              -H 'Accept: application/json' \
-              -D "${root}/registry.headers" \
-              -o "${root}/registry.json" \
-              -w '%{http_code}' \
-              "${registry_url}"
-          )"
+            timeout --foreground 120s \
+              curl -sS --connect-timeout 5 --max-time 30 \
+                --retry 8 --retry-all-errors --retry-max-time 90 \
+                -H 'Accept: application/json' \
+                -D "${root}/registry.headers" \
+                -o "${root}/registry.json" \
+                -w '%{http_code}' \
+                "${registry_url}"
+          )" || {
+            code=$?
+            echo "registry.zpkg.net smoke request failed or exceeded the 120-second process deadline (exit ${code})" >&2
+            exit "${code}"
+          }
           test "${registry_status}" = 200 || {
             echo "registry fallback returned HTTP ${registry_status}" >&2
             head -n 40 "${root}/registry.headers" >&2
@@ -241,13 +283,18 @@ jobs:
           grep -qi '^x-zed-source: github-public' "${root}/registry.headers"
 
           cdn_status="$(
-            curl -sS --connect-timeout 5 --max-time 30 \
-              --retry 8 --retry-all-errors \
-              -D "${root}/cdn.headers" \
-              -o "${root}/cdn-asset.tar.gz" \
-              -w '%{http_code}' \
-              "${cdn_url}"
-          )"
+            timeout --foreground 120s \
+              curl -sS --connect-timeout 5 --max-time 30 \
+                --retry 8 --retry-all-errors --retry-max-time 90 \
+                -D "${root}/cdn.headers" \
+                -o "${root}/cdn-asset.tar.gz" \
+                -w '%{http_code}' \
+                "${cdn_url}"
+          )" || {
+            code=$?
+            echo "cdn.zpkg.net smoke request failed or exceeded the 120-second process deadline (exit ${code})" >&2
+            exit "${code}"
+          }
           test "${cdn_status}" = 200 || {
             echo "CDN fallback returned HTTP ${cdn_status}" >&2
             head -n 40 "${root}/cdn.headers" >&2
