@@ -1,0 +1,76 @@
+name: DEN-3938 consumer ORM repin
+
+on:
+  push:
+    branches:
+      - test/den3938-consumer-repin-20260922
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  repin:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - repo: canonical-cloud/canonical-api-server.rs
+            branch: DEN-3938/opaque-persistence-boundaries
+          - repo: canonical-cloud/canonical-web-server.rs
+            branch: DEN-3938/split-web-audit-database
+          - repo: canonical-cloud/canonical-mcp-server.rs
+            branch: DEN-3938/explicit-audit-database
+    steps:
+      - name: Check out consumer review branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ${{ matrix.repo }}
+          ref: ${{ matrix.branch }}
+          fetch-depth: 0
+          persist-credentials: false
+          token: ${{ secrets.ORE_SOURCE_PAT }}
+      - name: Mechanically repin exact ORM source and lock
+        env:
+          SOURCE_PAT: ${{ secrets.ORE_SOURCE_PAT }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          old='ad04984b227b0f2bcca1d8dc6ee858bd58a46f94'
+          new='22dbf2d1270516b09fbf22f8876543c6f04f8bb3'
+          python3 - <<'PY'
+          from pathlib import Path
+          old='ad04984b227b0f2bcca1d8dc6ee858bd58a46f94'
+          new='22dbf2d1270516b09fbf22f8876543c6f04f8bb3'
+          expected={'Cargo.toml':1,'Cargo.lock':2}
+          for name,count in expected.items():
+              p=Path(name)
+              s=p.read_text()
+              n=s.count(old)
+              if n != count:
+                  raise SystemExit(f'{name}: expected {count} occurrences of old SHA, found {n}')
+              p.write_text(s.replace(old,new))
+          PY
+          git diff --check
+          test "$(git diff --name-only | sort | tr '\n' ' ')" = "Cargo.lock Cargo.toml "
+          test "$(grep -Fo "$new" Cargo.toml | wc -l)" -eq 1
+          test "$(grep -Fo "$new" Cargo.lock | wc -l)" -eq 2
+          ! grep -F "$old" Cargo.toml Cargo.lock
+          git config user.name 'ORESoftware'
+          git config user.email 'alex@oresoftware.com'
+          git add Cargo.toml Cargo.lock
+          git commit -m 'DEN-3938: repin formatted orm-core head'
+          askpass="$RUNNER_TEMP/den3938-write-askpass.sh"
+          cat >"$askpass" <<'SH'
+          #!/bin/sh
+          case "$1" in
+            *Username*) printf '%s\n' 'x-access-token' ;;
+            *Password*) printf '%s\n' "$SOURCE_PAT" ;;
+            *) exit 1 ;;
+          esac
+          SH
+          chmod 700 "$askpass"
+          export GIT_ASKPASS="$askpass" GIT_TERMINAL_PROMPT=0
+          git push "https://github.com/${{ matrix.repo }}.git" "HEAD:${{ matrix.branch }}"
