@@ -28,7 +28,7 @@ jobs:
       - name: Apply only deterministic rustfmt changes
         env:
           SOURCE_PAT: ${{ secrets.ORE_SOURCE_PAT }}
-          EXPECTED_HEAD: 6840f05d4062b91f447b8a2865733692ab936c34
+          EXPECTED_HEAD: 9977d2c3a775eff80bcd9a755a1b073eeaf3d595
           FORMAT_EXPORT: 57937b732d27480b392243a6df8b159c39cff819
         shell: bash
         run: |
