@@ -1,0 +1,70 @@
+name: ores-stack 275 rustfmt writeback
+
+on:
+  push:
+    branches:
+      - proof/ores-stack-275-rustfmt-writeback
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  writeback:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ORESoftware/ores-stack
+          ref: feat/parallel-rpc-runtime-client-lane
+          fetch-depth: 0
+          persist-credentials: false
+          token: ${{ secrets.ORE_SOURCE_PAT }}
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: '1.88.0'
+          components: rustfmt
+      - name: Apply only deterministic rustfmt changes
+        env:
+          SOURCE_PAT: ${{ secrets.ORE_SOURCE_PAT }}
+          EXPECTED_HEAD: 6840f05d4062b91f447b8a2865733692ab936c34
+          FORMAT_EXPORT: 57937b732d27480b392243a6df8b159c39cff819
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${SOURCE_PAT:-}"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+
+          curl --fail --silent --show-error --location \
+            "https://raw.githubusercontent.com/fiducia-cloud-test/api-contract-e2e/${FORMAT_EXPORT}/proof/ores-stack-rpc-http-lane/formatted/rpc_http_client_lane.rs" \
+            -o crates/ores-stack-core/src/rpc_http_client_lane.rs
+          curl --fail --silent --show-error --location \
+            "https://raw.githubusercontent.com/fiducia-cloud-test/api-contract-e2e/${FORMAT_EXPORT}/proof/ores-stack-rpc-http-lane/formatted/rpc_http_client_lane_post.rs" \
+            -o crates/ores-stack-core/src/rpc_http_client_lane_post.rs
+
+          rustfmt --edition 2024 --check \
+            crates/ores-stack-core/src/rpc_http_client_lane.rs \
+            crates/ores-stack-core/src/rpc_http_client_lane_post.rs
+          git diff --check
+          actual="$(git diff --name-only | sort | tr '\n' ' ')"
+          expected="crates/ores-stack-core/src/rpc_http_client_lane.rs crates/ores-stack-core/src/rpc_http_client_lane_post.rs "
+          test "$actual" = "$expected"
+
+          git config user.name 'ORESoftware funded certification'
+          git config user.email 'noreply@oresoftware.com'
+          git add crates/ores-stack-core/src/rpc_http_client_lane.rs crates/ores-stack-core/src/rpc_http_client_lane_post.rs
+          git commit -m 'chore(rpc): rustfmt parallel client lane'
+
+          askpass="$RUNNER_TEMP/ores-stack-275-askpass.sh"
+          cat >"$askpass" <<'SH'
+          #!/bin/sh
+          case "$1" in
+            *Username*) printf '%s\n' 'x-access-token' ;;
+            *Password*) printf '%s\n' "$SOURCE_PAT" ;;
+            *) exit 1 ;;
+          esac
+          SH
+          chmod 700 "$askpass"
+          export GIT_ASKPASS="$askpass" GIT_TERMINAL_PROMPT=0
+          git push https://github.com/ORESoftware/ores-stack.git HEAD:feat/parallel-rpc-runtime-client-lane
