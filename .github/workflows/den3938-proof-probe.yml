@@ -1,0 +1,33 @@
+name: DEN-3938 proof probe
+
+on:
+  push:
+    branches:
+      - test/den-3938-proof-20260922
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Require read-only source credential
+        env:
+          SOURCE_PAT: ${{ secrets.ORE_SOURCE_PAT }}
+        run: |
+          set -euo pipefail
+          test -n "${SOURCE_PAT:-}" || { echo '::error::ORE_SOURCE_PAT missing'; exit 1; }
+      - name: Check out exact orm-core head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: canonical-cloud/canonical-orm-core
+          ref: ad04984b227b0f2bcca1d8dc6ee858bd58a46f94
+          path: orm
+          fetch-depth: 1
+          persist-credentials: false
+          token: ${{ secrets.ORE_SOURCE_PAT }}
+      - name: Prove exact source identity
+        run: test "$(git -C orm rev-parse HEAD)" = ad04984b227b0f2bcca1d8dc6ee858bd58a46f94
