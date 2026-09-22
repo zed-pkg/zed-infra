@@ -1,0 +1,111 @@
+name: ores-stack minimal main CLI namespace fix v3
+
+on:
+  push:
+    branches:
+      - ops/ores-stack-ppr-hardening-20260921
+    paths:
+      - .github/workflows/ores-stack-minimal-main-cli-fix-v3.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ores-stack-minimal-main-cli-fix-v3
+  cancel-in-progress: false
+
+jobs:
+  patch-test-push:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      TARGET_REPO: ORESoftware/ores-stack
+      TARGET_BRANCH: fix/cli-main-namespace-minimal-20260921
+      EXPECTED_HEAD: 5a29cea723490831151af899c776c43f7f2b3514
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+    steps:
+      - name: Require cross-repository write credential
+        shell: bash
+        env:
+          ORE_SOURCE_PAT: ${{ secrets.ORE_SOURCE_PAT }}
+        run: |
+          set -euo pipefail
+          test -n "${ORE_SOURCE_PAT:-}" || { echo 'ORE_SOURCE_PAT is not configured'; exit 2; }
+
+      - name: Check out exact target branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.TARGET_REPO }}
+          ref: ${{ env.TARGET_BRANCH }}
+          token: ${{ secrets.ORE_SOURCE_PAT }}
+          fetch-depth: 0
+          persist-credentials: true
+          show-progress: false
+
+      - name: Refuse branch drift and apply exact three-import repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git diff --exit-code
+          python3 - <<'PY'
+          from pathlib import Path
+          replacements = {
+              'crates/ores-stack-cli/src/stack_dev_hardened.rs': (
+                  'use ores_compose::{ComposeSdk, ComposeUpOptions};',
+                  'use ores_compose::sdk::{ComposeSdk, ComposeUpOptions};',
+              ),
+              'crates/ores-stack-cli/src/dev.rs': (
+                  'use crate::{\n    final_build_env, prepare_client_output, read_page_manifest, resolve, route_client_steps,',
+                  'use super::{\n    final_build_env, prepare_client_output, read_page_manifest, resolve, route_client_steps,',
+              ),
+              'crates/ores-stack-cli/src/legacy/dev.rs': (
+                  'use crate::{\n    final_build_env, prepare_client_output, read_page_manifest, resolve, route_client_steps,',
+                  'use super::{\n    final_build_env, prepare_client_output, read_page_manifest, resolve, route_client_steps,',
+              ),
+          }
+          for name, (old, new) in replacements.items():
+              path = Path(name)
+              text = path.read_text()
+              assert text.count(old) == 1, f'{name}: expected exactly one old form'
+              path.write_text(text.replace(old, new, 1))
+          PY
+          git diff --check
+          grep -n '^use super::{' crates/ores-stack-cli/src/dev.rs crates/ores-stack-cli/src/legacy/dev.rs
+          grep -n 'BuildStep, CliError' crates/ores-stack-cli/src/dev.rs crates/ores-stack-cli/src/legacy/dev.rs
+
+      - name: Use Rust 1.88 and authenticate Cargo git dependencies
+        shell: bash
+        env:
+          ORE_SOURCE_PAT: ${{ secrets.ORE_SOURCE_PAT }}
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.88.0 --profile minimal --component rustfmt
+          rustup override set 1.88.0
+          git config --global url."https://x-access-token:${ORE_SOURCE_PAT}@github.com/".insteadOf "https://github.com/"
+          rustc --version
+          cargo --version
+
+      - name: Format and compile exact patched CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all -- --check
+          git diff --check
+          cargo test -p ores-stack-cli --no-run
+          if ! git ls-files --error-unmatch Cargo.lock >/dev/null 2>&1; then rm -f Cargo.lock; fi
+          changed="$(git status --porcelain | awk '{print $2}' | sort)"
+          expected=$'crates/ores-stack-cli/src/dev.rs\ncrates/ores-stack-cli/src/legacy/dev.rs\ncrates/ores-stack-cli/src/stack_dev_hardened.rs'
+          test "$changed" = "$expected" || { echo "unexpected changed files:"; git status --short; exit 4; }
+
+      - name: Commit verified minimal fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'ORESoftware'
+          git config user.email 'alexander.d.mills@gmail.com'
+          git add crates/ores-stack-cli/src/dev.rs crates/ores-stack-cli/src/legacy/dev.rs crates/ores-stack-cli/src/stack_dev_hardened.rs
+          git diff --cached --check
+          git commit -m 'fix(cli): repair current-main module namespaces'
+          git push origin "HEAD:${TARGET_BRANCH}"
+          echo "pushed $(git rev-parse HEAD) to ${TARGET_REPO}:${TARGET_BRANCH}"
