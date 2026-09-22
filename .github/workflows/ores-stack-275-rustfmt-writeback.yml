@@ -1,4 +1,4 @@
-name: ores-stack 275 rustfmt writeback
+name: ores-stack 275 exact-head certification
 
 on:
   push:
@@ -10,9 +10,9 @@ permissions:
   contents: read
 
 jobs:
-  writeback:
+  certify:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -24,48 +24,57 @@ jobs:
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
         with:
           toolchain: '1.88.0'
-          components: rustfmt
-      - name: Apply only deterministic rustfmt changes
+          components: rustfmt, clippy
+      - name: Verify exact source head and merge base
         env:
-          SOURCE_PAT: ${{ secrets.ORE_SOURCE_PAT }}
-          EXPECTED_HEAD: 9977d2c3a775eff80bcd9a755a1b073eeaf3d595
-          FORMAT_EXPORT: 57937b732d27480b392243a6df8b159c39cff819
+          EXPECTED_HEAD: f8acb2d1a473864746ae915790516257c7490544
+          EXPECTED_MAIN: 253382da3634ce9fde62704e79e42160cee66838
         shell: bash
         run: |
           set -euo pipefail
-          test -n "${SOURCE_PAT:-}"
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
-
-          curl --fail --silent --show-error --location \
-            "https://raw.githubusercontent.com/fiducia-cloud-test/api-contract-e2e/${FORMAT_EXPORT}/proof/ores-stack-rpc-http-lane/formatted/rpc_http_client_lane.rs" \
-            -o crates/ores-stack-core/src/rpc_http_client_lane.rs
-          curl --fail --silent --show-error --location \
-            "https://raw.githubusercontent.com/fiducia-cloud-test/api-contract-e2e/${FORMAT_EXPORT}/proof/ores-stack-rpc-http-lane/formatted/rpc_http_client_lane_post.rs" \
-            -o crates/ores-stack-core/src/rpc_http_client_lane_post.rs
-
-          rustfmt --edition 2024 --check \
-            crates/ores-stack-core/src/rpc_http_client_lane.rs \
-            crates/ores-stack-core/src/rpc_http_client_lane_post.rs
+          git fetch origin main
+          test "$(git rev-parse origin/main)" = "$EXPECTED_MAIN"
+          git merge-base --is-ancestor "$EXPECTED_MAIN" "$EXPECTED_HEAD"
+          test "$(git diff --name-only "$EXPECTED_MAIN"..."$EXPECTED_HEAD" | sort | tr '\n' ' ')" = "crates/ores-stack-cli/src/legacy/mod.rs crates/ores-stack-core/src/lib.rs crates/ores-stack-core/src/rpc_http_client_lane.rs crates/ores-stack-core/src/rpc_http_client_lane_post.rs "
+      - name: Rustfmt and diff hygiene
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all -- --check
           git diff --check
-          actual="$(git diff --name-only | sort | tr '\n' ' ')"
-          expected="crates/ores-stack-core/src/rpc_http_client_lane.rs crates/ores-stack-core/src/rpc_http_client_lane_post.rs "
-          test "$actual" = "$expected"
-
-          git config user.name 'ORESoftware funded certification'
-          git config user.email 'noreply@oresoftware.com'
-          git add crates/ores-stack-core/src/rpc_http_client_lane.rs crates/ores-stack-core/src/rpc_http_client_lane_post.rs
-          git commit -m 'chore(rpc): rustfmt parallel client lane'
-
-          askpass="$RUNNER_TEMP/ores-stack-275-askpass.sh"
-          cat >"$askpass" <<'SH'
-          #!/bin/sh
-          case "$1" in
-            *Username*) printf '%s\n' 'x-access-token' ;;
-            *Password*) printf '%s\n' "$SOURCE_PAT" ;;
-            *) exit 1 ;;
-          esac
-          SH
-          chmod 700 "$askpass"
-          export GIT_ASKPASS="$askpass" GIT_TERMINAL_PROMPT=0
-          git push https://github.com/ORESoftware/ores-stack.git HEAD:feat/parallel-rpc-runtime-client-lane
-          echo 'writeback complete'
+          test -z "$(git status --porcelain)"
+      - name: Frozen lock metadata
+        shell: bash
+        run: cargo metadata --locked --format-version 1 --no-deps >/dev/null
+      - name: Compile affected crates
+        shell: bash
+        run: cargo check --locked -p ores-stack-core -p ores-stack-cli --all-targets
+      - name: Focused parallel-lane tests
+        shell: bash
+        run: cargo test --locked -p ores-stack-core rpc_http_client_lane -- --nocapture
+      - name: Strict clippy on affected crates
+        shell: bash
+        run: cargo clippy --locked -p ores-stack-core -p ores-stack-cli --all-targets -- -D warnings
+      - name: Verify additive lane and terminal contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          file=crates/ores-stack-core/src/rpc_http_client_lane.rs
+          cli=crates/ores-stack-cli/src/legacy/mod.rs
+          lib=crates/ores-stack-core/src/lib.rs
+          grep -q '@oresoftware/ores-http-clients/fluent' "$file"
+          grep -q 'package:ores_http_clients/ores_http_clients.dart' "$file"
+          grep -q 'ores_http_clients' "$file"
+          grep -q 'ores_http_clients/fluent' "$file"
+          grep -q 'generated_ores_http' "$file"
+          grep -q 'ORESoftware/ores-interfaces/contracts/rpc-client-call/v1' "$file"
+          grep -q 'sync_import_aliases as sync_rpc_client_import_aliases' "$lib"
+          grep -q 'materialize_from_canonical_sync' "$lib"
+          grep -q 'sync_rpc_client_import_aliases' "$cli"
+          grep -q 'makeCall' "$file"
+          grep -q 'make_call' "$file"
+          grep -q 'doStream' "$file"
+          grep -q 'do_stream' "$file"
+          ! grep -Eq '\.stream\(\)|\.stream\(' "$file"
+          test -z "$(git status --porcelain)"
