@@ -33,7 +33,6 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
-          git fetch origin main
           test "$(git rev-parse origin/main)" = "$EXPECTED_MAIN"
           git merge-base --is-ancestor "$EXPECTED_MAIN" "$EXPECTED_HEAD"
           test "$(git diff --name-only "$EXPECTED_MAIN"..."$EXPECTED_HEAD" | sort | tr '\n' ' ')" = "crates/ores-stack-cli/src/legacy/mod.rs crates/ores-stack-core/src/lib.rs crates/ores-stack-core/src/rpc_http_client_lane.rs crates/ores-stack-core/src/rpc_http_client_lane_post.rs "
