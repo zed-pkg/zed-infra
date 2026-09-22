@@ -1,0 +1,116 @@
+name: ores-stack PPR hardening patch
+
+on:
+  push:
+    branches:
+      - ops/ores-stack-ppr-hardening-20260921
+    paths:
+      - .github/workflows/ores-stack-ppr-hardening.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ores-stack-ppr-hardening
+  cancel-in-progress: false
+
+jobs:
+  patch-test-push:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      TARGET_REPO: ORESoftware/ores-stack
+      TARGET_BRANCH: feat/ppr-server-stream-current-main-20260921
+      EXPECTED_HEAD: 245a95c3f044f14b230b8558cbf065312b263eb5
+      EXPECTED_SUPERVISOR_BLOB: 7f220b07102179e82a4d4ec1c6e61140f8cbc120
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+    steps:
+      - name: Require cross-repository write credential
+        shell: bash
+        env:
+          ORE_SOURCE_PAT: ${{ secrets.ORE_SOURCE_PAT }}
+        run: |
+          set -euo pipefail
+          test -n "${ORE_SOURCE_PAT:-}" || { echo 'ORE_SOURCE_PAT is not configured'; exit 2; }
+
+      - name: Check out exact ores-stack branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.TARGET_REPO }}
+          ref: ${{ env.TARGET_BRANCH }}
+          token: ${{ secrets.ORE_SOURCE_PAT }}
+          fetch-depth: 0
+          persist-credentials: true
+          show-progress: false
+
+      - name: Refuse branch drift
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test "$(git hash-object crates/ores-stack-cli/src/ppr_supervisor.rs)" = "$EXPECTED_SUPERVISOR_BLOB"
+          git diff --exit-code
+
+      - name: Apply exact PPR process-tree and deadline patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64, zlib
+          payload = '''eNrtW3lz27gV/1+fAtbu7JAVRVuHL2aTjWIriVvHdiVntzvpDgYiIYtrimQI0kcdf/c+ADzAQ7bsJm13Wo7H5oH38PCO33s43O12Edm0IxJTthlElHVZTOzLru25myyyN8MwwiwJaXTlsiAyI9bqdDpo9iSK169Rt2f0BqgDv4fo9esW+m7j0zyIZq6jJT4jc4rtwKH6by3U6iSMIjtYLonv4IsoSELLujuQz+/4o4HEn4OF6zn3L1qIt+di4KXrOB69JhEFCuIs3RgzkIKCOFxAPI+CJab+lYGqzxP6OaEs/kBj4pCYZFxZ7ACnFuKXHXgetWM38JllvTmPKP1AQkN+4zzknRsAAaPe3EBvkvmEEocz579/idyY3qfNfBpDu+kiiZ3g2jfQNLAvaTxynMhA53Z47LKY+lQ+TOOIkiVQdjllGAU2ZYyrhI/fQOLPFPgkMTxINRlofOPG05jECQPmseMGQN9poF+LUIjMbn07Vwa/SBwsXf5qJG4+7gwNlN4y9x/UQKeRQyPXv8g48GsZMjvX0ITaV+fukoIE4ygKIrXhKLIN4Tf9bWMPdfo7xr7wGxv0H6MPo7/h88no6Hg8wW9+PR9PLbAXdIpeop0h+hPqbfWHL9TGB6cnBx8nk/HJOT54f3R8CHcqSd52Mv7rx/H0HL8fjw7x+dGH8enHcwsdJuDsYHlom91alvAeRm2mDbb0GoPjo7djTv8o8T4n7qSSHh0eHo9/GU3G+O3RydH0PZ6Mp+PJz49z6RcSiPHhs9PjY3x0cg7Uo+OHyJeu57nAoDSG49Gv+M+nRyf43WR08HjvPU4LMf2JG/yKagde4FPuVOGtgQ7pLLkAx/psoDMSxS7xxp8h0AUm9IZg1k6vl1k3u7h/mASi7YqacxrbCwCUmdYrfMqyRvbnCfV4x/y6b/GfFiBRlNixDIp3CYkcTdxyFdc/FTAi5XeXoad8R6mzz30U02jp+gB4mIMSxGOo/bBMYiGnjrqvwJVZ4sU/lqOHC/oKKSGzJDAUQSSHD77d68P4+7sZLKqXuSQhplGkfaE8Or4gAEzgsKG17SDxHOQHMXJ9FgIqobOzCbK55Ba6E63v27r+U8Hvrsx6GiypxoSgOnr5Cp1eZk9GueEJGJI3uJPoo14ejREGhxC22jIvwY80rudqO/m9/l4MUVKt+LjG+HPDFBrIIA7J3KHq40ULrZAONQpwTdwYpOs+VzruKM2mef6IyzxXD7Y8pPtW9VZEjPDCYY8jbG8Izrhbc8IVVn6ojdTai4YeO/DT6iyJHQU4SjzKNtDc9V22wDMKQ6XYgVTpueByd1JB2vdR4seQIix6E0I6/D5rkD2LRJ49SMBQPoFDZ08e9S/ihXgSHn93V5gg70U3Zx5kYhz4Whxc8lwu+ha/IUlhEmtlw5VaHQF2Ej/OgDF2tFxc3SjTaVJw3ZTD11LRc6lzgVXCzGvueXnC0Q6FAIqiDtMFSEW3oFVfI9HFlYV++CQB6DeBT6chx+wfU5jS9Byecnxy54gTmhc0BjznnqjJJpZFGIwG1LbxUgKHSCsno2PIqh8+jE4OdeDBPWkw3DF6W6gz2N7nxZ7qSut4tu1REoF/i1IMpTqvxq9kubmJTsFLFhylPRcyBDRGM3oBcIjIHEAhZzO7hSoVRkahC+jRg4zvmOgIegugMGQ5u6J2RLxyZAzUZaQxBjaJYl53QpEZQoak3QXYlYeek4iK0EAUmN1KoABmTJRs1EHzCP5kbCgkBwNBAkEOncOg4LvSK3gCl07kVlMa+mtwQucLmnOjN9RORB4PF0TUt0HIEGjdu4UaNkguFuDREM7kCrSAZkHiO7xrhR+aJQ54SM4RFO46FMULYAYCIjJjgZcAHO9vdaE0CEDEzBJZLJitHDTycH+J8uDxg2tNR51aIZVmFk6WDwMrDPLb7uoyKvcfcHbOCKpOTXgXQAJ6YMKgtcqZEwKFmYXGMfgHKMWUcaLpahKtNhWM85ayxB3sbfEyaLBfLYNAfzAPiHEKXpkqzfJ7pbc4IlAQBBEfh53APAjNicdo2uL+RaF6CTg4M87LtDZJgXANHOyuiYFNEPgISd2+qkalBkWwa8t0wpZ913W10oGqBn7kSHWB+inMlpoUTiATgzDJcGuXm2TYH6QmKTQnQzBTGAvJtY/FO+kWLInmxKZGZizsOlWhRGvRmbhTxFEdslZ0ZWm2ZiOpkTSVlA1roO2tLUOUcXq1OMv4NafgDS3tx8hDK503G2h1H5XK4JpPejEA5c0tFuPC1268wBw+AXy1etlley44tlH/0IY+ACQA2gGM0FREKRKzxnZT6yKreCTxwU4OvcqRSGj9735bRt+wtyeWJoaDYTVr8SuicRL5imUaChslrvisIPMQZaphp7OMbq0d93jXz/1JvIMiSrw1Y3JJNT2rhtahc32fArBU6auVP3wULibuFAUW9X5jhSd7aZgNZUP7A/uqYuh2UV9LLV8TJpwpdEPqtM04wMG1Tx1Nf8AbmnKMYjnpe4O+gJnhXgX5Ta5ZyKq+9kXTv6h05txLQHVZga8YyomCUFNaqrI9yYDPNV6/wXhf03D9uuGeBDCN4ALA0kdvoJx7B/q4JrdVOFGghFGlnIFCiWNKBUuGA6PfA4NCBQx/VYsq7tVQ+1ZZN04ai7WOVeYu8CX/APm6CVzgdQO6PEilQEuJuoYt8DUDF764+H90eQhduKafAy9c5oh65BZLty7MJR5NPhu0+TqcVis/RANZf1QjolqA/C/bqXGKyj1Y2E8qXc7PGoK0YjGJDruizh/uVev8kq6ETeMbk0OCFokJe4mp/kB+EcSq2f4tuL/1jXG/wVSPoCkvyoWZshm71EwzmJaLN6l/qXersm4y4d9Ok9gOuOTi6S1xPZhovXoFY+VCvpCW3hsYvW0w9X4tD/BrBqq/LDtK2WQwCa7NiRVDgel5i1fKrFdZziq+NkyUV4W0BA2W7khp2daUZb0J4sWqBb+nA4FU7o0ZUfsKp9NJrbrf0ESdLkJQ5xn+OSz8s8QXFFWw3XjJF3R+p3ZMnax+aFr2pmHk+rHng8MVe5+Wuv4iMcH1L5Bkg0ICVcotJGx3HqfLU+nQ200IJ5V0EcEsEgZbVY4JnPNJtclILPZj/AvspBszmLm+TbWy86yE0maLKCJUCWWS+RphnZlF9V0lTeWm0dcwlEhWjWvq39Ze6bp2g/hYZtCGjxy00q/PFbm0JEdvFiRhoA2xDCfWRCX0ldfdVsj+0GO1aMlY0hubUkftsFjuu14EHu1KnRZ9r65pBF7y2h4y43Z/2JAZv85e2Cq4Bd9SId90GfazqqlbD80lAc8HVymg94EYhNBrDvCCSx2iH+VXg2K+4SJCOWUrIKJhG7hKmy75NSIA56lXs0Xq2mlRwj1YVR1KtwfSzw3LMtyRqpv+lpU+ZfEi/KG3wzejOtuDPaPf7BGyFtIbtvRW+/Q9oh6jVcPGC/BVx7KYR2nYpLfnQm7V9ut19CSPaOhypZtzVxEGElWTrFt0vcgB0v8Jg7u5pv8HK4Xn5/p0VOlnnG2m/bdlf1mmp8K2n5Zh6xie5dz6lzwJN+zKi6xcf1/RaL1Bs4rr7bjOy2//EIn+YdN8k3SvZtnVOb6acRtTfDnNPjHbc+WnxpVBjh2XQU73hQWackHjLExOjEukAFpc61zkfMJ83y7CdUkZIxe0huZpMhgOxAL99u5u9YRCIOdilQ2xVhnsyy6ZTcm7NbQpfOwR1CnWy5poHw/cesA2BGoaoCsDswjIciB2K++zPcKu3B9TvKLUQL5OTxgU1Rb+gr6mT/5UrF3UVbcCgx+LkyKqS9vzPLwlNy6rCHGxjR4si01zqYGm4jQrTHf627ww3dkZPLo1K/tu3pu919PzaXO/tGOYbhZaaFrfNbRQsjNUD5elBz6Lc2Wdf4VbcfitdlSt2GMnM4/PQal/ZVl2AjqDgcEXTX/ayQ5QTuBdyVO6EpcV/k1VenocFcoaeq0VTdVuSXSRDdiUy9bpmWG+NSJMNxBbuDu729W9Fb6j3z6djKd4ej46+As+HP8MYNTutfUHGp1NTg/G0yk+G09wejZhDaKzvDE+OmyrBuFOx4TeNb3KojIuEpKZ60GmEmcR9LTXPNBN4QPqKTpTnAbD2fvVtqpgema6dTZU7+6VU2h394UVG+r+bDwemVEvO/XQE8cft8Txz0G28yppv/sUg5J+y49fFqfJeZwyAGSKOeBgMdnEEgFyqC3XroQxGoHXft7QqkdKjFUHclWUlPQb2spDJejH2lmV6s4bC5JILOZAze4ljpAYAqR2UL6tEmYdS2KBKzC9Y1r7qSdn2o3jaWT77JM1a/axIjeWl81XUq+eRKzL4OG5S7sG/+Cae0avx4/obu1Xz+hm3VxBHnO4PBENA8wLSJGpQxIvtPZmdiLK/J0Fflvn6ws8AusL0JnTd1Onz6BCjBqQF8vjQ44Lycr3bouNu8fbCk2lJ0Xlv1Rk+a66V/B1PVX8A4FliW2t1EiP+4j6rx5rkhS5bE2CMkA2e89GjYqjuZy1vzk6OcSjw8PJuqSQ+PiRFWkgTBwwEmNlf/snPzNXog=='''
+          patch = zlib.decompress(base64.b64decode(payload))
+          open('/tmp/ppr.patch', 'wb').write(patch)
+          PY
+          git apply --check /tmp/ppr.patch
+          git apply /tmp/ppr.patch
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('crates/ores-stack-cli/Cargo.toml')
+          text = path.read_text()
+          assert 'command-group' not in text
+          marker = '[dependencies]\n'
+          assert text.count(marker) == 1
+          path.write_text(text.replace(marker, marker + 'command-group = "=5.0.1"\n', 1))
+          PY
+          git diff --check
+
+      - name: Use Rust 1.88 with rustfmt
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.88.0 --profile minimal --component rustfmt
+          rustup override set 1.88.0
+          rustc --version
+          cargo --version
+
+      - name: Authenticate Cargo git dependencies
+        shell: bash
+        env:
+          ORE_SOURCE_PAT: ${{ secrets.ORE_SOURCE_PAT }}
+        run: |
+          set -euo pipefail
+          git config --global url."https://x-access-token:${ORE_SOURCE_PAT}@github.com/".insteadOf "https://github.com/"
+
+      - name: Format and test supervisor
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          git diff --check
+          cargo test -p ores-stack-cli ppr_supervisor -- --nocapture
+          if ! git ls-files --error-unmatch Cargo.lock >/dev/null 2>&1; then rm -f Cargo.lock; fi
+          changed="$(git status --porcelain | awk '{print $2}' | sort)"
+          expected=$'crates/ores-stack-cli/Cargo.toml\ncrates/ores-stack-cli/src/ppr_supervisor.rs'
+          test "$changed" = "$expected" || { echo "unexpected changed files:"; git status --short; exit 3; }
+
+      - name: Commit verified patch back to #162 branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'ORESoftware'
+          git config user.email 'alexander.d.mills@gmail.com'
+          git add crates/ores-stack-cli/Cargo.toml crates/ores-stack-cli/src/ppr_supervisor.rs
+          git diff --cached --check
+          git commit -m 'fix(ppr): own request process tree and finalization deadline'
+          git push origin "HEAD:${TARGET_BRANCH}"
+          echo "pushed $(git rev-parse HEAD) to ${TARGET_REPO}:${TARGET_BRANCH}"
