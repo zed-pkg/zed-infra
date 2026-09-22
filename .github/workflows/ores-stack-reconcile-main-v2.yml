@@ -1,0 +1,129 @@
+name: ores-stack PPR reconcile main v2
+
+on:
+  push:
+    branches:
+      - ops/ores-stack-ppr-hardening-20260921
+    paths:
+      - .github/workflows/ores-stack-reconcile-main-v2.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ores-stack-ppr-reconcile-main-v2
+  cancel-in-progress: false
+
+jobs:
+  reconcile-test-push:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      TARGET_REPO: ORESoftware/ores-stack
+      TARGET_BRANCH: feat/ppr-server-stream-current-main-20260921
+      EXPECTED_HEAD: 245a95c3f044f14b230b8558cbf065312b263eb5
+      MAIN_HEAD: 5a29cea723490831151af899c776c43f7f2b3514
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+    steps:
+      - name: Require cross-repository write credential
+        shell: bash
+        env:
+          ORE_SOURCE_PAT: ${{ secrets.ORE_SOURCE_PAT }}
+        run: |
+          set -euo pipefail
+          test -n "${ORE_SOURCE_PAT:-}" || { echo 'ORE_SOURCE_PAT is not configured'; exit 2; }
+
+      - name: Check out exact ores-stack branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.TARGET_REPO }}
+          ref: ${{ env.TARGET_BRANCH }}
+          token: ${{ secrets.ORE_SOURCE_PAT }}
+          fetch-depth: 0
+          persist-credentials: true
+          show-progress: false
+
+      - name: Refuse branch or main drift
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test "$(git rev-parse origin/main)" = "$MAIN_HEAD"
+          git diff --exit-code
+
+      - name: Merge main with exact semantic conflict resolution
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'ORESoftware'
+          git config user.email 'alexander.d.mills@gmail.com'
+          if git merge --no-edit "$MAIN_HEAD"; then
+            echo 'expected known two-file conflict but merge completed cleanly; refusing changed merge shape'
+            exit 4
+          fi
+          actual="$(git diff --name-only --diff-filter=U | sort)"
+          expected=$'crates/ores-stack-cli/Cargo.toml\ncrates/ores-stack-cli/build.rs'
+          test "$actual" = "$expected" || {
+            echo 'unexpected merge conflict set:'
+            printf '%s\n' "$actual"
+            exit 5
+          }
+          # Cargo: branch is the mainline dependency set plus PPR-specific runtime deps.
+          git checkout --ours crates/ores-stack-cli/Cargo.toml
+          # build.rs: main owns the compatibility stub after disabling aggregate CLI type generation.
+          git checkout --theirs crates/ores-stack-cli/build.rs
+          git add crates/ores-stack-cli/Cargo.toml crates/ores-stack-cli/build.rs
+          git diff --check
+          git commit --no-edit
+
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('crates/ores-stack-cli/src/ppr_api_route_local.rs')
+          s = p.read_text()
+          old = 'const API_LAMBDA_API_DOCS_REV: &str = "895ec87b9521b47492891c5741e8f98071161de6";'
+          new = 'const API_LAMBDA_API_DOCS_REV: &str = "cdc3715ae0a7cb635fa01d96aecec60b7f5d6b2c";'
+          assert s.count(old) == 1, 'expected exactly one old API PPR api-docs pin'
+          p.write_text(s.replace(old, new))
+          PY
+          git diff --check
+          grep -F 'ores-locks-and-leases' crates/ores-stack-cli/Cargo.toml
+          grep -F 'ores-middleware' crates/ores-stack-cli/Cargo.toml
+          grep -F 'tokio = ' crates/ores-stack-cli/Cargo.toml
+          grep -F 'out_dir.join("cli_config.rs")' crates/ores-stack-cli/build.rs
+          grep -F 'cdc3715ae0a7cb635fa01d96aecec60b7f5d6b2c' crates/ores-stack-core/Cargo.toml
+          grep -F 'cdc3715ae0a7cb635fa01d96aecec60b7f5d6b2c' crates/ores-stack-cli/src/ppr_api_route_local.rs
+
+      - name: Use Rust 1.88 and authenticate Cargo git dependencies
+        shell: bash
+        env:
+          ORE_SOURCE_PAT: ${{ secrets.ORE_SOURCE_PAT }}
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.88.0 --profile minimal --component rustfmt
+          rustup override set 1.88.0
+          git config --global url."https://x-access-token:${ORE_SOURCE_PAT}@github.com/".insteadOf "https://github.com/"
+          rustc --version
+          cargo --version
+
+      - name: Format and compile focused PPR and callable-registry tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          git diff --check
+          cargo test -p ores-stack-cli ppr_supervisor -- --nocapture
+          cargo test -p ores-stack-core rpc_stream_admission_contract -- --nocapture
+          cargo test -p ores-stack-core lambda_callable_registry_contract -- --nocapture
+          if ! git ls-files --error-unmatch Cargo.lock >/dev/null 2>&1; then rm -f Cargo.lock; fi
+
+      - name: Commit ABI alignment and push reconciled branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add crates/ores-stack-cli/src/ppr_api_route_local.rs
+          git diff --cached --check
+          if ! git diff --cached --quiet; then
+            git commit -m 'chore(ppr): align route-local API ABI with current main'
+          fi
+          git push origin "HEAD:${TARGET_BRANCH}"
+          echo "pushed $(git rev-parse HEAD) to ${TARGET_REPO}:${TARGET_BRANCH}"
