@@ -1,0 +1,322 @@
+name: DEN-3938 exact-head proof 3
+
+on:
+  push:
+    branches:
+      - test/den3938-proof3-20260922
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: den3938-proof3-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ORM_SHA: 22dbf2d1270516b09fbf22f8876543c6f04f8bb3
+  WEB_SHA: e8a6983fb292d8a1a3c1735c368ec32a19247e58
+
+jobs:
+  orm-b2b-pg17:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: canonical_orm_parity
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: canonical-cloud/canonical-orm-core
+          ref: ${{ env.ORM_SHA }}
+          fetch-depth: 1
+          persist-credentials: false
+          token: ${{ secrets.ORE_SOURCE_PAT }}
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: "1.95.0"
+          components: clippy, rustfmt
+      - name: Exact ORM B2B Rust and PG17 proof
+        env:
+          SOURCE_PAT: ${{ secrets.ORE_SOURCE_PAT }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${SOURCE_PAT:-}"
+          test "$(git rev-parse HEAD)" = "$ORM_SHA"
+          askpass="$RUNNER_TEMP/den3938-askpass.sh"
+          cat >"$askpass" <<'SH'
+          #!/bin/sh
+          case "$1" in
+            *Username*) printf '%s\n' 'x-access-token' ;;
+            *Password*) printf '%s\n' "$SOURCE_PAT" ;;
+            *) exit 1 ;;
+          esac
+          SH
+          chmod 700 "$askpass"
+          export GIT_ASKPASS="$askpass"
+          export GIT_TERMINAL_PROMPT=0
+          export CARGO_NET_GIT_FETCH_WITH_CLI=true
+
+          cargo +1.95.0 fmt --all -- --check
+          cargo +1.95.0 test --locked --all-features
+          cargo +1.95.0 clippy --all-targets --all-features --locked -- -D warnings
+          cp Cargo.lock /tmp/Cargo.lock.checked-in
+          cargo +1.95.0 generate-lockfile
+          cmp -s /tmp/Cargo.lock.checked-in Cargo.lock || {
+            echo 'Cargo.lock is stale relative to exact dependency graph' >&2
+            diff -u /tmp/Cargo.lock.checked-in Cargo.lock || true
+            exit 1
+          }
+          cargo +1.95.0 check --all-targets --all-features --locked
+
+          psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 \
+            -c "CREATE ROLE canonical_migrator LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEROLE NOCREATEDB NOREPLICATION" \
+            -c "ALTER DATABASE canonical_orm_parity OWNER TO canonical_migrator" \
+            -c "CREATE DATABASE canonical_orm_race OWNER canonical_migrator" \
+            -c "CREATE DATABASE canonical_orm_empty OWNER canonical_migrator"
+          for database in canonical_orm_parity canonical_orm_race; do
+            psql -h 127.0.0.1 -U postgres -d "$database" -v ON_ERROR_STOP=1 -q -f sql/bootstrap/runtime_roles.sql
+          done
+          psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 \
+            -c "CREATE ROLE canonical_api LOGIN" \
+            -c "CREATE ROLE canonical_web LOGIN" \
+            -c "CREATE ROLE canonical_worker_ro LOGIN" \
+            -c "CREATE ROLE canonical_web_extra LOGIN" \
+            -c "CREATE ROLE canonical_web_noinherit LOGIN" \
+            -c "GRANT canonical_cloud__audit__api_rw TO canonical_api WITH INHERIT TRUE, SET FALSE, ADMIN FALSE" \
+            -c "GRANT canonical_cloud__audit__web_ro TO canonical_web WITH INHERIT TRUE, SET FALSE, ADMIN FALSE" \
+            -c "GRANT canonical_cloud__audit__worker_ro TO canonical_worker_ro WITH INHERIT TRUE, SET FALSE, ADMIN FALSE" \
+            -c "GRANT canonical_cloud__audit__web_ro TO canonical_web_extra WITH INHERIT TRUE, SET FALSE, ADMIN FALSE" \
+            -c "GRANT pg_write_all_data TO canonical_web_extra WITH INHERIT TRUE, SET FALSE, ADMIN FALSE" \
+            -c "GRANT canonical_cloud__audit__web_ro TO canonical_web_noinherit WITH INHERIT FALSE, SET FALSE, ADMIN FALSE"
+
+          export CANONICAL_MIGRATOR_DATABASE_URL=postgres://postgres@127.0.0.1:5432/canonical_orm_parity
+          export CANONICAL_MIGRATOR_EXPECTED_ROLE=postgres
+          if cargo +1.95.0 run --locked --bin canonical-orm-migrate; then
+            echo 'migrator accepted PostgreSQL superuser credentials' >&2
+            exit 1
+          fi
+
+          export CANONICAL_MIGRATOR_DATABASE_URL=postgres://canonical_migrator@127.0.0.1:5432/canonical_orm_parity
+          export CANONICAL_MIGRATOR_EXPECTED_ROLE=canonical_migrator
+          cargo +1.95.0 run --locked --bin canonical-orm-migrate
+          cargo +1.95.0 run --locked --bin canonical-orm-migrate
+
+          cargo +1.95.0 build --locked --bin canonical-orm-migrate
+          export CANONICAL_MIGRATOR_DATABASE_URL=postgres://canonical_migrator@127.0.0.1:5432/canonical_orm_race
+          pids=()
+          for _ in 1 2 3 4 5 6; do target/debug/canonical-orm-migrate & pids+=("$!"); done
+          for pid in "${pids[@]}"; do wait "$pid"; done
+          psql -h 127.0.0.1 -U postgres -d canonical_orm_race -Atc \
+            "SELECT count(*) FROM canonical_orm_migrations" | grep -qx '7'
+
+          psql -h 127.0.0.1 -U postgres -d canonical_orm_parity -v ON_ERROR_STOP=1 -q -f sql/tests/rls_isolation.sql
+          psql -h 127.0.0.1 -U postgres -d canonical_orm_parity -v ON_ERROR_STOP=1 -q -f sql/tests/global_catalog_hardening.sql
+          psql -h 127.0.0.1 -U postgres -d canonical_orm_parity -v ON_ERROR_STOP=1 -q -f sql/tests/catalog_invariants.sql
+          psql -h 127.0.0.1 -U postgres -d canonical_orm_parity -v ON_ERROR_STOP=1 -q -f sql/tests/b2b_invariants.sql
+          CANONICAL_CONTRACT_DATABASE_URL=postgres://canonical_migrator@127.0.0.1:5432/canonical_orm_parity \
+            cargo +1.95.0 run --locked --bin contract-catalog
+
+          export CANONICAL_ORM_DUAL_TEST_WEB_DATABASE_URL=postgres://canonical_web@127.0.0.1:5432/canonical_orm_parity
+          export CANONICAL_ORM_DUAL_TEST_WORKER_DATABASE_URL=postgres://canonical_worker_ro@127.0.0.1:5432/canonical_orm_parity
+          export CANONICAL_ORM_DUAL_TEST_API_DATABASE_URL=postgres://canonical_api@127.0.0.1:5432/canonical_orm_parity
+          export CANONICAL_ORM_DUAL_TEST_EXTRA_DATABASE_URL=postgres://canonical_web_extra@127.0.0.1:5432/canonical_orm_parity
+          export CANONICAL_ORM_DUAL_TEST_NOINHERIT_DATABASE_URL=postgres://canonical_web_noinherit@127.0.0.1:5432/canonical_orm_parity
+          export CANONICAL_ORM_DUAL_TEST_EMPTY_DATABASE_URL=postgres://canonical_web@127.0.0.1:5432/canonical_orm_empty
+          cargo +1.95.0 test --locked --all-features --lib -- --ignored --exact \
+            dual::tests::postgres_dual_context_verifies_catalog_database_mode_and_principal \
+            | tee target/dual-live.log
+          grep -Fq 'test result: ok. 1 passed' target/dual-live.log
+
+          cargo +1.95.0 install sea-orm-cli --version 2.0.0 --locked
+          rm -rf target/seaorm-entities
+          mkdir -p target/seaorm-entities
+          DATABASE_URL=postgres://canonical_migrator@127.0.0.1:5432/canonical_orm_parity \
+            sea-orm-cli generate entity -u postgres://canonical_migrator@127.0.0.1:5432/canonical_orm_parity -o target/seaorm-entities
+          CANONICAL_SEAORM_ENTITY_DIR=target/seaorm-entities \
+          CANONICAL_DIESEL_SCHEMA_FILE=src/diesel_schema.rs \
+            cargo +1.95.0 run --locked --bin schema-congruence
+          cmp -s /tmp/Cargo.lock.checked-in Cargo.lock
+
+  orm-quote-readiness-pg17:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: canonical_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: canonical-cloud/canonical-orm-core
+          ref: ${{ env.ORM_SHA }}
+          fetch-depth: 1
+          persist-credentials: false
+          token: ${{ secrets.ORE_SOURCE_PAT }}
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: "1.95.0"
+          components: clippy, rustfmt
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "22.13.0"
+      - name: Exact ORM quote/readiness PG17 proof
+        env:
+          SOURCE_PAT: ${{ secrets.ORE_SOURCE_PAT }}
+          PGHOST: 127.0.0.1
+          PGDATABASE: canonical_test
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${SOURCE_PAT:-}"
+          test "$(git rev-parse HEAD)" = "$ORM_SHA"
+          askpass="$RUNNER_TEMP/den3938-askpass.sh"
+          cat >"$askpass" <<'SH'
+          #!/bin/sh
+          case "$1" in
+            *Username*) printf '%s\n' 'x-access-token' ;;
+            *Password*) printf '%s\n' "$SOURCE_PAT" ;;
+            *) exit 1 ;;
+          esac
+          SH
+          chmod 700 "$askpass"
+          export GIT_ASKPASS="$askpass"
+          export GIT_TERMINAL_PROMPT=0
+          export CARGO_NET_GIT_FETCH_WITH_CLI=true
+
+          npm ci --ignore-scripts
+          npm run check:generated
+          npm test
+          cargo +1.95.0 fmt --all -- --check
+          cargo +1.95.0 test --all-targets --locked
+          cargo +1.95.0 test --all-targets --all-features --locked
+
+          psql -U postgres -v ON_ERROR_STOP=1 -f sql/quote/bootstrap.sql
+          python3 - <<'PY' | psql -U canonical_cloud__quote__migrator -v ON_ERROR_STOP=1
+          from pathlib import Path
+          schema = Path('sql/quote/schema.sql').read_text()
+          prefix = 'CREATE SCHEMA canonical_cloud__quote;\n'
+          assert schema.startswith(prefix)
+          print(schema[len(prefix):])
+          PY
+          psql -U postgres -v ON_ERROR_STOP=1 -f sql/quote/grants.sql
+
+          CANONICAL_ORM_TEST_DATABASE_URL=postgres://canonical_cloud__quote__api_rw@127.0.0.1:5432/canonical_test \
+            cargo +1.95.0 test --all-features --locked \
+            postgres_diesel_seaorm_parity_and_owner_isolation -- --ignored --exact
+
+          assert_ready() {
+            psql -U canonical_cloud__quote__api_rw -At -v ON_ERROR_STOP=1 \
+              -f sql/quote-readiness.sql | grep -qx 't'
+          }
+          assert_not_ready() {
+            if psql -U canonical_cloud__quote__api_rw -At -v ON_ERROR_STOP=1 \
+                -f sql/quote-readiness.sql | grep -qx 't'; then
+              echo 'quote readiness accepted deliberately weakened state' >&2
+              exit 1
+            fi
+          }
+          assert_ready
+          psql -U postgres -v ON_ERROR_STOP=1 <<'SQL'
+          ALTER POLICY canonical_context_owner_policy
+            ON canonical_cloud__quote.canonical_context
+            USING (TRUE)
+            WITH CHECK (TRUE);
+          SQL
+          assert_not_ready
+          psql -U postgres -v ON_ERROR_STOP=1 <<'SQL'
+          ALTER POLICY canonical_context_owner_policy
+            ON canonical_cloud__quote.canonical_context
+            USING (owner_subject = current_setting('app.current_subject', TRUE))
+            WITH CHECK (owner_subject = current_setting('app.current_subject', TRUE));
+          SQL
+          assert_ready
+          psql -U postgres -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE POLICY unexpected_open_policy
+            ON canonical_cloud__quote.canonical_context
+            FOR SELECT USING (TRUE);
+          SQL
+          assert_not_ready
+          psql -U postgres -v ON_ERROR_STOP=1 \
+            -c 'DROP POLICY unexpected_open_policy ON canonical_cloud__quote.canonical_context'
+          assert_ready
+          psql -U postgres -v ON_ERROR_STOP=1 \
+            -c 'ALTER DATABASE canonical_test OWNER TO canonical_cloud__quote__api_rw'
+          assert_not_ready
+          psql -U postgres -v ON_ERROR_STOP=1 \
+            -c 'ALTER DATABASE canonical_test OWNER TO postgres'
+          assert_ready
+          cargo +1.95.0 clippy --all-targets --all-features --locked -- -D warnings
+
+  web-consumer-pg17:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_POSTGRES_ADMIN_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: canonical-cloud/canonical-web-server.rs
+          ref: ${{ env.WEB_SHA }}
+          fetch-depth: 1
+          submodules: recursive
+          persist-credentials: false
+          token: ${{ secrets.ORE_SOURCE_PAT }}
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: "1.95.0"
+          components: clippy, rustfmt
+      - name: Exact web Rust and PostgreSQL proof
+        env:
+          SOURCE_PAT: ${{ secrets.ORE_SOURCE_PAT }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${SOURCE_PAT:-}"
+          test "$(git rev-parse HEAD)" = "$WEB_SHA"
+          askpass="$RUNNER_TEMP/askpass.sh"
+          cat >"$askpass" <<'SH'
+          #!/bin/sh
+          case "$1" in
+            *Username*) printf '%s\n' 'x-access-token' ;;
+            *Password*) printf '%s\n' "$SOURCE_PAT" ;;
+            *) exit 1 ;;
+          esac
+          SH
+          chmod 700 "$askpass"
+          export GIT_ASKPASS="$askpass"
+          export GIT_TERMINAL_PROMPT=0
+          export CARGO_NET_GIT_FETCH_WITH_CLI=true
+          cargo +1.95.0 fmt --all -- --check
+          cargo +1.95.0 clippy --workspace --all-targets --locked -- -D warnings
+          cargo +1.95.0 test --workspace --all-targets --locked
+          cargo +1.95.0 test --locked -p canonical-web-server --test postgres_rls -- --nocapture
