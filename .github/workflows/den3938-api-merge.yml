@@ -1,0 +1,133 @@
+name: DEN-3938 API semantic main merge
+
+on:
+  push:
+    branches:
+      - test/den3938-api-merge-20260922
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  merge:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out API review branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: canonical-cloud/canonical-api-server.rs
+          ref: DEN-3938/opaque-persistence-boundaries
+          fetch-depth: 0
+          persist-credentials: false
+          token: ${{ secrets.ORE_SOURCE_PAT }}
+      - name: Merge main with bounded semantic conflict resolution
+        env:
+          SOURCE_PAT: ${{ secrets.ORE_SOURCE_PAT }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${SOURCE_PAT:-}"
+          test "$(git rev-parse HEAD)" = 53047ebe241b0f36319feb2525a1a3a5566ed2b5
+          git fetch origin main
+          set +e
+          git merge --no-ff --no-commit origin/main
+          merge_status=$?
+          set -e
+          if [[ $merge_status -eq 0 ]]; then
+            echo 'expected the known policy-only conflict set, but merge completed without conflicts' >&2
+            exit 1
+          fi
+          unmerged="$(git diff --name-only --diff-filter=U | sort)"
+          expected="$(printf '%s\n' .github/workflows/ci.yml .github/workflows/private-persistence-lock.yml agents.md | sort)"
+          test "$unmerged" = "$expected" || {
+            echo 'unexpected merge conflict set:' >&2
+            printf '%s\n' "$unmerged" >&2
+            exit 1
+          }
+
+          # Main owns the real agent instruction file.
+          git checkout --theirs -- agents.md
+
+          # Keep DEN-3938's credential-free mechanical witness, but import main's
+          # tighter dependency-only trigger scope.
+          git checkout --ours -- .github/workflows/private-persistence-lock.yml
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('.github/workflows/private-persistence-lock.yml')
+          s = p.read_text()
+          needle = '      - "src/**"\n'
+          if s.count(needle) != 2:
+              raise SystemExit(f'expected two src/** triggers, found {s.count(needle)}')
+          s = s.replace(needle, '')
+          p.write_text(s)
+          PY
+
+          # Main owns the stronger exact RPC lock parser. Re-add DEN-3938's
+          # broader touched-Rust preflight and keep the shared-auth SHA that the
+          # review branch's Cargo.toml actually declares.
+          git checkout --theirs -- .github/workflows/ci.yml
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('.github/workflows/ci.yml')
+          s = p.read_text()
+          start = '''      # rustfmt itself needs no dependency checkout. The repository currently
+      # has two unrelated base-tree formatting findings, so check the Rust file
+      # this PR actually changes before private credentials are required. The
+      # full workspace format gate remains below after the locked graph is
+      # available; this early check is additive, not a waiver.
+      - name: Check touched Rust formatting before private dependency access
+        run: rustfmt --edition 2021 --check src/telemetry.rs
+
+'''
+          if s.count(start) != 1:
+              raise SystemExit('main touched-Rust preflight block not found exactly once')
+          replacement = '''      - name: Check touched Rust formatting before private access
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustfmt +1.95.0 --edition 2021 --check \\
+            src/main.rs \\
+            src/lib.rs \\
+            src/contract.rs \\
+            src/readiness.rs \\
+            src/readiness_observation_ingest.rs \\
+            src/telemetry.rs \\
+            tools/derive-persistence-lock.rs
+
+'''
+          s = s.replace(start, replacement)
+          stale = 'assert dependencies["shared-auth-client"]["rev"] == "cc57a85b276bee81ad94decc87df2f48d49cab9f"'
+          current = 'assert dependencies["shared-auth-client"]["rev"] == "0b6ceb78a632ec4501dd2d7dca155d91de0e2d89"'
+          if s.count(stale) != 1:
+              raise SystemExit('main shared-auth assertion not found exactly once')
+          s = s.replace(stale, current)
+          p.write_text(s)
+          PY
+
+          git add .github/workflows/ci.yml .github/workflows/private-persistence-lock.yml agents.md
+          test -z "$(git diff --name-only --diff-filter=U)"
+          git diff --check
+          grep -Fq 'matches = [entry for entry in locked if entry.get("name") == package]' .github/workflows/ci.yml
+          grep -Fq 'tools/derive-persistence-lock.rs' .github/workflows/private-persistence-lock.yml
+          ! grep -Fq '      - "src/**"' .github/workflows/private-persistence-lock.yml
+          grep -Fq '0b6ceb78a632ec4501dd2d7dca155d91de0e2d89' Cargo.toml
+          grep -Fq '0b6ceb78a632ec4501dd2d7dca155d91de0e2d89' .github/workflows/ci.yml
+
+          git config user.name 'ORESoftware'
+          git config user.email 'alex@oresoftware.com'
+          git commit -m 'Merge main into DEN-3938 API persistence hardening'
+
+          askpass="$RUNNER_TEMP/den3938-write-askpass.sh"
+          cat >"$askpass" <<'SH'
+          #!/bin/sh
+          case "$1" in
+            *Username*) printf '%s\n' 'x-access-token' ;;
+            *Password*) printf '%s\n' "$SOURCE_PAT" ;;
+            *) exit 1 ;;
+          esac
+          SH
+          chmod 700 "$askpass"
+          export GIT_ASKPASS="$askpass" GIT_TERMINAL_PROMPT=0
+          git push https://github.com/canonical-cloud/canonical-api-server.rs.git HEAD:DEN-3938/opaque-persistence-boundaries
