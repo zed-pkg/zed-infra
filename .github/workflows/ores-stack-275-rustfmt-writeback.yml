@@ -68,3 +68,4 @@ jobs:
           chmod 700 "$askpass"
           export GIT_ASKPASS="$askpass" GIT_TERMINAL_PROMPT=0
           git push https://github.com/ORESoftware/ores-stack.git HEAD:feat/parallel-rpc-runtime-client-lane
+          echo 'writeback complete'
