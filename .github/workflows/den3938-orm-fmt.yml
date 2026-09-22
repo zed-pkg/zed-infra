@@ -1,0 +1,65 @@
+name: DEN-3938 exact rustfmt writer
+
+on:
+  push:
+    branches:
+      - test/den3938-orm-fmt-20260922
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rustfmt:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out ORM review branch with source PAT
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: canonical-cloud/canonical-orm-core
+          ref: DEN-3938/persistence-audit-hardening
+          path: orm
+          fetch-depth: 0
+          persist-credentials: false
+          token: ${{ secrets.ORE_SOURCE_PAT }}
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: "1.95.0"
+          components: rustfmt
+      - name: Apply only deterministic rustfmt changes and push
+        working-directory: orm
+        env:
+          SOURCE_PAT: ${{ secrets.ORE_SOURCE_PAT }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = ad04984b227b0f2bcca1d8dc6ee858bd58a46f94
+          cargo +1.95.0 fmt --all
+          git diff --check
+          actual="$(git diff --name-only | sort)"
+          expected="$(printf '%s\n' \
+            src/bin/canonical-orm-migrate.rs \
+            src/bin/contract-catalog.rs \
+            src/connection.rs \
+            src/dual.rs \
+            src/principal.rs \
+            src/quote_store.rs | sort)"
+          test "$actual" = "$expected"
+          cargo +1.95.0 fmt --all -- --check
+          git config user.name 'ORESoftware'
+          git config user.email 'alex@oresoftware.com'
+          git add $actual
+          git commit -m 'style: apply rustfmt to DEN-3938 persistence hardening'
+          askpass="$RUNNER_TEMP/den3938-write-askpass.sh"
+          cat >"$askpass" <<'SH'
+          #!/bin/sh
+          case "$1" in
+            *Username*) printf '%s\n' 'x-access-token' ;;
+            *Password*) printf '%s\n' "$SOURCE_PAT" ;;
+            *) exit 1 ;;
+          esac
+          SH
+          chmod 700 "$askpass"
+          export GIT_ASKPASS="$askpass" GIT_TERMINAL_PROMPT=0
+          git push https://github.com/canonical-cloud/canonical-orm-core.git HEAD:DEN-3938/persistence-audit-hardening
