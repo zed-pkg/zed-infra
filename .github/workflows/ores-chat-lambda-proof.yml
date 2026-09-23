@@ -1,0 +1,86 @@
+name: ores-chat lambda authority proof
+on:
+  push:
+    branches: [proof/ores-chat-lambda-20260923]
+permissions:
+  contents: read
+jobs:
+  lambda:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+      ORE_SOURCE_PAT: ${{ secrets.ORE_SOURCE_PAT }}
+    steps:
+      - name: Require sanctioned cross-org source credential
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${ORE_SOURCE_PAT:-}"
+      - name: Check out exact ORES Chat Lambda branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ores-chat/ores-chat-lambdas
+          ref: chatgpt/ores-lambda-runtime-20260922
+          token: ${{ secrets.ORE_SOURCE_PAT }}
+          path: ores-chat-lambdas
+          fetch-depth: 0
+      - name: Check out current ores-lambda conformance authority
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ORESoftware/ores-lambda
+          ref: cc7e5da3b42a75f8b172d85bf13a0c2844c2d431
+          token: ${{ secrets.ORE_SOURCE_PAT }}
+          path: ores-lambda
+          persist-credentials: false
+      - name: Configure private Git/Cargo source access
+        shell: bash
+        run: git config --global url."https://x-access-token:${ORE_SOURCE_PAT}@github.com/".insteadOf "https://github.com/"
+      - name: Regenerate exact Lambda lock authority
+        working-directory: ores-chat-lambdas
+        run: cargo generate-lockfile
+      - name: Format and prove Rust Lambda runtime
+        working-directory: ores-chat-lambdas
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup component add rustfmt clippy
+          cargo fmt --all
+          cargo check --all-targets --locked
+          cargo clippy --all-targets --locked -- -D warnings
+          cargo test --all-targets --locked
+      - name: Prove ores-lambda manifest and repository conformance
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo run --quiet --manifest-path ores-lambda/Cargo.toml -p ores-lambda-conformance --bin ores-lambda -- check ores-chat-lambdas/.ores-lambda.toml
+          cargo run --quiet --manifest-path ores-lambda/Cargo.toml -p ores-lambda-conformance --bin ores-lambda -- check-repo ores-chat-lambdas
+          cargo run --quiet --manifest-path ores-lambda/Cargo.toml -p ores-lambda-conformance --bin ores-lambda -- compose ores-chat-lambdas/.ores-lambda.toml .ores/generated/lambda-ingress.toml > /tmp/ores-chat-lambda-compose.yaml
+          test -s /tmp/ores-chat-lambda-compose.yaml
+      - name: Prove middleware claim is executable, not manifest-only
+        working-directory: ores-chat-lambdas
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -F 'install_from_env_with_manifest' src/bin/oci-http.rs
+          grep -F 'execution = "invocation"' .ores-lambda.toml
+          grep -F 'middleware_required = true' .ores-lambda.toml
+          test -d contracts
+          test -d conformance
+          git diff --check
+      - name: Write back only a fully proven Lambda branch
+        working-directory: ores-chat-lambdas
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add Cargo.lock Cargo.toml src .ores-lambda.toml .ores-mw.toml .zpkg.toml .zpkg.lock contracts conformance config
+          if ! git diff --cached --quiet; then
+            git commit -m 'chore: lock and format proven lambda authority'
+            git push origin HEAD:chatgpt/ores-lambda-runtime-20260922
+          fi
+      - name: Remove private Git rewrite
+        if: ${{ always() }}
+        shell: bash
+        run: git config --global --unset-all url."https://x-access-token:${ORE_SOURCE_PAT}@github.com/".insteadOf || true
