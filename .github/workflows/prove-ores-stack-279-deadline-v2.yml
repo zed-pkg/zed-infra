@@ -1,7 +1,8 @@
 name: repair ores-stack 279 absolute PPR deadline v2
 on:
   push:
-    branches: [proof/ores-stack-279-ppr-20260923]
+    branches:
+      - proof/ores-stack-279-ppr-20260923
 permissions:
   contents: read
 jobs:
@@ -63,158 +64,43 @@ jobs:
               p.write_text(s.replace(old, new, 1))
 
           supervisor = 'crates/ores-stack-cli/src/ppr_supervisor.rs'
-          replace_once(
-              supervisor,
-              'const WEB_CHILD_ENV: &str = "ORES_STACK_PPR_WEB_INNER";\nconst MIDDLEWARE_REV:',
-              'const WEB_CHILD_ENV: &str = "ORES_STACK_PPR_WEB_INNER";\nconst DEADLINE_UNIX_MS_ENV: &str = "ORES_STACK_PPR_DEADLINE_UNIX_MS";\nconst MIDDLEWARE_REV:',
-          )
-          replace_once(
-              supervisor,
-              '    let started = Instant::now();\n    let deadline = started + REQUEST_BUDGET;\n    let peer =',
-              '    let started = Instant::now();\n    let deadline = started + REQUEST_BUDGET;\n    let deadline_unix_ms = absolute_deadline_unix_ms(deadline);\n    let peer =',
-          )
-          replace_once(
-              supervisor,
-              '    let context = request_context(deadline);\n',
-              '    let context = request_context(deadline_unix_ms);\n',
-          )
-          old_call = '''            relay_to_p3(
-                &mut client,
-                root,
-                surface,
-                &mut head,
-                request.headers,
-                &mut middleware,
-                started,
-                deadline,
-            )
-'''
-          new_call = '''            relay_to_p3(
-                &mut client,
-                root,
-                surface,
-                &mut head,
-                request.headers,
-                &mut middleware,
-                started,
-                deadline,
-                deadline_unix_ms,
-            )
-'''
+          replace_once(supervisor, 'const WEB_CHILD_ENV: &str = "ORES_STACK_PPR_WEB_INNER";\nconst MIDDLEWARE_REV:', 'const WEB_CHILD_ENV: &str = "ORES_STACK_PPR_WEB_INNER";\nconst DEADLINE_UNIX_MS_ENV: &str = "ORES_STACK_PPR_DEADLINE_UNIX_MS";\nconst MIDDLEWARE_REV:')
+          replace_once(supervisor, '    let started = Instant::now();\n    let deadline = started + REQUEST_BUDGET;\n    let peer =', '    let started = Instant::now();\n    let deadline = started + REQUEST_BUDGET;\n    let deadline_unix_ms = absolute_deadline_unix_ms(deadline);\n    let peer =')
+          replace_once(supervisor, '    let context = request_context(deadline);\n', '    let context = request_context(deadline_unix_ms);\n')
+          old_call = '            relay_to_p3(\n                &mut client,\n                root,\n                surface,\n                &mut head,\n                request.headers,\n                &mut middleware,\n                started,\n                deadline,\n            )\n'
+          new_call = '            relay_to_p3(\n                &mut client,\n                root,\n                surface,\n                &mut head,\n                request.headers,\n                &mut middleware,\n                started,\n                deadline,\n                deadline_unix_ms,\n            )\n'
           replace_once(supervisor, old_call, new_call)
-          old_sig = '''fn relay_to_p3(
-    client: &mut TcpStream,
-    root: &Path,
-    surface: Surface,
-    head: &mut ores_stack_ppr_http::RequestHead,
-    headers: BTreeMap<String, String>,
-    middleware: &mut MiddlewareSession,
-    started: Instant,
-    deadline: Instant,
-) -> Result<(), String> {
-'''
+          old_sig = 'fn relay_to_p3(\n    client: &mut TcpStream,\n    root: &Path,\n    surface: Surface,\n    head: &mut ores_stack_ppr_http::RequestHead,\n    headers: BTreeMap<String, String>,\n    middleware: &mut MiddlewareSession,\n    started: Instant,\n    deadline: Instant,\n) -> Result<(), String> {\n'
           new_sig = old_sig.replace('    deadline: Instant,\n', '    deadline: Instant,\n    deadline_unix_ms: u64,\n')
           replace_once(supervisor, old_sig, new_sig)
-          replace_once(
-              supervisor,
-              '        .env("ORES_STACK_PROCESS_PER_REQUEST", "1")\n        .stdin(Stdio::piped())\n',
-              '        .env("ORES_STACK_PROCESS_PER_REQUEST", "1")\n        .env(DEADLINE_UNIX_MS_ENV, deadline_unix_ms.to_string())\n        .stdin(Stdio::piped())\n',
-          )
-          old_context = '''fn request_context(deadline: Instant) -> RequestContext {
-    let now_ms = RequestContext::now_ms();
-    let deadline_ms = now_ms.saturating_add(
-        deadline
-            .saturating_duration_since(Instant::now())
-            .as_millis()
-            .min(u64::MAX as u128) as u64,
-    );
-'''
-          new_context = '''fn absolute_deadline_unix_ms(deadline: Instant) -> u64 {
-    RequestContext::now_ms().saturating_add(
-        deadline
-            .saturating_duration_since(Instant::now())
-            .as_millis()
-            .min(u64::MAX as u128) as u64,
-    )
-}
-
-fn request_context(deadline_ms: u64) -> RequestContext {
-    let now_ms = RequestContext::now_ms();
-'''
+          replace_once(supervisor, '        .env("ORES_STACK_PROCESS_PER_REQUEST", "1")\n        .stdin(Stdio::piped())\n', '        .env("ORES_STACK_PROCESS_PER_REQUEST", "1")\n        .env(DEADLINE_UNIX_MS_ENV, deadline_unix_ms.to_string())\n        .stdin(Stdio::piped())\n')
+          old_context = 'fn request_context(deadline: Instant) -> RequestContext {\n    let now_ms = RequestContext::now_ms();\n    let deadline_ms = now_ms.saturating_add(\n        deadline\n            .saturating_duration_since(Instant::now())\n            .as_millis()\n            .min(u64::MAX as u128) as u64,\n    );\n'
+          new_context = 'fn absolute_deadline_unix_ms(deadline: Instant) -> u64 {\n    RequestContext::now_ms().saturating_add(\n        deadline\n            .saturating_duration_since(Instant::now())\n            .as_millis()\n            .min(u64::MAX as u128) as u64,\n    )\n}\n\nfn request_context(deadline_ms: u64) -> RequestContext {\n    let now_ms = RequestContext::now_ms();\n'
           replace_once(supervisor, old_context, new_context)
 
           api = 'crates/ores-stack-cli/src/ppr_api_route_local.rs'
-          replace_once(
-              api,
-              'use std::{{collections::BTreeMap, env, io::{{Read, Write}}, time::Duration}};\nconst LOCAL_TIMEOUT: Duration = Duration::from_secs(90);\n',
-              'use std::{{collections::BTreeMap, env, io::{{Read, Write}}, time::{{Duration, SystemTime, UNIX_EPOCH}}}};\n',
-          )
-          replace_once(
-              api,
-              '    let request = ParsedRequest::parse(&raw)?;\n    let deadline = tokio::time::Instant::now() + LOCAL_TIMEOUT;\n',
-              '    let request = ParsedRequest::parse(&raw)?;\n    let deadline = deadline_from_env()?;\n',
-          )
-          replace_once(
-              api,
-              'fn section(value: &Value, name: &str) -> bool {{\n',
-              '''fn deadline_from_env() -> Result<tokio::time::Instant, Box<dyn std::error::Error>> {{
-    let deadline_unix_ms = env::var("ORES_STACK_PPR_DEADLINE_UNIX_MS")?.parse::<u64>()?;
-    let now_unix_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)?
-        .as_millis()
-        .min(u64::MAX as u128) as u64;
-    let remaining = Duration::from_millis(deadline_unix_ms.saturating_sub(now_unix_ms));
-    Ok(tokio::time::Instant::now() + remaining)
-}}
-
-fn section(value: &Value, name: &str) -> bool {{
-''',
-          )
+          replace_once(api, 'use std::{{collections::BTreeMap, env, io::{{Read, Write}}, time::Duration}};\nconst LOCAL_TIMEOUT: Duration = Duration::from_secs(90);\n', 'use std::{{collections::BTreeMap, env, io::{{Read, Write}}, time::{{Duration, SystemTime, UNIX_EPOCH}}}};\n')
+          replace_once(api, '    let request = ParsedRequest::parse(&raw)?;\n    let deadline = tokio::time::Instant::now() + LOCAL_TIMEOUT;\n', '    let request = ParsedRequest::parse(&raw)?;\n    let deadline = deadline_from_env()?;\n')
+          api_helper = 'fn deadline_from_env() -> Result<tokio::time::Instant, Box<dyn std::error::Error>> {{\n    let deadline_unix_ms = env::var("ORES_STACK_PPR_DEADLINE_UNIX_MS")?.parse::<u64>()?;\n    let now_unix_ms = SystemTime::now()\n        .duration_since(UNIX_EPOCH)?\n        .as_millis()\n        .min(u64::MAX as u128) as u64;\n    let remaining = Duration::from_millis(deadline_unix_ms.saturating_sub(now_unix_ms));\n    Ok(tokio::time::Instant::now() + remaining)\n}}\n\nfn section(value: &Value, name: &str) -> bool {{\n'
+          replace_once(api, 'fn section(value: &Value, name: &str) -> bool {{\n', api_helper)
 
           web = 'crates/ores-stack-cli/src/ppr_web_route_local.rs'
-          replace_once(
-              web,
-              'use std::{{collections::BTreeMap, env, io::{{Read, Write}}, time::Duration}};\nconst LOCAL_TIMEOUT: Duration = Duration::from_secs(90);\n',
-              'use std::{{collections::BTreeMap, env, io::{{Read, Write}}, time::{{Duration, SystemTime, UNIX_EPOCH}}}};\n',
-          )
-          replace_once(
-              web,
-              '    let request = ParsedRequest::parse(&raw)?;\n    let method = match request.method.as_str() {{\n',
-              '    let request = ParsedRequest::parse(&raw)?;\n    let deadline = deadline_from_env()?;\n    let method = match request.method.as_str() {{\n',
-          )
+          replace_once(web, 'use std::{{collections::BTreeMap, env, io::{{Read, Write}}, time::Duration}};\nconst LOCAL_TIMEOUT: Duration = Duration::from_secs(90);\n', 'use std::{{collections::BTreeMap, env, io::{{Read, Write}}, time::{{Duration, SystemTime, UNIX_EPOCH}}}};\n')
+          replace_once(web, '    let request = ParsedRequest::parse(&raw)?;\n    let method = match request.method.as_str() {{\n', '    let request = ParsedRequest::parse(&raw)?;\n    let deadline = deadline_from_env()?;\n    let method = match request.method.as_str() {{\n')
           replace_once(web, 'tokio::time::timeout(LOCAL_TIMEOUT, lambda::init_state())', 'tokio::time::timeout_at(deadline, lambda::init_state())')
           replace_once(web, 'tokio::time::timeout(LOCAL_TIMEOUT, lambda::admit(input))', 'tokio::time::timeout_at(deadline, lambda::admit(input))')
-          replace_once(
-              web,
-              'let response = match tokio::time::timeout(\n        LOCAL_TIMEOUT,\n',
-              'let response = match tokio::time::timeout_at(\n        deadline,\n',
-          )
-          replace_once(
-              web,
-              'struct ParsedRequest {{\n',
-              '''fn deadline_from_env() -> Result<tokio::time::Instant, Box<dyn std::error::Error>> {{
-    let deadline_unix_ms = env::var("ORES_STACK_PPR_DEADLINE_UNIX_MS")?.parse::<u64>()?;
-    let now_unix_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)?
-        .as_millis()
-        .min(u64::MAX as u128) as u64;
-    let remaining = Duration::from_millis(deadline_unix_ms.saturating_sub(now_unix_ms));
-    Ok(tokio::time::Instant::now() + remaining)
-}}
-
-struct ParsedRequest {{
-''',
-          )
+          replace_once(web, 'let response = match tokio::time::timeout(\n        LOCAL_TIMEOUT,\n', 'let response = match tokio::time::timeout_at(\n        deadline,\n')
+          web_helper = 'fn deadline_from_env() -> Result<tokio::time::Instant, Box<dyn std::error::Error>> {{\n    let deadline_unix_ms = env::var("ORES_STACK_PPR_DEADLINE_UNIX_MS")?.parse::<u64>()?;\n    let now_unix_ms = SystemTime::now()\n        .duration_since(UNIX_EPOCH)?\n        .as_millis()\n        .min(u64::MAX as u128) as u64;\n    let remaining = Duration::from_millis(deadline_unix_ms.saturating_sub(now_unix_ms));\n    Ok(tokio::time::Instant::now() + remaining)\n}}\n\nstruct ParsedRequest {{\n'
+          replace_once(web, 'struct ParsedRequest {{\n', web_helper)
 
           for path in (api, web):
               text = Path(path).read_text()
-              if 'LOCAL_TIMEOUT' in text:
-                  raise SystemExit(f'{path}: independent 90-second P3 timeout survived')
+              if 'const LOCAL_TIMEOUT' in text:
+                  raise SystemExit(f'{path}: independent P3 deadline survived')
               if 'ORES_STACK_PPR_DEADLINE_UNIX_MS' not in text:
                   raise SystemExit(f'{path}: shared deadline env missing')
-          text = Path(supervisor).read_text()
-          if text.count('ORES_STACK_PPR_DEADLINE_UNIX_MS') != 1:
-              raise SystemExit('supervisor deadline env authority must be singular')
+          if Path(supervisor).read_text().count('"ORES_STACK_PPR_DEADLINE_UNIX_MS"') != 1:
+              raise SystemExit('supervisor must define exactly one deadline env authority')
           PY
           cargo +1.88.0 fmt --all
           git diff --check
