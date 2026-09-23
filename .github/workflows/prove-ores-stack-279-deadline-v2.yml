@@ -46,7 +46,7 @@ jobs:
           SH
           chmod 700 "$askpass"
           printf 'GIT_ASKPASS=%s\nGIT_TERMINAL_PROMPT=0\nCARGO_NET_GIT_FETCH_WITH_CLI=true\n' "$askpass" >> "$GITHUB_ENV"
-      - name: Patch, prove, and guarded-push one absolute deadline
+      - name: Patch, refresh lock, prove, and guarded-push
         shell: bash
         run: |
           set -euo pipefail
@@ -102,8 +102,26 @@ jobs:
           if Path(supervisor).read_text().count('"ORES_STACK_PPR_DEADLINE_UNIX_MS"') != 1:
               raise SystemExit('supervisor must define exactly one deadline env authority')
           PY
+
           cargo +1.88.0 fmt --all
+          cargo +1.88.0 generate-lockfile
           git diff --check
+          python3 - <<'PY'
+          import subprocess
+          allowed = {
+              'Cargo.lock',
+              'crates/ores-stack-cli/src/ppr_supervisor.rs',
+              'crates/ores-stack-cli/src/ppr_api_route_local.rs',
+              'crates/ores-stack-cli/src/ppr_web_route_local.rs',
+          }
+          changed = set(subprocess.check_output(['git', 'diff', '--name-only'], text=True).splitlines())
+          unexpected = changed - allowed
+          if unexpected:
+              raise SystemExit(f'unexpected files changed: {sorted(unexpected)}')
+          missing = allowed - changed
+          if missing:
+              raise SystemExit(f'expected guarded files did not change: {sorted(missing)}')
+          PY
           cargo +1.88.0 check --locked -p ores-stack-cli --all-targets
           cargo +1.88.0 test --locked -p ores-stack-cli ppr_api_route_local::tests -- --nocapture
           cargo +1.88.0 test --locked -p ores-stack-cli ppr_web_route_local::tests -- --nocapture
@@ -112,6 +130,6 @@ jobs:
           test "$(git ls-remote origin "refs/heads/$SOURCE_BRANCH" | cut -f1)" = "$EXPECTED_SOURCE_SHA"
           git config user.name 'Alexander Mills'
           git config user.email 'alex@oresoftware.com'
-          git add crates/ores-stack-cli/src/ppr_supervisor.rs crates/ores-stack-cli/src/ppr_api_route_local.rs crates/ores-stack-cli/src/ppr_web_route_local.rs
+          git add Cargo.lock crates/ores-stack-cli/src/ppr_supervisor.rs crates/ores-stack-cli/src/ppr_api_route_local.rs crates/ores-stack-cli/src/ppr_web_route_local.rs
           git commit -m 'fix(ppr): share one absolute request deadline'
           git push origin HEAD:"$SOURCE_BRANCH"
