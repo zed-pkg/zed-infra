@@ -1,1 +1,1 @@
-ores-stack: callable inventory admission failed for /home/runner/work/zed-infra/zed-infra/ores-chat-api-server.rs: RPC source contract check failed: 1 RPC source mismatch(es): src/routes/mod.rs: REST route authority moved under src/routes/rest/**; src/routes/mod.rs/** is not an admitted route namespace
+ores-stack: API lambda source generation refused: src/lib.rs must declare unconditional `pub mod ores_api_lambda;`; provider wrappers are external crates and cannot reach a private/pub(crate) export module, and ores-stack will not rewrite authored lib.rs automatically
