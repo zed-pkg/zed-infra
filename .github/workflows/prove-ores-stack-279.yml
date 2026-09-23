@@ -35,6 +35,8 @@ jobs:
 
       - name: Install Rust 1.88
         uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt
 
       - name: Repair the two stale test fixtures only
         working-directory: ores-stack
