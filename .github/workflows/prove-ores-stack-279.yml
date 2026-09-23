@@ -1,25 +1,27 @@
-name: repair ores-stack 279 tests
+name: repair ores-stack 279 absolute PPR deadline
 on:
   push:
     branches: [proof/ores-stack-279-ppr-20260923]
 permissions:
   contents: read
 jobs:
-  repair-tests:
+  repair-deadline:
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 45
     env:
       SOURCE_PAT: ${{ secrets.ORE_SOURCE_PAT }}
+      EXPECTED_SOURCE_SHA: d1b2e56a57bc994fc853f695c9b49c2f1b7735cd
+      SOURCE_BRANCH: feat/stack-dev-build-deploy-ppr-20260923
     steps:
       - name: Require source PAT without exposing it
         run: |
           set -euo pipefail
           test -n "${SOURCE_PAT:-}" || { echo '::error::ORE_SOURCE_PAT is not configured'; exit 1; }
-      - name: Check out ores-stack PR branch
+      - name: Check out exact ores-stack PR branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: ORESoftware/ores-stack
-          ref: feat/stack-dev-build-deploy-ppr-20260923
+          ref: ${{ env.SOURCE_BRANCH }}
           fetch-depth: 0
           persist-credentials: true
           token: ${{ secrets.ORE_SOURCE_PAT }}
@@ -42,43 +44,91 @@ jobs:
           SH
           chmod 700 "$askpass"
           printf 'GIT_ASKPASS=%s\nGIT_TERMINAL_PROMPT=0\nCARGO_NET_GIT_FETCH_WITH_CLI=true\n' "$askpass" >> "$GITHUB_ENV"
-      - name: Repair stale invariants and prove before push
+      - name: Repair one absolute P1/P2/P3 deadline and prove before push
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = 'e89486239b9a6be5aa38b30e488721e58e3343d8'
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
+          test "$(git ls-remote origin "refs/heads/$SOURCE_BRANCH" | cut -f1)" = "$EXPECTED_SOURCE_SHA"
           python3 - <<'PY'
           from pathlib import Path
 
-          p = Path('crates/ores-stack-cli/src/ppr_web_route_local.rs')
-          s = p.read_text()
-          for old, new in [
-              ('assert!(source.contains("content-length: {{}}"));', 'assert!(source.contains("content-length: {}"));'),
-              ('assert!(source.contains("if !head {{ out.write_all(body)?; }}"));', 'assert!(source.contains("if !head { out.write_all(body)?; }"));'),
-          ]:
-              if s.count(old) != 1:
-                  raise SystemExit(f'expected one PPR assertion anchor, found {s.count(old)}: {old}')
-              s = s.replace(old, new, 1)
-          p.write_text(s)
+          def replace_once(path, old, new):
+              p = Path(path)
+              s = p.read_text()
+              count = s.count(old)
+              if count != 1:
+                  raise SystemExit(f'{path}: expected one anchor, found {count}: {old[:120]!r}')
+              p.write_text(s.replace(old, new, 1))
 
-          p = Path('crates/ores-stack-cli/src/stack_cli_hardened.rs')
-          s = p.read_text()
-          old = '        fs::create_dir(workspace.path().join(&names.lambdas)).expect("collision");\n'
-          new = ('        let collision = workspace.path().join(&names.lambdas);\n'
-                 '        fs::create_dir(&collision).expect("collision");\n'
-                 '        fs::write(collision.join("keep"), "pre-existing\\n").expect("make collision non-empty");\n')
-          if s.count(old) != 1:
-              raise SystemExit(f'expected one publication collision anchor, found {s.count(old)}')
-          p.write_text(s.replace(old, new, 1))
+          supervisor = 'crates/ores-stack-cli/src/ppr_supervisor.rs'
+          replace_once(supervisor,
+              'const WEB_CHILD_ENV: &str = "ORES_STACK_PPR_WEB_INNER";\nconst MIDDLEWARE_REV:',
+              'const WEB_CHILD_ENV: &str = "ORES_STACK_PPR_WEB_INNER";\nconst DEADLINE_UNIX_MS_ENV: &str = "ORES_STACK_PPR_DEADLINE_UNIX_MS";\nconst MIDDLEWARE_REV:')
+          replace_once(supervisor,
+              '    let started = Instant::now();\n    let deadline = started + REQUEST_BUDGET;\n',
+              '    let started = Instant::now();\n    let deadline = started + REQUEST_BUDGET;\n    let deadline_unix_ms = absolute_deadline_unix_ms()?;\n')
+          replace_once(supervisor,
+              '    let context = request_context(deadline);\n',
+              '    let context = request_context(deadline_unix_ms);\n')
+          replace_once(supervisor,
+              '                started,\n                deadline,\n            )\n',
+              '                started,\n                deadline,\n                deadline_unix_ms,\n            )\n')
+          replace_once(supervisor,
+              '    started: Instant,\n    deadline: Instant,\n) -> Result<(), String> {\n',
+              '    started: Instant,\n    deadline: Instant,\n    deadline_unix_ms: u64,\n) -> Result<(), String> {\n')
+          replace_once(supervisor,
+              '        .env("ORES_STACK_PROCESS_PER_REQUEST", "1")\n        .stdin(Stdio::piped())\n',
+              '        .env("ORES_STACK_PROCESS_PER_REQUEST", "1")\n        .env(DEADLINE_UNIX_MS_ENV, deadline_unix_ms.to_string())\n        .stdin(Stdio::piped())\n')
+          old_context = '''fn request_context(deadline: Instant) -> RequestContext {\n    let now_ms = RequestContext::now_ms();\n    let deadline_ms = now_ms.saturating_add(\n        deadline\n            .saturating_duration_since(Instant::now())\n            .as_millis()\n            .min(u64::MAX as u128) as u64,\n    );\n'''
+          new_context = '''fn absolute_deadline_unix_ms() -> Result<u64, String> {\n    let deadline = SystemTime::now()\n        .checked_add(REQUEST_BUDGET)\n        .ok_or("PPR absolute deadline overflowed system time")?;\n    let elapsed = deadline\n        .duration_since(UNIX_EPOCH)\n        .map_err(|error| format!("PPR absolute deadline predates Unix epoch: {error}"))?;\n    Ok(elapsed.as_millis().min(u64::MAX as u128) as u64)\n}\n\nfn request_context(deadline_ms: u64) -> RequestContext {\n    let now_ms = RequestContext::now_ms();\n'''
+          replace_once(supervisor, old_context, new_context)
+
+          api = 'crates/ores-stack-cli/src/ppr_api_route_local.rs'
+          replace_once(api,
+              'use std::{{collections::BTreeMap, env, io::{{Read, Write}}, time::Duration}};\nconst LOCAL_TIMEOUT: Duration = Duration::from_secs(90);\n',
+              'use std::{{collections::BTreeMap, env, io::{{Read, Write}}, time::{{Duration, SystemTime, UNIX_EPOCH}}}};\n')
+          replace_once(api,
+              '    let request = ParsedRequest::parse(&raw)?;\n    let deadline = tokio::time::Instant::now() + LOCAL_TIMEOUT;\n',
+              '    let request = ParsedRequest::parse(&raw)?;\n    let deadline = deadline_from_env()?;\n')
+          replace_once(api,
+              'fn section(value: &Value, name: &str) -> bool {{\n',
+              '''fn deadline_from_env() -> Result<tokio::time::Instant, Box<dyn std::error::Error>> {{\n    let deadline_unix_ms = env::var("ORES_STACK_PPR_DEADLINE_UNIX_MS")?.parse::<u64>()?;\n    let now_unix_ms = SystemTime::now()\n        .duration_since(UNIX_EPOCH)?\n        .as_millis()\n        .min(u64::MAX as u128) as u64;\n    let remaining = Duration::from_millis(deadline_unix_ms.saturating_sub(now_unix_ms));\n    Ok(tokio::time::Instant::now() + remaining)\n}}\n\nfn section(value: &Value, name: &str) -> bool {{\n''')
+          replace_once(api,
+              '        assert!(source.contains("timeout_at(deadline"));\n',
+              '        assert!(source.contains("timeout_at(deadline"));\n        assert!(source.contains("ORES_STACK_PPR_DEADLINE_UNIX_MS"));\n')
+
+          web = 'crates/ores-stack-cli/src/ppr_web_route_local.rs'
+          replace_once(web,
+              'use std::{{collections::BTreeMap, env, io::{{Read, Write}}, time::Duration}};\nconst LOCAL_TIMEOUT: Duration = Duration::from_secs(90);\n',
+              'use std::{{collections::BTreeMap, env, io::{{Read, Write}}, time::{{Duration, SystemTime, UNIX_EPOCH}}}};\n')
+          replace_once(web,
+              '    let request = ParsedRequest::parse(&raw)?;\n    let method = match request.method.as_str() {{\n',
+              '    let request = ParsedRequest::parse(&raw)?;\n    let deadline = deadline_from_env()?;\n    let method = match request.method.as_str() {{\n')
+          replace_once(web,
+              'tokio::time::timeout(LOCAL_TIMEOUT, lambda::init_state())',
+              'tokio::time::timeout_at(deadline, lambda::init_state())')
+          replace_once(web,
+              'tokio::time::timeout(LOCAL_TIMEOUT, lambda::admit(input))',
+              'tokio::time::timeout_at(deadline, lambda::admit(input))')
+          replace_once(web,
+              'let response = match tokio::time::timeout(\n        LOCAL_TIMEOUT,\n',
+              'let response = match tokio::time::timeout_at(\n        deadline,\n')
+          replace_once(web,
+              'struct ParsedRequest {{\n',
+              '''fn deadline_from_env() -> Result<tokio::time::Instant, Box<dyn std::error::Error>> {{\n    let deadline_unix_ms = env::var("ORES_STACK_PPR_DEADLINE_UNIX_MS")?.parse::<u64>()?;\n    let now_unix_ms = SystemTime::now()\n        .duration_since(UNIX_EPOCH)?\n        .as_millis()\n        .min(u64::MAX as u128) as u64;\n    let remaining = Duration::from_millis(deadline_unix_ms.saturating_sub(now_unix_ms));\n    Ok(tokio::time::Instant::now() + remaining)\n}}\n\nstruct ParsedRequest {{\n''')
+          if 'LOCAL_TIMEOUT' in Path(web).read_text() or 'LOCAL_TIMEOUT' in Path(api).read_text():
+              raise SystemExit('local P3 timeout reset survived deadline repair')
           PY
           cargo +1.88.0 fmt --all
           git diff --check
-          cargo +1.88.0 test --locked -p ores-stack-cli ppr_web_route_local::tests::generated_main_preserves_head_content_length_without_body -- --exact
-          cargo +1.88.0 test --locked -p ores-stack-cli stack_cli_hardened::tests::publication_rolls_back_when_a_later_destination_collides -- --exact
+          cargo +1.88.0 check --locked -p ores-stack-cli --all-targets
+          cargo +1.88.0 test --locked -p ores-stack-cli ppr_api_route_local::tests::generated_unary_main_is_generic_and_never_parses_generated_route_metadata -- --exact
+          cargo +1.88.0 test --locked -p ores-stack-cli ppr_web_route_local::tests -- --nocapture
           cargo +1.88.0 test --locked -p ores-stack-cli
-          git status --porcelain=v1
+          test "$(git ls-remote origin "refs/heads/$SOURCE_BRANCH" | cut -f1)" = "$EXPECTED_SOURCE_SHA"
           git config user.name 'Alexander Mills'
           git config user.email 'alex@oresoftware.com'
-          git add crates/ores-stack-cli/src/ppr_web_route_local.rs crates/ores-stack-cli/src/stack_cli_hardened.rs
-          git commit -m 'test: harden PPR and publication invariants'
-          git push origin HEAD:feat/stack-dev-build-deploy-ppr-20260923
+          git add crates/ores-stack-cli/src/ppr_supervisor.rs crates/ores-stack-cli/src/ppr_api_route_local.rs crates/ores-stack-cli/src/ppr_web_route_local.rs
+          git commit -m 'fix(ppr): share one absolute request deadline'
+          git push origin HEAD:"$SOURCE_BRANCH"
