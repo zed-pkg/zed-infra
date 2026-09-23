@@ -25,6 +25,14 @@ jobs:
           token: ${{ secrets.ORE_SOURCE_PAT }}
           path: api
           fetch-depth: 0
+      - name: Check out exact ores-stack authority
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ORESoftware/ores-stack
+          ref: d46c07e0f91c2dbda9b2fee64bdd82f6d52fc1ef
+          token: ${{ secrets.ORE_SOURCE_PAT }}
+          path: ores-stack
+          persist-credentials: false
       - name: Configure private Git/Cargo source access
         shell: bash
         run: |
@@ -34,11 +42,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cargo install \
-            --git https://github.com/ORESoftware/ores-stack.git \
-            --rev d46c07e0f91c2dbda9b2fee64bdd82f6d52fc1ef \
-            --package ores-stack-cli \
-            --locked
+          cargo install --path ores-stack/crates/ores-stack-cli --locked
       - name: Mount semantic transport modules and retire legacy public handler
         working-directory: api
         shell: bash
