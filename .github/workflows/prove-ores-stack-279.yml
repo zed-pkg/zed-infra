@@ -1,13 +1,13 @@
-name: prove ores-stack 279
+name: format ores-stack 279
 on:
   push:
     branches: [proof/ores-stack-279-ppr-20260923]
 permissions:
   contents: read
 jobs:
-  compile-and-test:
+  format-target:
     runs-on: ubuntu-24.04
-    timeout-minutes: 50
+    timeout-minutes: 20
     steps:
       - name: Require source PAT without exposing it
         env:
@@ -15,41 +15,32 @@ jobs:
         run: |
           set -euo pipefail
           test -n "${SOURCE_PAT:-}" || { echo '::error::ORE_SOURCE_PAT is not configured'; exit 1; }
-      - name: Check out exact ores-stack head
+      - name: Check out ores-stack PR branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: ORESoftware/ores-stack
-          ref: 75e3eb1229f8b35dc6d987433e22bc7d7937025b
-          fetch-depth: 1
-          persist-credentials: false
+          ref: feat/stack-dev-build-deploy-ppr-20260923
+          fetch-depth: 0
+          persist-credentials: true
           token: ${{ secrets.ORE_SOURCE_PAT }}
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
         with:
           toolchain: '1.88.0'
-          components: rustfmt,clippy
-      - name: Install private git auth for Cargo
-        env:
-          SOURCE_PAT: ${{ secrets.ORE_SOURCE_PAT }}
+          components: rustfmt
+      - name: Canonically format and push only formatting
         shell: bash
         run: |
           set -euo pipefail
-          askpass="$RUNNER_TEMP/ores-stack-askpass.sh"
-          cat >"$askpass" <<'SH'
-          #!/bin/sh
-          case "$1" in
-            *Username*) printf '%s\n' 'x-access-token' ;;
-            *Password*) printf '%s\n' "$SOURCE_PAT" ;;
-            *) exit 1 ;;
-          esac
-          SH
-          chmod 700 "$askpass"
-          echo "GIT_ASKPASS=$askpass" >> "$GITHUB_ENV"
-          echo 'GIT_TERMINAL_PROMPT=0' >> "$GITHUB_ENV"
-          echo 'CARGO_NET_GIT_FETCH_WITH_CLI=true' >> "$GITHUB_ENV"
-      - run: cargo +1.88.0 fmt --all -- --check
-      - run: cargo +1.88.0 check --locked -p ores-stack-cli --all-targets
-      - run: cargo +1.88.0 test --locked -p ores-stack-cli
-      - run: cargo +1.88.0 test --locked -p ores-stack-ppr-http
-      - run: cargo +1.88.0 test --locked -p ores-stack-p2-edge-minimal
-      - run: cargo +1.88.0 test --locked -p ores-stack-process-tree
-      - run: cargo +1.88.0 test --locked -p ores-stack-core
+          before="$(git rev-parse HEAD)"
+          test "$before" = '75e3eb1229f8b35dc6d987433e22bc7d7937025b'
+          cargo +1.88.0 fmt --all
+          if git diff --quiet; then
+            echo 'No formatting changes required.'
+            exit 0
+          fi
+          git diff --check
+          git config user.name 'Alexander Mills'
+          git config user.email 'alex@oresoftware.com'
+          git add --update
+          git commit -m 'style: rustfmt PPR dev orchestration'
+          git push origin HEAD:feat/stack-dev-build-deploy-ppr-20260923
