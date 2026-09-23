@@ -38,7 +38,7 @@ jobs:
         with:
           components: rustfmt
 
-      - name: Repair the two stale test fixtures only
+      - name: Repair stale fixtures and canonical formatting
         working-directory: ores-stack
         run: |
           set -euo pipefail
@@ -51,10 +51,17 @@ jobs:
           grep -Fqx "$anchor" "$file"
           sed -i '/fs::create_dir(workspace.path().join(&names.lambdas)).expect("collision");/a\        fs::write(workspace.path().join(&names.lambdas).join("keep"), b"collision").expect("sentinel");' "$file"
 
+          cargo +1.88.0 fmt --all
           git diff --check
-          git diff -- crates/ores-stack-cli/src/ppr_web_route_local.rs crates/ores-stack-cli/src/stack_cli_hardened.rs
+          changed="$(git diff --name-only | sort)"
+          allowed="$(printf '%s\n' \
+            crates/ores-stack-cli/src/ppr_web_route_local.rs \
+            crates/ores-stack-cli/src/stack_cli_hardened.rs \
+            crates/ores-stack-cli/src/stack_dev_hardened.rs | sort)"
+          test "$changed" = "$allowed"
+          git diff -- $changed
 
-      - name: Format and test CLI
+      - name: Test CLI
         working-directory: ores-stack
         env:
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
@@ -75,8 +82,11 @@ jobs:
           set -euo pipefail
           git config user.name ORESoftware
           git config user.email ores-stack@users.noreply.github.com
-          git add crates/ores-stack-cli/src/ppr_web_route_local.rs crates/ores-stack-cli/src/stack_cli_hardened.rs
+          git add \
+            crates/ores-stack-cli/src/ppr_web_route_local.rs \
+            crates/ores-stack-cli/src/stack_cli_hardened.rs \
+            crates/ores-stack-cli/src/stack_dev_hardened.rs
           git diff --cached --quiet && exit 0
-          git commit -m 'test(cli): repair PPR and rollback fixtures'
+          git commit -m 'test(cli): repair PPR fixtures and formatting'
           git remote set-url origin "https://x-access-token:${GH_PAT}@github.com/${SOURCE_REPO}.git"
           git push origin HEAD:"${SOURCE_BRANCH}"
