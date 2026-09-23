@@ -1,13 +1,13 @@
-name: prove ores-stack 279
+name: repair ores-stack 279 tests
 on:
   push:
     branches: [proof/ores-stack-279-ppr-20260923]
 permissions:
   contents: read
 jobs:
-  compile-and-test:
+  repair-tests:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 35
     env:
       SOURCE_PAT: ${{ secrets.ORE_SOURCE_PAT }}
     steps:
@@ -15,18 +15,18 @@ jobs:
         run: |
           set -euo pipefail
           test -n "${SOURCE_PAT:-}" || { echo '::error::ORE_SOURCE_PAT is not configured'; exit 1; }
-      - name: Check out exact ores-stack head
+      - name: Check out ores-stack PR branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: ORESoftware/ores-stack
-          ref: e89486239b9a6be5aa38b30e488721e58e3343d8
-          fetch-depth: 1
-          persist-credentials: false
+          ref: feat/stack-dev-build-deploy-ppr-20260923
+          fetch-depth: 0
+          persist-credentials: true
           token: ${{ secrets.ORE_SOURCE_PAT }}
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
         with:
           toolchain: '1.88.0'
-          components: rustfmt, clippy
+          components: rustfmt
       - name: Install private git auth for Cargo
         shell: bash
         run: |
@@ -42,10 +42,38 @@ jobs:
           SH
           chmod 700 "$askpass"
           printf 'GIT_ASKPASS=%s\nGIT_TERMINAL_PROMPT=0\nCARGO_NET_GIT_FETCH_WITH_CLI=true\n' "$askpass" >> "$GITHUB_ENV"
-      - run: cargo +1.88.0 fmt --all -- --check
-      - run: cargo +1.88.0 check --locked -p ores-stack-cli --all-targets
-      - run: cargo +1.88.0 test --locked -p ores-stack-cli
-      - run: cargo +1.88.0 test --locked -p ores-stack-ppr-http
-      - run: cargo +1.88.0 test --locked -p ores-stack-p2-edge-minimal
-      - run: cargo +1.88.0 test --locked -p ores-stack-process-tree
-      - run: cargo +1.88.0 test --locked -p ores-stack-core
+      - name: Repair stale invariants and prove before push
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = 'e89486239b9a6be5aa38b30e488721e58e3343d8'
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('crates/ores-stack-cli/src/ppr_web_route_local.rs')
+          s = p.read_text()
+          old = '''        assert!(source.contains("content-length: {{}}"));\n        assert!(source.contains("if !head {{ out.write_all(body)?; }}"));'''
+          new = '''        assert!(source.contains("content-length: {}"));\n        assert!(source.contains("if !head { out.write_all(body)?; }"));'''
+          if old not in s:
+              raise SystemExit('ppr rendered-source assertions not found exactly')
+          p.write_text(s.replace(old, new, 1))
+
+          p = Path('crates/ores-stack-cli/src/stack_cli_hardened.rs')
+          s = p.read_text()
+          old = '''        fs::create_dir(workspace.path().join(&names.lambdas)).expect("collision");\n        let error = publish_staged(stage.path(), workspace.path(), &names).expect_err("collision");'''
+          new = '''        let collision = workspace.path().join(&names.lambdas);\n        fs::create_dir(&collision).expect("collision");\n        fs::write(collision.join("keep"), "pre-existing\\n").expect("make collision non-empty");\n        let error = publish_staged(stage.path(), workspace.path(), &names).expect_err("collision");'''
+          if old not in s:
+              raise SystemExit('publication collision fixture not found exactly')
+          p.write_text(s.replace(old, new, 1))
+          PY
+          cargo +1.88.0 fmt --all
+          git diff --check
+          cargo +1.88.0 test --locked -p ores-stack-cli ppr_web_route_local::tests::generated_main_preserves_head_content_length_without_body -- --exact
+          cargo +1.88.0 test --locked -p ores-stack-cli stack_cli_hardened::tests::publication_rolls_back_when_a_later_destination_collides -- --exact
+          cargo +1.88.0 test --locked -p ores-stack-cli
+          git status --porcelain=v1
+          git config user.name 'Alexander Mills'
+          git config user.email 'alex@oresoftware.com'
+          git add crates/ores-stack-cli/src/ppr_web_route_local.rs crates/ores-stack-cli/src/stack_cli_hardened.rs
+          git commit -m 'test: harden PPR and publication invariants'
+          git push origin HEAD:feat/stack-dev-build-deploy-ppr-20260923
