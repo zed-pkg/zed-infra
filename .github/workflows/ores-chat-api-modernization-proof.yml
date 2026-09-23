@@ -2,8 +2,9 @@ name: ores-chat API modernization proof
 on:
   push:
     branches: [proof/ores-chat-modernization-20260923]
+    paths-ignore: [.proof/api-generation.log]
 permissions:
-  contents: read
+  contents: write
 jobs:
   api:
     runs-on: ubuntu-latest
@@ -12,6 +13,11 @@ jobs:
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
       ORE_SOURCE_PAT: ${{ secrets.ORE_SOURCE_PAT }}
     steps:
+      - name: Check out proof repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: proof/ores-chat-modernization-20260923
+          path: proof-repo
       - name: Require sanctioned cross-org source credential
         shell: bash
         run: |
@@ -40,9 +46,7 @@ jobs:
           git config --global url."https://x-access-token:${ORE_SOURCE_PAT}@github.com/".insteadOf "https://github.com/"
       - name: Install current ores-stack authority
         shell: bash
-        run: |
-          set -euo pipefail
-          cargo install --path ores-stack/crates/ores-stack-cli --locked
+        run: cargo install --path ores-stack/crates/ores-stack-cli --locked
       - name: Mount semantic transport modules and retire legacy public handler
         working-directory: api
         shell: bash
@@ -53,11 +57,7 @@ jobs:
           path = Path('src/lib.rs')
           text = path.read_text()
           if 'pub mod graphql;' not in text:
-              text = text.replace(
-                  'pub mod sidecar;\n',
-                  'pub mod graphql;\npub mod routes;\npub mod sidecar;\n',
-                  1,
-              )
+              text = text.replace('pub mod sidecar;\n', 'pub mod graphql;\npub mod routes;\npub mod sidecar;\n', 1)
           text = text.replace(
               'post(public_chat).options(public_preflight)',
               'post(routes::rest::v1::public_chat::route::post).options(public_preflight)',
@@ -74,11 +74,31 @@ jobs:
           path.write_text(text)
           PY
       - name: Generate RPC, route-map and provider-neutral API Lambda source
+        id: generate
+        shell: bash
+        run: |
+          set +e
+          ores-stack generate all --roots="$(pwd)/api" > /tmp/api-generation.log 2>&1
+          status=$?
+          cat /tmp/api-generation.log
+          if [ "$status" -ne 0 ]; then
+            mkdir -p proof-repo/.proof
+            cp /tmp/api-generation.log proof-repo/.proof/api-generation.log
+            exit "$status"
+          fi
+          set -e
+          ores-stack generate all --roots="$(pwd)/api" --check
+      - name: Persist generator failure diagnostic
+        if: ${{ failure() && steps.generate.conclusion == 'failure' }}
+        working-directory: proof-repo
         shell: bash
         run: |
           set -euo pipefail
-          ores-stack generate all --roots="$(pwd)/api"
-          ores-stack generate all --roots="$(pwd)/api" --check
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add .proof/api-generation.log
+          git commit -m 'test: retain ores-chat generator failure diagnostic'
+          git push origin HEAD:proof/ores-chat-modernization-20260923
       - name: Regenerate Rust lock from exact private sources
         working-directory: api
         run: cargo generate-lockfile
