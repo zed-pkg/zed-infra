@@ -1,0 +1,82 @@
+name: ores-chat current TJSV proof
+on:
+  push:
+    branches: [proof/ores-chat-contracts-20260923]
+permissions:
+  contents: read
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ORE_SOURCE_PAT: ${{ secrets.ORE_SOURCE_PAT }}
+    steps:
+      - name: Require sanctioned cross-org source credential
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${ORE_SOURCE_PAT:-}"
+      - name: Check out exact ORES Chat interfaces branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ores-chat/ores-chat-interfaces
+          ref: chatgpt/current-tjsv-authorities-20260923
+          token: ${{ secrets.ORE_SOURCE_PAT }}
+          path: interfaces
+          fetch-depth: 0
+      - name: Check out current TJSV authority
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ORESoftware/typespec-json-schema-validator
+          ref: 26c3b2c84ed58fd8cb110b14c917beeacb93804c
+          token: ${{ secrets.ORE_SOURCE_PAT }}
+          path: tjsv
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - name: Install exact TJSV dependencies
+        working-directory: tjsv
+        run: npm ci
+      - name: Prove generic peer-authority canary
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence/canary
+          node tjsv/bin/typespec-json-schema-validator.mjs check \
+            --typespec=interfaces/test/fixtures/schema-authority-canary/main.tsp \
+            --schema=interfaces/test/fixtures/schema-authority-canary/authored.schema.json \
+            --report=evidence/canary/report.json \
+            --contract-ir=evidence/canary/contract-ir.json \
+            --output-dir=evidence/canary/generated \
+            --max-probes=64
+      - name: Prove ORES Chat config peer authorities
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence/config
+          node tjsv/bin/typespec-json-schema-validator.mjs check \
+            --typespec=interfaces/contracts/ores-chat-config/ores-chat-config.tsp \
+            --schema=interfaces/contracts/ores-chat-config/ores-chat-config.schema.json \
+            --report=evidence/config/report.json \
+            --contract-ir=evidence/config/contract-ir.json \
+            --output-dir=evidence/config/generated
+      - name: Prove knowledge-access peer authorities
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence/knowledge
+          node tjsv/bin/typespec-json-schema-validator.mjs check \
+            --typespec=interfaces/contracts/knowledge-access/main.tsp \
+            --schema=interfaces/contracts/knowledge-access/authored.schema.json \
+            --instances=interfaces/contracts/knowledge-access/instances \
+            --report=evidence/knowledge/report.json \
+            --output-dir=evidence/knowledge/generated \
+            --max-probes=128 \
+            --int64-strategy=number \
+            --seal-object-schemas=true
+      - name: Prove authored authorities remain untouched
+        working-directory: interfaces
+        run: |
+          git diff --exit-code -- contracts test/fixtures/schema-authority-canary
+          git diff --check
