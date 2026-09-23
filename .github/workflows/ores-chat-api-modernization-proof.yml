@@ -12,6 +12,7 @@ jobs:
     env:
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
       ORE_SOURCE_PAT: ${{ secrets.ORE_SOURCE_PAT }}
+      API_DIR: ores-chat-api-server.rs
     steps:
       - name: Check out proof repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -29,7 +30,7 @@ jobs:
           repository: ores-chat/ores-chat-api-server.rs
           ref: chatgpt/api-transport-generation-20260922
           token: ${{ secrets.ORE_SOURCE_PAT }}
-          path: api
+          path: ores-chat-api-server.rs
           fetch-depth: 0
       - name: Check out exact ores-stack authority
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -48,7 +49,7 @@ jobs:
         shell: bash
         run: cargo install --path ores-stack/crates/ores-stack-cli --locked
       - name: Mount semantic transport modules and retire legacy public handler
-        working-directory: api
+        working-directory: ores-chat-api-server.rs
         shell: bash
         run: |
           set -euo pipefail
@@ -78,7 +79,7 @@ jobs:
         shell: bash
         run: |
           set +e
-          ores-stack generate all --roots="$(pwd)/api" > /tmp/api-generation.log 2>&1
+          ores-stack generate all --roots="$(pwd)/${API_DIR}" > /tmp/api-generation.log 2>&1
           status=$?
           cat /tmp/api-generation.log
           if [ "$status" -ne 0 ]; then
@@ -87,7 +88,7 @@ jobs:
             exit "$status"
           fi
           set -e
-          ores-stack generate all --roots="$(pwd)/api" --check
+          ores-stack generate all --roots="$(pwd)/${API_DIR}" --check
       - name: Persist generator failure diagnostic
         if: ${{ failure() && steps.generate.conclusion == 'failure' }}
         working-directory: proof-repo
@@ -100,10 +101,10 @@ jobs:
           git commit -m 'test: retain ores-chat generator failure diagnostic'
           git push origin HEAD:proof/ores-chat-modernization-20260923
       - name: Regenerate Rust lock from exact private sources
-        working-directory: api
+        working-directory: ores-chat-api-server.rs
         run: cargo generate-lockfile
       - name: Format and compile exact generated branch
-        working-directory: api
+        working-directory: ores-chat-api-server.rs
         shell: bash
         run: |
           set -euo pipefail
@@ -113,7 +114,7 @@ jobs:
           cargo clippy --all-targets --locked -- -D warnings
           cargo test --all-targets --locked
       - name: Prove generated transport evidence exists
-        working-directory: api
+        working-directory: ores-chat-api-server.rs
         shell: bash
         run: |
           set -euo pipefail
@@ -123,7 +124,7 @@ jobs:
           grep -R -F '__ores_invoke_public_chat' src/graphql src/routes
           git diff --check
       - name: Write back only a fully proven API branch
-        working-directory: api
+        working-directory: ores-chat-api-server.rs
         shell: bash
         run: |
           set -euo pipefail
