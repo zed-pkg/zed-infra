@@ -52,18 +52,23 @@ jobs:
 
           p = Path('crates/ores-stack-cli/src/ppr_web_route_local.rs')
           s = p.read_text()
-          old = '''        assert!(source.contains("content-length: {{}}"));\n        assert!(source.contains("if !head {{ out.write_all(body)?; }}"));'''
-          new = '''        assert!(source.contains("content-length: {}"));\n        assert!(source.contains("if !head { out.write_all(body)?; }"));'''
-          if old not in s:
-              raise SystemExit('ppr rendered-source assertions not found exactly')
-          p.write_text(s.replace(old, new, 1))
+          for old, new in [
+              ('assert!(source.contains("content-length: {{}}"));', 'assert!(source.contains("content-length: {}"));'),
+              ('assert!(source.contains("if !head {{ out.write_all(body)?; }}"));', 'assert!(source.contains("if !head { out.write_all(body)?; }"));'),
+          ]:
+              if s.count(old) != 1:
+                  raise SystemExit(f'expected one PPR assertion anchor, found {s.count(old)}: {old}')
+              s = s.replace(old, new, 1)
+          p.write_text(s)
 
           p = Path('crates/ores-stack-cli/src/stack_cli_hardened.rs')
           s = p.read_text()
-          old = '''        fs::create_dir(workspace.path().join(&names.lambdas)).expect("collision");\n        let error = publish_staged(stage.path(), workspace.path(), &names).expect_err("collision");'''
-          new = '''        let collision = workspace.path().join(&names.lambdas);\n        fs::create_dir(&collision).expect("collision");\n        fs::write(collision.join("keep"), "pre-existing\\n").expect("make collision non-empty");\n        let error = publish_staged(stage.path(), workspace.path(), &names).expect_err("collision");'''
-          if old not in s:
-              raise SystemExit('publication collision fixture not found exactly')
+          old = '        fs::create_dir(workspace.path().join(&names.lambdas)).expect("collision");\n'
+          new = ('        let collision = workspace.path().join(&names.lambdas);\n'
+                 '        fs::create_dir(&collision).expect("collision");\n'
+                 '        fs::write(collision.join("keep"), "pre-existing\\n").expect("make collision non-empty");\n')
+          if s.count(old) != 1:
+              raise SystemExit(f'expected one publication collision anchor, found {s.count(old)}')
           p.write_text(s.replace(old, new, 1))
           PY
           cargo +1.88.0 fmt --all
