@@ -1,1 +1,1 @@
-ores-stack: could not determine server role for /home/runner/work/zed-infra/zed-infra/api; expected a *-api-server.rs, *-admin-api-server.rs, *-web-server.rs, or *-admin-web-server.rs repository
+ores-stack: callable inventory admission failed for /home/runner/work/zed-infra/zed-infra/ores-chat-api-server.rs: RPC source contract check failed: 1 RPC source mismatch(es): src/routes/mod.rs: REST route authority moved under src/routes/rest/**; src/routes/mod.rs/** is not an admitted route namespace
