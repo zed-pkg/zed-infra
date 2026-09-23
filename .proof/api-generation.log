@@ -1,0 +1,1 @@
+ores-stack: could not determine server role for /home/runner/work/zed-infra/zed-infra/api; expected a *-api-server.rs, *-admin-api-server.rs, *-web-server.rs, or *-admin-web-server.rs repository
