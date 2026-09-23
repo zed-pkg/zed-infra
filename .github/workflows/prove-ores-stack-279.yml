@@ -44,3 +44,4 @@ jobs:
           git add --update
           git commit -m 'style: rustfmt PPR dev orchestration'
           git push origin HEAD:feat/stack-dev-build-deploy-ppr-20260923
+# trigger via contents API so GitHub emits the push event
