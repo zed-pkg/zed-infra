@@ -8,10 +8,10 @@ jobs:
   compile-and-test:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    env:
+      SOURCE_PAT: ${{ secrets.ORE_SOURCE_PAT }}
     steps:
       - name: Require source PAT without exposing it
-        env:
-          SOURCE_PAT: ${{ secrets.ORE_SOURCE_PAT }}
         run: |
           set -euo pipefail
           test -n "${SOURCE_PAT:-}" || { echo '::error::ORE_SOURCE_PAT is not configured'; exit 1; }
@@ -28,8 +28,6 @@ jobs:
           toolchain: '1.88.0'
           components: rustfmt, clippy
       - name: Install private git auth for Cargo
-        env:
-          SOURCE_PAT: ${{ secrets.ORE_SOURCE_PAT }}
         shell: bash
         run: |
           set -euo pipefail
