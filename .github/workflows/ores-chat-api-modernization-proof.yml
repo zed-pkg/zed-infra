@@ -1,0 +1,116 @@
+name: ores-chat API modernization proof
+on:
+  push:
+    branches: [proof/ores-chat-modernization-20260923]
+permissions:
+  contents: read
+jobs:
+  api:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+      ORE_SOURCE_PAT: ${{ secrets.ORE_SOURCE_PAT }}
+    steps:
+      - name: Require sanctioned cross-org source credential
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${ORE_SOURCE_PAT:-}"
+      - name: Check out exact ORES Chat API branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ores-chat/ores-chat-api-server.rs
+          ref: chatgpt/api-transport-generation-20260922
+          token: ${{ secrets.ORE_SOURCE_PAT }}
+          path: api
+          fetch-depth: 0
+      - name: Configure private Git/Cargo source access
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config --global url."https://x-access-token:${ORE_SOURCE_PAT}@github.com/".insteadOf "https://github.com/"
+      - name: Install current ores-stack authority
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo install \
+            --git https://github.com/ORESoftware/ores-stack.git \
+            --rev d46c07e0f91c2dbda9b2fee64bdd82f6d52fc1ef \
+            --package ores-stack-cli \
+            --locked
+      - name: Mount semantic transport modules and retire legacy public handler
+        working-directory: api
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('src/lib.rs')
+          text = path.read_text()
+          if 'pub mod graphql;' not in text:
+              text = text.replace(
+                  'pub mod sidecar;\n',
+                  'pub mod graphql;\npub mod routes;\npub mod sidecar;\n',
+                  1,
+              )
+          text = text.replace(
+              'post(public_chat).options(public_preflight)',
+              'post(routes::rest::v1::public_chat::route::post).options(public_preflight)',
+              1,
+          )
+          start = text.find('\nasync fn public_chat(\n')
+          end = text.find('\nasync fn customer_chat(\n', start + 1) if start >= 0 else -1
+          if start >= 0:
+              if end < 0:
+                  raise SystemExit('found legacy public_chat but not customer_chat boundary')
+              text = text[:start] + '\n' + text[end:]
+          if 'post(public_chat)' in text or '\nasync fn public_chat(\n' in text:
+              raise SystemExit('legacy public chat authority still present')
+          path.write_text(text)
+          PY
+      - name: Generate RPC, route-map and provider-neutral API Lambda source
+        shell: bash
+        run: |
+          set -euo pipefail
+          ores-stack generate all --roots="$(pwd)/api"
+          ores-stack generate all --roots="$(pwd)/api" --check
+      - name: Regenerate Rust lock from exact private sources
+        working-directory: api
+        run: cargo generate-lockfile
+      - name: Format and compile exact generated branch
+        working-directory: api
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup component add rustfmt clippy
+          cargo fmt --all
+          cargo check --all-targets --locked
+          cargo clippy --all-targets --locked -- -D warnings
+          cargo test --all-targets --locked
+      - name: Prove generated transport evidence exists
+        working-directory: api
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f src/ores_api_lambda.rs
+          find src -type f \( -name 'rpc.rs' -o -name 'route-map.json' -o -name 'route_map.json' \) -print
+          grep -R -F 'ores_chat.public_chat' src
+          grep -R -F '__ores_invoke_public_chat' src/graphql src/routes
+          git diff --check
+      - name: Write back only a fully proven API branch
+        working-directory: api
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add Cargo.lock Cargo.toml src
+          if ! git diff --cached --quiet; then
+            git commit -m 'feat: generate API RPC Lambda and GraphQL transport spine'
+            git push origin HEAD:chatgpt/api-transport-generation-20260922
+          fi
+      - name: Remove private Git rewrite
+        if: ${{ always() }}
+        shell: bash
+        run: git config --global --unset-all url."https://x-access-token:${ORE_SOURCE_PAT}@github.com/".insteadOf || true
