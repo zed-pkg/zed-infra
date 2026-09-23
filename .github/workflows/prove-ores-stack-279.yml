@@ -1,0 +1,80 @@
+name: prove ores-stack 279
+
+on:
+  push:
+    paths:
+      - .github/workflows/prove-ores-stack-279.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  SOURCE_REPO: ORESoftware/ores-stack
+  SOURCE_BRANCH: feat/stack-dev-build-deploy-ppr-20260923
+  EXPECTED_HEAD: a9258718965053b5a3290960db45b2f9e1f35232
+
+jobs:
+  repair-and-certify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact source branch
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SOURCE_REPO }}
+          ref: ${{ env.SOURCE_BRANCH }}
+          token: ${{ secrets.ORE_SOURCE_PAT }}
+          fetch-depth: 0
+          path: ores-stack
+
+      - name: Guard concurrent branch movement
+        working-directory: ores-stack
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+
+      - name: Install Rust 1.88
+        uses: dtolnay/rust-toolchain@1.88.0
+
+      - name: Repair the two stale test fixtures only
+        working-directory: ores-stack
+        run: |
+          set -euo pipefail
+          file=crates/ores-stack-cli/src/ppr_web_route_local.rs
+          sed -i 's/assert!(source.contains("content-length: {{}}"));/assert!(source.contains("content-length: {}"));/' "$file"
+          sed -i 's/assert!(source.contains("if !head {{ out.write_all(body)?; }}"));/assert!(source.contains("if !head { out.write_all(body)?; }"));/' "$file"
+
+          file=crates/ores-stack-cli/src/stack_cli_hardened.rs
+          anchor='        fs::create_dir(workspace.path().join(&names.lambdas)).expect("collision");'
+          grep -Fqx "$anchor" "$file"
+          sed -i '/fs::create_dir(workspace.path().join(&names.lambdas)).expect("collision");/a\        fs::write(workspace.path().join(&names.lambdas).join("keep"), b"collision").expect("sentinel");' "$file"
+
+          git diff --check
+          git diff -- crates/ores-stack-cli/src/ppr_web_route_local.rs crates/ores-stack-cli/src/stack_cli_hardened.rs
+
+      - name: Format and test CLI
+        working-directory: ores-stack
+        env:
+          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+          GH_PAT: ${{ secrets.ORE_SOURCE_PAT }}
+        run: |
+          set -euo pipefail
+          git config --global url."https://x-access-token:${GH_PAT}@github.com/".insteadOf "https://github.com/"
+          cargo +1.88.0 fmt --all -- --check
+          cargo +1.88.0 test --locked -p ores-stack-cli generated_main_preserves_head_content_length_without_body
+          cargo +1.88.0 test --locked -p ores-stack-cli publication_rolls_back_when_a_later_destination_collides
+          cargo +1.88.0 test --locked -p ores-stack-cli
+
+      - name: Commit repairs without overwriting concurrent work
+        working-directory: ores-stack
+        env:
+          GH_PAT: ${{ secrets.ORE_SOURCE_PAT }}
+        run: |
+          set -euo pipefail
+          git config user.name ORESoftware
+          git config user.email ores-stack@users.noreply.github.com
+          git add crates/ores-stack-cli/src/ppr_web_route_local.rs crates/ores-stack-cli/src/stack_cli_hardened.rs
+          git diff --cached --quiet && exit 0
+          git commit -m 'test(cli): repair PPR and rollback fixtures'
+          git remote set-url origin "https://x-access-token:${GH_PAT}@github.com/${SOURCE_REPO}.git"
+          git push origin HEAD:"${SOURCE_BRANCH}"
