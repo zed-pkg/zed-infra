@@ -1,0 +1,64 @@
+name: ores-chat CLI policy proof
+on:
+  push:
+    branches: [proof/ores-chat-cli-20260923]
+permissions:
+  contents: read
+jobs:
+  cli:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+      ORE_SOURCE_PAT: ${{ secrets.ORE_SOURCE_PAT }}
+    steps:
+      - name: Require sanctioned cross-org source credential
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${ORE_SOURCE_PAT:-}"
+      - name: Check out exact ORES Chat CLI branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ores-chat/ores-chat-cli
+          ref: chatgpt/ores-cli-policy-parity-20260923
+          token: ${{ secrets.ORE_SOURCE_PAT }}
+          path: ores-chat-cli
+          fetch-depth: 0
+      - name: Check out current ores-cli authority
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ORESoftware/ores-cli
+          ref: 73069e0f56fe2a82e1e9a76d98ee25b4c2c09b8b
+          token: ${{ secrets.ORE_SOURCE_PAT }}
+          path: ores-cli
+          persist-credentials: false
+      - name: Configure private Git/Cargo source access
+        shell: bash
+        run: git config --global url."https://x-access-token:${ORE_SOURCE_PAT}@github.com/".insteadOf "https://github.com/"
+      - name: Build exact ores-cli audit authority
+        shell: bash
+        run: cargo build --manifest-path ores-cli/Cargo.toml --bin ores-cli --locked
+      - name: Audit ORES Chat CLI repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          ores-cli/target/debug/ores-cli --no-json audit repo --path ores-chat-cli --profile rust-cli
+          grep -F 'config = ".cli-flags.toml"' ores-chat-cli/.zpkg.toml
+          grep -F 'bins = ["ores-chat"]' ores-chat-cli/.zpkg.toml
+          test -f ores-chat-cli/.zpkg.lock
+      - name: Prove product CLI remains locked and clean
+        working-directory: ores-chat-cli
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup component add rustfmt clippy
+          cargo fmt --all -- --check
+          cargo check --all-targets --locked
+          cargo clippy --all-targets --locked -- -D warnings
+          cargo test --all-targets --locked
+          git diff --check
+      - name: Remove private Git rewrite
+        if: ${{ always() }}
+        shell: bash
+        run: git config --global --unset-all url."https://x-access-token:${ORE_SOURCE_PAT}@github.com/".insteadOf || true
