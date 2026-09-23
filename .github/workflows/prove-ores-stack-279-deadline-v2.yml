@@ -1,0 +1,231 @@
+name: repair ores-stack 279 absolute PPR deadline v2
+on:
+  push:
+    branches: [proof/ores-stack-279-ppr-20260923]
+permissions:
+  contents: read
+jobs:
+  repair-deadline:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      SOURCE_PAT: ${{ secrets.ORE_SOURCE_PAT }}
+      EXPECTED_SOURCE_SHA: 178c31b3343245a93098ec73b3c07ea44c4b3772
+      SOURCE_BRANCH: feat/stack-dev-build-deploy-ppr-20260923
+    steps:
+      - name: Require private-source credential
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${SOURCE_PAT:-}"
+      - name: Check out exact ores-stack PR branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ORESoftware/ores-stack
+          ref: ${{ env.SOURCE_BRANCH }}
+          fetch-depth: 0
+          persist-credentials: true
+          token: ${{ secrets.ORE_SOURCE_PAT }}
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: '1.88.0'
+          components: rustfmt
+      - name: Install private Cargo git auth
+        shell: bash
+        run: |
+          set -euo pipefail
+          askpass="$RUNNER_TEMP/ores-stack-askpass.sh"
+          cat >"$askpass" <<'SH'
+          #!/bin/sh
+          case "$1" in
+            *Username*) printf '%s\n' 'x-access-token' ;;
+            *Password*) printf '%s\n' "$SOURCE_PAT" ;;
+            *) exit 1 ;;
+          esac
+          SH
+          chmod 700 "$askpass"
+          printf 'GIT_ASKPASS=%s\nGIT_TERMINAL_PROMPT=0\nCARGO_NET_GIT_FETCH_WITH_CLI=true\n' "$askpass" >> "$GITHUB_ENV"
+      - name: Patch, prove, and guarded-push one absolute deadline
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
+          test "$(git ls-remote origin "refs/heads/$SOURCE_BRANCH" | cut -f1)" = "$EXPECTED_SOURCE_SHA"
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              s = p.read_text()
+              n = s.count(old)
+              if n != 1:
+                  raise SystemExit(f'{path}: expected one anchor, found {n}: {old[:160]!r}')
+              p.write_text(s.replace(old, new, 1))
+
+          supervisor = 'crates/ores-stack-cli/src/ppr_supervisor.rs'
+          replace_once(
+              supervisor,
+              'const WEB_CHILD_ENV: &str = "ORES_STACK_PPR_WEB_INNER";\nconst MIDDLEWARE_REV:',
+              'const WEB_CHILD_ENV: &str = "ORES_STACK_PPR_WEB_INNER";\nconst DEADLINE_UNIX_MS_ENV: &str = "ORES_STACK_PPR_DEADLINE_UNIX_MS";\nconst MIDDLEWARE_REV:',
+          )
+          replace_once(
+              supervisor,
+              '    let started = Instant::now();\n    let deadline = started + REQUEST_BUDGET;\n    let peer =',
+              '    let started = Instant::now();\n    let deadline = started + REQUEST_BUDGET;\n    let deadline_unix_ms = absolute_deadline_unix_ms(deadline);\n    let peer =',
+          )
+          replace_once(
+              supervisor,
+              '    let context = request_context(deadline);\n',
+              '    let context = request_context(deadline_unix_ms);\n',
+          )
+          old_call = '''            relay_to_p3(
+                &mut client,
+                root,
+                surface,
+                &mut head,
+                request.headers,
+                &mut middleware,
+                started,
+                deadline,
+            )
+'''
+          new_call = '''            relay_to_p3(
+                &mut client,
+                root,
+                surface,
+                &mut head,
+                request.headers,
+                &mut middleware,
+                started,
+                deadline,
+                deadline_unix_ms,
+            )
+'''
+          replace_once(supervisor, old_call, new_call)
+          old_sig = '''fn relay_to_p3(
+    client: &mut TcpStream,
+    root: &Path,
+    surface: Surface,
+    head: &mut ores_stack_ppr_http::RequestHead,
+    headers: BTreeMap<String, String>,
+    middleware: &mut MiddlewareSession,
+    started: Instant,
+    deadline: Instant,
+) -> Result<(), String> {
+'''
+          new_sig = old_sig.replace('    deadline: Instant,\n', '    deadline: Instant,\n    deadline_unix_ms: u64,\n')
+          replace_once(supervisor, old_sig, new_sig)
+          replace_once(
+              supervisor,
+              '        .env("ORES_STACK_PROCESS_PER_REQUEST", "1")\n        .stdin(Stdio::piped())\n',
+              '        .env("ORES_STACK_PROCESS_PER_REQUEST", "1")\n        .env(DEADLINE_UNIX_MS_ENV, deadline_unix_ms.to_string())\n        .stdin(Stdio::piped())\n',
+          )
+          old_context = '''fn request_context(deadline: Instant) -> RequestContext {
+    let now_ms = RequestContext::now_ms();
+    let deadline_ms = now_ms.saturating_add(
+        deadline
+            .saturating_duration_since(Instant::now())
+            .as_millis()
+            .min(u64::MAX as u128) as u64,
+    );
+'''
+          new_context = '''fn absolute_deadline_unix_ms(deadline: Instant) -> u64 {
+    RequestContext::now_ms().saturating_add(
+        deadline
+            .saturating_duration_since(Instant::now())
+            .as_millis()
+            .min(u64::MAX as u128) as u64,
+    )
+}
+
+fn request_context(deadline_ms: u64) -> RequestContext {
+    let now_ms = RequestContext::now_ms();
+'''
+          replace_once(supervisor, old_context, new_context)
+
+          api = 'crates/ores-stack-cli/src/ppr_api_route_local.rs'
+          replace_once(
+              api,
+              'use std::{{collections::BTreeMap, env, io::{{Read, Write}}, time::Duration}};\nconst LOCAL_TIMEOUT: Duration = Duration::from_secs(90);\n',
+              'use std::{{collections::BTreeMap, env, io::{{Read, Write}}, time::{{Duration, SystemTime, UNIX_EPOCH}}}};\n',
+          )
+          replace_once(
+              api,
+              '    let request = ParsedRequest::parse(&raw)?;\n    let deadline = tokio::time::Instant::now() + LOCAL_TIMEOUT;\n',
+              '    let request = ParsedRequest::parse(&raw)?;\n    let deadline = deadline_from_env()?;\n',
+          )
+          replace_once(
+              api,
+              'fn section(value: &Value, name: &str) -> bool {{\n',
+              '''fn deadline_from_env() -> Result<tokio::time::Instant, Box<dyn std::error::Error>> {{
+    let deadline_unix_ms = env::var("ORES_STACK_PPR_DEADLINE_UNIX_MS")?.parse::<u64>()?;
+    let now_unix_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)?
+        .as_millis()
+        .min(u64::MAX as u128) as u64;
+    let remaining = Duration::from_millis(deadline_unix_ms.saturating_sub(now_unix_ms));
+    Ok(tokio::time::Instant::now() + remaining)
+}}
+
+fn section(value: &Value, name: &str) -> bool {{
+''',
+          )
+
+          web = 'crates/ores-stack-cli/src/ppr_web_route_local.rs'
+          replace_once(
+              web,
+              'use std::{{collections::BTreeMap, env, io::{{Read, Write}}, time::Duration}};\nconst LOCAL_TIMEOUT: Duration = Duration::from_secs(90);\n',
+              'use std::{{collections::BTreeMap, env, io::{{Read, Write}}, time::{{Duration, SystemTime, UNIX_EPOCH}}}};\n',
+          )
+          replace_once(
+              web,
+              '    let request = ParsedRequest::parse(&raw)?;\n    let method = match request.method.as_str() {{\n',
+              '    let request = ParsedRequest::parse(&raw)?;\n    let deadline = deadline_from_env()?;\n    let method = match request.method.as_str() {{\n',
+          )
+          replace_once(web, 'tokio::time::timeout(LOCAL_TIMEOUT, lambda::init_state())', 'tokio::time::timeout_at(deadline, lambda::init_state())')
+          replace_once(web, 'tokio::time::timeout(LOCAL_TIMEOUT, lambda::admit(input))', 'tokio::time::timeout_at(deadline, lambda::admit(input))')
+          replace_once(
+              web,
+              'let response = match tokio::time::timeout(\n        LOCAL_TIMEOUT,\n',
+              'let response = match tokio::time::timeout_at(\n        deadline,\n',
+          )
+          replace_once(
+              web,
+              'struct ParsedRequest {{\n',
+              '''fn deadline_from_env() -> Result<tokio::time::Instant, Box<dyn std::error::Error>> {{
+    let deadline_unix_ms = env::var("ORES_STACK_PPR_DEADLINE_UNIX_MS")?.parse::<u64>()?;
+    let now_unix_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)?
+        .as_millis()
+        .min(u64::MAX as u128) as u64;
+    let remaining = Duration::from_millis(deadline_unix_ms.saturating_sub(now_unix_ms));
+    Ok(tokio::time::Instant::now() + remaining)
+}}
+
+struct ParsedRequest {{
+''',
+          )
+
+          for path in (api, web):
+              text = Path(path).read_text()
+              if 'LOCAL_TIMEOUT' in text:
+                  raise SystemExit(f'{path}: independent 90-second P3 timeout survived')
+              if 'ORES_STACK_PPR_DEADLINE_UNIX_MS' not in text:
+                  raise SystemExit(f'{path}: shared deadline env missing')
+          text = Path(supervisor).read_text()
+          if text.count('ORES_STACK_PPR_DEADLINE_UNIX_MS') != 1:
+              raise SystemExit('supervisor deadline env authority must be singular')
+          PY
+          cargo +1.88.0 fmt --all
+          git diff --check
+          cargo +1.88.0 check --locked -p ores-stack-cli --all-targets
+          cargo +1.88.0 test --locked -p ores-stack-cli ppr_api_route_local::tests -- --nocapture
+          cargo +1.88.0 test --locked -p ores-stack-cli ppr_web_route_local::tests -- --nocapture
+          cargo +1.88.0 test --locked -p ores-stack-cli ppr_supervisor::tests -- --nocapture
+          cargo +1.88.0 test --locked -p ores-stack-cli
+          test "$(git ls-remote origin "refs/heads/$SOURCE_BRANCH" | cut -f1)" = "$EXPECTED_SOURCE_SHA"
+          git config user.name 'Alexander Mills'
+          git config user.email 'alex@oresoftware.com'
+          git add crates/ores-stack-cli/src/ppr_supervisor.rs crates/ores-stack-cli/src/ppr_api_route_local.rs crates/ores-stack-cli/src/ppr_web_route_local.rs
+          git commit -m 'fix(ppr): share one absolute request deadline'
+          git push origin HEAD:"$SOURCE_BRANCH"
