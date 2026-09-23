@@ -92,6 +92,15 @@ jobs:
           replace_once(web, 'let response = match tokio::time::timeout(\n        LOCAL_TIMEOUT,\n', 'let response = match tokio::time::timeout_at(\n        deadline,\n')
           web_helper = 'fn deadline_from_env() -> Result<tokio::time::Instant, Box<dyn std::error::Error>> {{\n    let deadline_unix_ms = env::var("ORES_STACK_PPR_DEADLINE_UNIX_MS")?.parse::<u64>()?;\n    let now_unix_ms = SystemTime::now()\n        .duration_since(UNIX_EPOCH)?\n        .as_millis()\n        .min(u64::MAX as u128) as u64;\n    let remaining = Duration::from_millis(deadline_unix_ms.saturating_sub(now_unix_ms));\n    Ok(tokio::time::Instant::now() + remaining)\n}}\n\nstruct ParsedRequest {{\n'
           replace_once(web, 'struct ParsedRequest {{\n', web_helper)
+          replace_once(web, 'assert!(source.contains("content-length: {{}}"));', 'assert!(source.contains("content-length: {}"));')
+          replace_once(web, 'assert!(source.contains("if !head {{ out.write_all(body)?; }}"));', 'assert!(source.contains("if !head { out.write_all(body)?; }"));')
+
+          hardened = 'crates/ores-stack-cli/src/stack_cli_hardened.rs'
+          replace_once(
+              hardened,
+              '        fs::create_dir(workspace.path().join(&names.lambdas)).expect("collision");\n        let error =',
+              '        fs::create_dir(workspace.path().join(&names.lambdas)).expect("collision");\n        fs::write(\n            workspace.path().join(&names.lambdas).join("keep"),\n            b"keep",\n        )\n        .expect("collision sentinel");\n        let error =',
+          )
 
           for path in (api, web):
               text = Path(path).read_text()
@@ -107,16 +116,17 @@ jobs:
           git diff --check
           python3 - <<'PY'
           import subprocess
-          allowed = {
+          required = {
               'crates/ores-stack-cli/src/ppr_supervisor.rs',
               'crates/ores-stack-cli/src/ppr_api_route_local.rs',
               'crates/ores-stack-cli/src/ppr_web_route_local.rs',
+              'crates/ores-stack-cli/src/stack_cli_hardened.rs',
           }
           changed = set(subprocess.check_output(['git', 'diff', '--name-only'], text=True).splitlines())
-          unexpected = changed - allowed
+          unexpected = changed - required
           if unexpected:
               raise SystemExit(f'unexpected files changed: {sorted(unexpected)}')
-          missing = allowed - changed
+          missing = required - changed
           if missing:
               raise SystemExit(f'expected guarded files did not change: {sorted(missing)}')
           PY
@@ -128,6 +138,6 @@ jobs:
           test "$(git ls-remote origin "refs/heads/$SOURCE_BRANCH" | cut -f1)" = "$EXPECTED_SOURCE_SHA"
           git config user.name 'Alexander Mills'
           git config user.email 'alex@oresoftware.com'
-          git add crates/ores-stack-cli/src/ppr_supervisor.rs crates/ores-stack-cli/src/ppr_api_route_local.rs crates/ores-stack-cli/src/ppr_web_route_local.rs
+          git add crates/ores-stack-cli/src/ppr_supervisor.rs crates/ores-stack-cli/src/ppr_api_route_local.rs crates/ores-stack-cli/src/ppr_web_route_local.rs crates/ores-stack-cli/src/stack_cli_hardened.rs
           git commit -m 'fix(ppr): share one absolute request deadline'
           git push origin HEAD:"$SOURCE_BRANCH"
