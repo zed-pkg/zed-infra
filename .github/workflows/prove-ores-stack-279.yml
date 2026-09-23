@@ -38,10 +38,15 @@ jobs:
         with:
           components: rustfmt
 
-      - name: Repair stale fixtures and canonical formatting
+      - name: Repair fixtures formatting and lockfile
         working-directory: ores-stack
+        env:
+          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+          GH_PAT: ${{ secrets.ORE_SOURCE_PAT }}
         run: |
           set -euo pipefail
+          git config --global url."https://x-access-token:${GH_PAT}@github.com/".insteadOf "https://github.com/"
+
           file=crates/ores-stack-cli/src/ppr_web_route_local.rs
           sed -i 's/assert!(source.contains("content-length: {{}}"));/assert!(source.contains("content-length: {}"));/' "$file"
           sed -i 's/assert!(source.contains("if !head {{ out.write_all(body)?; }}"));/assert!(source.contains("if !head { out.write_all(body)?; }"));/' "$file"
@@ -52,16 +57,19 @@ jobs:
           sed -i '/fs::create_dir(workspace.path().join(&names.lambdas)).expect("collision");/a\        fs::write(workspace.path().join(&names.lambdas).join("keep"), b"collision").expect("sentinel");' "$file"
 
           cargo +1.88.0 fmt --all
+          cargo +1.88.0 metadata --format-version 1 >/dev/null
           git diff --check
+
           changed="$(git diff --name-only | sort)"
           allowed="$(printf '%s\n' \
+            Cargo.lock \
             crates/ores-stack-cli/src/ppr_web_route_local.rs \
             crates/ores-stack-cli/src/stack_cli_hardened.rs \
             crates/ores-stack-cli/src/stack_dev_hardened.rs | sort)"
           test "$changed" = "$allowed"
-          git diff -- $changed
+          git diff --stat
 
-      - name: Test CLI
+      - name: Test CLI against refreshed lock
         working-directory: ores-stack
         env:
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
@@ -83,10 +91,11 @@ jobs:
           git config user.name ORESoftware
           git config user.email ores-stack@users.noreply.github.com
           git add \
+            Cargo.lock \
             crates/ores-stack-cli/src/ppr_web_route_local.rs \
             crates/ores-stack-cli/src/stack_cli_hardened.rs \
             crates/ores-stack-cli/src/stack_dev_hardened.rs
           git diff --cached --quiet && exit 0
-          git commit -m 'test(cli): repair PPR fixtures and formatting'
+          git commit -m 'test(cli): repair PPR fixtures and refresh lock'
           git remote set-url origin "https://x-access-token:${GH_PAT}@github.com/${SOURCE_REPO}.git"
           git push origin HEAD:"${SOURCE_BRANCH}"
