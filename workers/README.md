@@ -35,6 +35,28 @@ remaining public backups are:
 The GitHub path is proven by `zed-pkg-test/zed-pkg-e2e`
 `scripts/github_api_fallback.py`.
 
+## Authenticated fallback boundary
+
+Private-source recovery is a separate trust domain from the anonymous fallback
+above. A browser, CLI, or origin bearer credential is **never** replayed to a
+third-party package host. Instead, the edge accepts only a short-lived signed
+Zed capability whose claims bind all of the following:
+
+- issuer and the dedicated `zed-edge-fallback` audience;
+- expiry/not-before plus a unique token id;
+- the exact `fallback:read` capability;
+- the exact Zed package coordinate; and
+- the exact source provider identity (for example one GitHub owner/repository).
+
+`shared/edge-capability.js` verifies the signature from reviewed public JWKs
+and fails closed on an unknown key, algorithm, provider, package, or source.
+Provider credentials are a separate adapter input and must be short-lived and
+source-scoped. Private responses are `Cache-Control: private, no-store`; they
+must never enter Cloudflare shared cache or an anonymous R2 key. A future
+provider adapter may use a Cloudflare service binding to a credential broker,
+but the broker receives the already-bound Zed capability rather than a user's
+raw GitHub/npm/Cargo credential.
+
 `org.zpkg.net` is deliberately different from the origin-backed hostnames:
 `org-proxy` is the origin, so its Wrangler Custom Domain creates the DNS record
 and certificate. It never accepts an arbitrary `next`, `return_to`, or target
