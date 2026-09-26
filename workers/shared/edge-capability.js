@@ -48,7 +48,7 @@ const GRANT_KEYS = new Set([
 const PROVIDERS = new Set(["github", "npm", "cargo-registry"]);
 
 /**
- * Verify a compact RS256 JWT and validate the v1 edge capability claims.
+ * Verify a compact ES256 JWT and validate the v1 edge capability claims.
  *
  * JWKS is supplied by deployment/runtime configuration. This function never
  * performs network I/O, so an already-issued capability remains verifiable
@@ -80,8 +80,8 @@ export async function verifyEdgeCapability(token, options) {
 
   const header = decodeJsonSegment(parts[0], "header");
   const claims = decodeJsonSegment(parts[1], "claims");
-  if (!isRecord(header) || header.alg !== "RS256" || header.typ !== "JWT") {
-    throw new EdgeCapabilityError("unsupported_algorithm", "only typ=JWT alg=RS256 is accepted");
+  if (!isRecord(header) || header.alg !== "ES256" || header.typ !== "JWT") {
+    throw new EdgeCapabilityError("unsupported_algorithm", "only typ=JWT alg=ES256 is accepted");
   }
   if (typeof header.kid !== "string" || !JTI.test(header.kid)) {
     throw new EdgeCapabilityError("invalid_kid", "JWT kid is missing or invalid");
@@ -92,8 +92,9 @@ export async function verifyEdgeCapability(token, options) {
     (candidate) =>
       candidate &&
       candidate.kid === header.kid &&
-      candidate.kty === "RSA" &&
-      (!candidate.alg || candidate.alg === "RS256") &&
+      candidate.kty === "EC" &&
+      candidate.crv === "P-256" &&
+      (!candidate.alg || candidate.alg === "ES256") &&
       (!candidate.use || candidate.use === "sig"),
   );
   if (!jwk) {
@@ -105,7 +106,7 @@ export async function verifyEdgeCapability(token, options) {
     key = await crypto.subtle.importKey(
       "jwk",
       jwk,
-      { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+      { name: "ECDSA", namedCurve: "P-256" },
       false,
       ["verify"],
     );
@@ -115,7 +116,7 @@ export async function verifyEdgeCapability(token, options) {
 
   const signature = decodeBase64Url(parts[2], "signature");
   const valid = await crypto.subtle.verify(
-    "RSASSA-PKCS1-v1_5",
+    { name: "ECDSA", hash: "SHA-256" },
     key,
     signature,
     new TextEncoder().encode(`${parts[0]}.${parts[1]}`),
