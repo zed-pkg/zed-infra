@@ -4,6 +4,7 @@ import test from "node:test";
 
 import {
   authorizeFallback,
+  authorizePrivateArtifact,
   EDGE_FALLBACK_CAPABILITY,
   privateFallbackHeaders,
   verifyEdgeCapability,
@@ -178,6 +179,25 @@ test("provider and source identity cannot be widened after verification", async 
     }),
     false,
   );
+});
+
+test("private artifact authorization is bound to one exact digest", async () => {
+  const sha = "a".repeat(64);
+  const other = "b".repeat(64);
+  const { token, policy } = await fixture({ artifact: { sha256: sha } });
+  const capability = await verifyEdgeCapability(token, policy);
+  assert.equal(authorizePrivateArtifact(capability, sha), true);
+  assert.equal(authorizePrivateArtifact(capability, other), false);
+  assert.equal(authorizePrivateArtifact(capability, "not-a-digest"), false);
+
+  const withoutArtifact = await fixture();
+  const packageOnly = await verifyEdgeCapability(withoutArtifact.token, withoutArtifact.policy);
+  assert.equal(authorizePrivateArtifact(packageOnly, sha), false);
+});
+
+test("malformed artifact bindings fail during capability verification", async () => {
+  const { token, policy } = await fixture({ artifact: { sha256: "ABC" } });
+  await assert.rejects(() => verifyEdgeCapability(token, policy), /invalid artifact\.sha256/);
 });
 
 test("provider credentials are explicit and responses are marked private/no-store", () => {
