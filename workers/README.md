@@ -73,6 +73,14 @@ freshness during outages, and bind delegated credentials to one upstream and
 resource scope. This patch does not forward user tokens or SSH keys, grant
 private downloads, change Worker bindings, or deploy production resources.
 
+The resource capability itself remains **Zed-issued** after both Shared Auth
+proof admission and Zed package ACL authorization. It is not a Shared Auth
+identity token. The offline verifier/provider planner lives in
+`shared/edge-capability.js`; its security contract is documented in
+[`shared-auth/edge-fallback-capability-v1.md`](../shared-auth/edge-fallback-capability-v1.md).
+The canonical payload shape is owned by `zed-pkg/zed-interfaces`
+`EdgeFallbackCapabilityV1`.
+
 `org.zpkg.net` is deliberately different from the origin-backed hostnames:
 `org-proxy` is the origin, so its Wrangler Custom Domain creates the DNS record
 and certificate. It never accepts an arbitrary `next`, `return_to`, or target
