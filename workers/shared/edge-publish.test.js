@@ -11,6 +11,7 @@ import {
   handleEdgePublish,
   packageIndexKey,
   r2PackageMetadata,
+  r2VersionMetadata,
   secretsMatch,
   sha256Hex,
   validatePublishMeta,
@@ -28,6 +29,7 @@ const ROUTE = { org: "oresoftware", name: "k8s-telemetry-rs", version: "0.2.0" }
 function fakeBucket(seed = {}) {
   const objects = new Map(Object.entries(seed));
   const uploaded = new Map();
+  const metadata = new Map();
   let clock = 0;
   return {
     objects,
@@ -35,6 +37,7 @@ function fakeBucket(seed = {}) {
       if (!objects.has(key)) return null;
       const value = objects.get(key);
       return {
+        customMetadata: metadata.get(key),
         async text() {
           return typeof value === "string" ? value : new TextDecoder().decode(value);
         },
@@ -45,6 +48,7 @@ function fakeBucket(seed = {}) {
         options.onlyIf instanceof Headers && options.onlyIf.get("if-none-match") === "*";
       if (createOnly && objects.has(key)) return null;
       objects.set(key, value);
+      metadata.set(key, options.customMetadata);
       clock += 1;
       uploaded.set(key, new Date(clock * 1000));
       return { key };
@@ -54,7 +58,7 @@ function fakeBucket(seed = {}) {
         truncated: false,
         objects: [...objects.keys()]
           .filter((key) => key.startsWith(prefix))
-          .map((key) => ({ key, uploaded: uploaded.get(key) })),
+          .map((key) => ({ key, uploaded: uploaded.get(key), customMetadata: metadata.get(key) })),
       };
     },
   };
@@ -396,5 +400,64 @@ test("no mirror is attempted when GitHub Packages is not configured", async () =
     assert.equal(called, 0, "an unconfigured mirror makes no network calls");
   } finally {
     globalThis.fetch = originalFetch;
+  }
+});
+
+for (const visibility of ["private", "organization", "PUBLIC", "", null, false, {}, []]) {
+  for (const location of ["metadata", "package"]) {
+    test(`public-only publishing rejects ${location} visibility ${JSON.stringify(visibility)} before storage or mirror I/O`, async () => {
+      const bytes = new TextEncoder().encode("must remain private");
+      const base = await metaFor(bytes);
+      const meta = location === "metadata"
+        ? { ...base, visibility }
+        : { ...base, manifest: { package: { ...base.manifest.package, visibility } } };
+      let writes = 0;
+      const env = enabledEnv({
+        ARTIFACTS: { async put() { writes += 1; throw new Error("must not write"); } },
+        GITHUB_PACKAGES_TOKEN: "synthetic-never-used",
+      });
+      const result = await handleEdgePublish(await publishRequest(bytes, meta), env, ROUTE);
+      assert.equal(result.status, 422);
+      assert.equal(result.body.error, "edge_publication_requires_public_visibility");
+      assert.equal(writes, 0);
+      assert.equal(result.ghcr, undefined);
+    });
+  }
+}
+
+test("public publication marks artifact and metadata without changing the response contract", async () => {
+  const bytes = new TextEncoder().encode("public bytes");
+  const meta = await metaFor(bytes, { visibility: "public" });
+  const env = enabledEnv();
+  const result = await handleEdgePublish(await publishRequest(bytes, meta), env, ROUTE);
+  assert.equal(result.status, 201);
+  for (const key of [artifactKey(meta.sha256, meta.format), versionMetadataKey(ROUTE.org, ROUTE.name, ROUTE.version)]) {
+    assert.deepEqual((await env.ARTIFACTS.get(key)).customMetadata, { visibility: "public" });
+  }
+  assert.equal((await r2VersionMetadata(env, ROUTE)).sha256, meta.sha256);
+});
+
+test("public version and package reads refuse marked objects before reading their bodies", async () => {
+  let bodyReads = 0;
+  const env = enabledEnv({ ARTIFACTS: {
+    async get() {
+      return { customMetadata: { visibility: "private" }, async text() { bodyReads += 1; return "{}"; } };
+    },
+    async list(options) {
+      assert.deepEqual(options.include, ["customMetadata"]);
+      return { truncated: false, objects: [{ key: "metadata/oresoftware/k8s-telemetry-rs/versions/0.2.0.json", customMetadata: { visibility: "private" } }] };
+    },
+  } });
+  await assert.rejects(r2VersionMetadata(env, ROUTE), { name: "NonPublicObjectError" });
+  await assert.rejects(r2PackageMetadata(env, ROUTE), { name: "NonPublicObjectError" });
+  assert.equal(bodyReads, 0);
+});
+
+test("explicit non-public JSON metadata is refused even without an object marker", async () => {
+  for (const document of [{ visibility: "private" }, { package: { visibility: "organization" } }, { visibility: null }]) {
+    const env = enabledEnv({ ARTIFACTS: fakeBucket({
+      [versionMetadataKey(ROUTE.org, ROUTE.name, ROUTE.version)]: JSON.stringify(document),
+    }) });
+    await assert.rejects(r2VersionMetadata(env, ROUTE), { name: "NonPublicObjectError" });
   }
 });

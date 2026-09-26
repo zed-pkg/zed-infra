@@ -308,3 +308,47 @@ test("production Wrangler config preserves the existing DNS-compatible route", a
   assert.doesNotMatch(config, /custom_domain\s*=\s*true/);
   assert.match(config, /https:\/\/zpkg-cdn\.alexander-d-mills\.workers\.dev/);
 });
+
+for (const visibility of ["private", "organization", "PUBLIC", "", null]) {
+  test(`non-public R2 objects reject GET, HEAD, Range and conditional reads: ${JSON.stringify(visibility)}`, async () => {
+    globalThis.fetch = async () => { throw new Error("restricted object must not trigger fallback"); };
+    for (const path of [`/artifacts/${SHA}.tar.gz`, "/metadata/acme/pkg/versions/1.0.0.json"]) {
+      for (const variant of [
+        { method: "GET", headers: {} },
+        { method: "HEAD", headers: {} },
+        { method: "GET", headers: { range: "bytes=0-2" } },
+        { method: "GET", headers: { "if-none-match": '"secret-etag"' } },
+      ]) {
+        let cancelled = false;
+        const { response } = await call(path, { ...variant, store: {
+          async get() {
+            return {
+              customMetadata: { visibility },
+              body: new ReadableStream({ cancel() { cancelled = true; } }),
+              size: 12345,
+              httpEtag: '"secret-etag"',
+              writeHttpMetadata() { throw new Error("must not copy private headers"); },
+            };
+          },
+        } });
+        assert.equal(response.status, 404);
+        assert.equal(response.headers.get("cache-control"), "no-store");
+        for (const header of ["etag", "content-range", "content-length", "location"]) {
+          assert.equal(response.headers.get(header), null);
+        }
+        assert.equal(cancelled, true);
+        if (variant.method === "HEAD") {
+          assert.equal(await response.text(), "");
+        }
+      }
+    }
+  });
+}
+
+test("explicitly public objects remain downloadable", async () => {
+  const { response } = await call(`/artifacts/${SHA}.zip`, { store: {
+    async get() { return { customMetadata: { visibility: "public" }, body: "public", size: 6 }; },
+  } });
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), "public");
+});
