@@ -178,9 +178,12 @@ test("a lease holder identifies the deploy, not the process that wrote it", () =
   assert.equal(holderId(local), "alex@citadel");
   assert.equal(holderId(local), holderId({ ...local }));
 
-  // An explicit holder still wins, and no identity embeds a process id.
+  // An explicit holder still wins. Exact expected identities prove the PID
+  // is not appended; substring checks flake when a PID happens to occur in a
+  // perfectly legitimate run ID, username, or hostname.
   assert.equal(holderId({ ...ci, ZED_CF_LEASE_HOLDER: "operator" }), "operator");
-  for (const env of [ci, local, {}]) {
-    assert.ok(!holderId(env).includes(String(process.pid)), JSON.stringify(env));
-  }
+  assert.equal(holderId({}), "agent@localhost");
+  const numeric = String(process.pid);
+  assert.equal(holderId({ GITHUB_RUN_ID: numeric }), `gha:zed-pkg/zed-infra#${numeric}.1`);
+  assert.equal(holderId({ USER: numeric, HOSTNAME: numeric }), `${numeric}@${numeric}`);
 });

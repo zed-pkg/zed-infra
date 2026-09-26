@@ -76,7 +76,7 @@ function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
-async function publish(base, { name = "pkg", version, bytes, token = TOKEN, omitLength = false, visibility }) {
+async function publish(base, { name = "pkg", version, bytes, token = TOKEN, omitLength = false, visibility, duplicateMeta = false }) {
   const form = new FormData();
   form.set(
     "meta",
@@ -98,6 +98,9 @@ async function publish(base, { name = "pkg", version, bytes, token = TOKEN, omit
     }),
   );
   form.set("artifact", new Blob([bytes], { type: "application/gzip" }), "pkg.tar.gz");
+  if (duplicateMeta) {
+    form.append("meta", JSON.stringify({ visibility: "private" }));
+  }
   // Serialize once so the request carries an honest Content-Length, which is
   // what a real client sends and what the edge requires.
   const encoded = new Response(form);
@@ -265,4 +268,15 @@ test("workerd public CDN refuses private R2 objects including conditional and ra
     assert.equal(response.headers.get("content-range"), null);
     assert.doesNotMatch(await response.text(), /private/);
   }
+});
+
+test("workerd rejects duplicate metadata instead of selecting the public first part", { timeout: 60_000 }, async (t) => {
+  const { base, mf } = await startRegistry(t);
+  const response = await publish(base, {
+    version: "1.0.0", bytes: Buffer.from("ambiguous visibility"), duplicateMeta: true,
+  });
+  assert.equal(response.status, 400);
+  assert.equal((await response.json()).error, "invalid_publish_body");
+  const bucket = await mf.getR2Bucket("ARTIFACTS", "zpkg-registry-proxy");
+  assert.deepEqual((await bucket.list()).objects, []);
 });
