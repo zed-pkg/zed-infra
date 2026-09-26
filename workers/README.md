@@ -38,9 +38,19 @@ The GitHub path is proven by `zed-pkg-test/zed-pkg-e2e`
 ## Authenticated fallback boundary
 
 Private-source recovery is a separate trust domain from the anonymous fallback
-above. A browser, CLI, or origin bearer credential is **never** replayed to a
-third-party package host. Instead, the edge accepts only a short-lived signed
-Zed capability whose claims bind all of the following:
+above. Shared Auth owns authentication and proof quality; Zed owns package,
+organization, visibility, and source authorization. A browser, CLI, Shared Auth,
+Supabase, Neon, or origin bearer credential is **never** replayed to a third-party
+package host and is never treated as a package ACL.
+
+For customer authentication/read admission, Zed should consume the canonical
+Shared Auth read-only proof-policy boundary (the typed
+`valid | hard_deny | degraded | not_applicable` outcomes, immutable
+`(provider, issuer, subject, realm)` binding, and reconciliation/revocation
+policy). Only after that authentication proof satisfies the configured Zed
+boundary does Zed evaluate its own package/resource ACL and mint a separate
+short-lived **Zed-issued resource capability**. The edge accepts that resource
+capability, whose claims bind all of the following:
 
 - issuer and the dedicated `zed-edge-fallback` audience;
 - expiry/not-before plus a unique token id;
@@ -48,14 +58,26 @@ Zed capability whose claims bind all of the following:
 - the exact Zed package coordinate; and
 - the exact source provider identity (for example one GitHub owner/repository).
 
-`shared/edge-capability.js` verifies the signature from reviewed public JWKs
-and fails closed on an unknown key, algorithm, provider, package, or source.
+`shared/edge-capability.js` verifies the Zed capability signature from
+reviewed public JWKs and fails closed on an unknown key, algorithm, provider,
+package, or source. Its issuer/key set is intentionally independent from Shared
+Auth's user/session signing keys: an `aud=zed-pkg` Shared Auth delegation proves
+product identity entry, but it is not itself a `fallback:read` package
+capability.
+
 Provider credentials are a separate adapter input and must be short-lived and
 source-scoped. Private responses are `Cache-Control: private, no-store`; they
 must never enter Cloudflare shared cache or an anonymous R2 key. A future
 provider adapter may use a Cloudflare service binding to a credential broker,
 but the broker receives the already-bound Zed capability rather than a user's
 raw GitHub/npm/Cargo credential.
+
+For private fallback activation, the Zed minting path must also bind the
+capability to revocation/session freshness required by the adopted Shared Auth
+proof policy. An auth outage may preserve an already-issued bounded capability
+until that reviewed freshness window expires; it must never turn an unknown key,
+expired/degraded proof, stale revocation state, optimistic proof lacking its
+required durable reconciliation receipt, or wrong realm into new authority.
 
 `org.zpkg.net` is deliberately different from the origin-backed hostnames:
 `org-proxy` is the origin, so its Wrangler Custom Domain creates the DNS record
