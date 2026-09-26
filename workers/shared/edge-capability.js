@@ -87,6 +87,38 @@ function integerDate(value, label) {
   return value;
 }
 
+function normalizeProof(proof, policy, now, skew) {
+  if (!proof || Array.isArray(proof) || typeof proof !== "object") {
+    throw new Error("invalid proof");
+  }
+  if (proof.reconciliation !== "reconciled") {
+    throw new Error("proof is not reconciled");
+  }
+  const revocationCheckedAt = integerDate(
+    proof.revocationCheckedAt,
+    "proof.revocationCheckedAt",
+  );
+  if (revocationCheckedAt > now + skew) {
+    throw new Error("revocation check is in future");
+  }
+  const maxRevocationAgeSeconds = Number.isSafeInteger(policy.maxRevocationAgeSeconds)
+    ? policy.maxRevocationAgeSeconds
+    : 120;
+  if (maxRevocationAgeSeconds < 0 || maxRevocationAgeSeconds > 900) {
+    throw new Error("invalid max revocation age");
+  }
+  if (now - revocationCheckedAt > maxRevocationAgeSeconds) {
+    throw new Error("revocation state is stale");
+  }
+  return Object.freeze({
+    sessionId: stringClaim(proof.sessionId, "proof.sessionId"),
+    authEpoch: integerDate(proof.authEpoch, "proof.authEpoch"),
+    policyEpoch: integerDate(proof.policyEpoch, "proof.policyEpoch"),
+    reconciliation: "reconciled",
+    revocationCheckedAt,
+  });
+}
+
 function normalizeSource(source) {
   if (!source || Array.isArray(source) || typeof source !== "object") {
     throw new Error("invalid source");
@@ -132,14 +164,21 @@ function normalizeClaims(claims, policy) {
   if (issuer !== policy.issuer) throw new Error("issuer mismatch");
   if (!audienceMatches(claims.aud, policy.audience)) throw new Error("audience mismatch");
 
+  const iat = integerDate(claims.iat, "iat");
   const exp = integerDate(claims.exp, "exp");
+  if (iat > now + skew) throw new Error("token issued in future");
   if (now - skew >= exp) throw new Error("token expired");
+  if (exp <= iat) throw new Error("invalid token lifetime");
+  const maxTtlSeconds = Number.isSafeInteger(policy.maxTtlSeconds)
+    ? policy.maxTtlSeconds
+    : 300;
+  if (maxTtlSeconds < 60 || maxTtlSeconds > 900 || exp - iat > maxTtlSeconds) {
+    throw new Error("token lifetime exceeds policy");
+  }
   if (claims.nbf !== undefined && now + skew < integerDate(claims.nbf, "nbf")) {
     throw new Error("token not active");
   }
-  if (claims.iat !== undefined && integerDate(claims.iat, "iat") > now + skew) {
-    throw new Error("token issued in future");
-  }
+  const proof = normalizeProof(claims.proof, policy, now, skew);
 
   const capabilities = stringArray(claims.capabilities, "capabilities");
   if (!capabilities.includes(CAPABILITY)) throw new Error("missing fallback capability");
@@ -148,9 +187,11 @@ function normalizeClaims(claims, policy) {
     issuer,
     subject: stringClaim(claims.sub, "sub"),
     audience: claims.aud,
+    iat,
     exp,
     nbf: claims.nbf,
     jti: stringClaim(claims.jti, "jti"),
+    proof,
     capabilities: Object.freeze(capabilities),
     package: normalizePackage(claims.package),
     source: normalizeSource(claims.source),
