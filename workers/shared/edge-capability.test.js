@@ -15,19 +15,14 @@ let publicJwk;
 
 before(async () => {
   const pair = await crypto.subtle.generateKey(
-    {
-      name: "RSASSA-PKCS1-v1_5",
-      modulusLength: 2048,
-      publicExponent: new Uint8Array([1, 0, 1]),
-      hash: "SHA-256",
-    },
+    { name: "ECDSA", namedCurve: "P-256" },
     true,
     ["sign", "verify"],
   );
   privateKey = pair.privateKey;
   publicJwk = await crypto.subtle.exportKey("jwk", pair.publicKey);
   publicJwk.kid = "test-key-0001";
-  publicJwk.alg = "RS256";
+  publicJwk.alg = "ES256";
   publicJwk.use = "sig";
 });
 
@@ -57,14 +52,14 @@ function baseClaims(overrides = {}) {
 async function sign(claims, headerOverrides = {}) {
   const header = {
     typ: "JWT",
-    alg: "RS256",
+    alg: "ES256",
     kid: "test-key-0001",
     ...headerOverrides,
   };
   const head = base64url(JSON.stringify(header));
   const body = base64url(JSON.stringify(claims));
   const bytes = new TextEncoder().encode(`${head}.${body}`);
-  const signature = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", privateKey, bytes);
+  const signature = await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, privateKey, bytes);
   return `${head}.${body}.${base64url(new Uint8Array(signature))}`;
 }
 
@@ -96,7 +91,7 @@ async function expectCode(promise, code) {
   });
 }
 
-test("verifies a short-lived RS256 capability from a pinned JWKS snapshot", async () => {
+test("verifies a short-lived ES256 capability from a pinned JWKS snapshot", async () => {
   const claims = await verify();
   assert.equal(claims.sub, "user:test");
   assert.equal(claims.grants.length, 1);
@@ -120,7 +115,7 @@ test("rejects wrong audience, expiry, unknown kid, and unsupported algorithms", 
   );
 
   await expectCode(
-    verifyEdgeCapability(await sign(baseClaims(), { alg: "HS256" }), {
+    verifyEdgeCapability(await sign(baseClaims(), { alg: "RS256" }), {
       issuer: ISSUER,
       jwks: jwks(),
       nowEpochSeconds: NOW,
