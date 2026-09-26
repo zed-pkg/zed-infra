@@ -35,6 +35,13 @@ async function fixture(overrides = {}) {
     nbf: now - 5,
     exp: now + 300,
     jti: "capability-123",
+    proof: {
+      sessionId: "session-123",
+      authEpoch: 7,
+      policyEpoch: 11,
+      reconciliation: "reconciled",
+      revocationCheckedAt: now - 10,
+    },
     capabilities: [EDGE_FALLBACK_CAPABILITY],
     package: { org: "acme", name: "private-lib" },
     source: { provider: "github", owner: "acme", repo: "private-lib" },
@@ -94,6 +101,40 @@ test("wrong audience, expired, and wrong capability fail closed", async () => {
   }
 });
 
+test("private fallback requires reconciled and fresh revocation proof", async () => {
+  {
+    const { token, policy } = await fixture({
+      proof: {
+        sessionId: "session-123",
+        authEpoch: 7,
+        policyEpoch: 11,
+        reconciliation: "optimistic",
+        revocationCheckedAt: 1_799_999_990,
+      },
+    });
+    await assert.rejects(() => verifyEdgeCapability(token, policy), /not reconciled/);
+  }
+  {
+    const { token, policy } = await fixture({
+      proof: {
+        sessionId: "session-123",
+        authEpoch: 7,
+        policyEpoch: 11,
+        reconciliation: "reconciled",
+        revocationCheckedAt: 1_799_999_000,
+      },
+    });
+    policy.maxRevocationAgeSeconds = 120;
+    await assert.rejects(() => verifyEdgeCapability(token, policy), /revocation state is stale/);
+  }
+});
+
+test("fallback capability lifetime is bounded independently of its signature", async () => {
+  const { token, policy } = await fixture({ exp: 1_800_001_000 });
+  policy.maxTtlSeconds = 300;
+  await assert.rejects(() => verifyEdgeCapability(token, policy), /lifetime exceeds policy/);
+});
+
 test("a changed payload cannot reuse the original signature", async () => {
   const { token, policy } = await fixture();
   const parts = token.split(".");
@@ -103,6 +144,13 @@ test("a changed payload cannot reuse the original signature", async () => {
     sub: "user:123",
     exp: policy.now + 300,
     jti: "forged",
+    proof: {
+      sessionId: "session-123",
+      authEpoch: 7,
+      policyEpoch: 11,
+      reconciliation: "reconciled",
+      revocationCheckedAt: policy.now - 10,
+    },
     capabilities: [EDGE_FALLBACK_CAPABILITY],
     package: { org: "acme", name: "admin-lib" },
     source: { provider: "github", owner: "acme", repo: "admin-lib" },
