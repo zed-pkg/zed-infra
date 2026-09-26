@@ -28,7 +28,7 @@ async function fixture(overrides = {}) {
 
   const now = 1_800_000_000;
   const claims = {
-    iss: "https://auth.zpkg.net",
+    iss: "https://api.zpkg.net",
     aud: "zed-edge-fallback",
     sub: "user:123",
     iat: now - 5,
@@ -49,7 +49,7 @@ async function fixture(overrides = {}) {
     now,
     token: `${encodedHeader}.${encodedPayload}.${b64url(signature)}`,
     policy: {
-      issuer: "https://auth.zpkg.net",
+      issuer: "https://api.zpkg.net",
       audience: "zed-edge-fallback",
       now,
       keys: [publicJwk],
@@ -98,7 +98,7 @@ test("a changed payload cannot reuse the original signature", async () => {
   const { token, policy } = await fixture();
   const parts = token.split(".");
   const changed = {
-    iss: "https://auth.zpkg.net",
+    iss: "https://api.zpkg.net",
     aud: "zed-edge-fallback",
     sub: "user:123",
     exp: policy.now + 300,
