@@ -33,7 +33,7 @@ async function fixture(overrides = {}) {
     sub: "user:123",
     iat: now - 5,
     nbf: now - 5,
-    exp: now + 300,
+    exp: now + 295,
     jti: "capability-123",
     proof: {
       sessionId: "session-123",
