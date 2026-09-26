@@ -1,0 +1,68 @@
+{
+  "schema": "zed.package-intake.policy/v1",
+  "policy_id": "zed-secure-package-intake-v1",
+  "default_decision": "quarantine",
+  "ecosystems": ["npm", "cargo", "python", "git"],
+  "source": {
+    "require_immutable_identity_before_execution": true,
+    "mutable_ref_must_resolve_to_immutable_identity": true,
+    "required_evidence": ["source_uri", "source_digest", "resolved_revision"]
+  },
+  "sandbox": {
+    "ephemeral": true,
+    "credentials": "none",
+    "network_egress": "deny_by_default",
+    "privileged": false,
+    "host_mounts": "none",
+    "write_scope": "ephemeral_workspace_only"
+  },
+  "risk": {
+    "required_signal_classes": [
+      "typosquatting",
+      "dependency_confusion",
+      "install_or_lifecycle_scripts",
+      "unexpected_network_behavior",
+      "maintainer_or_ownership_churn",
+      "new_package_or_name_age",
+      "source_artifact_mismatch",
+      "obfuscation_or_generated_payload",
+      "secret_or_credential_access",
+      "native_binary_or_dynamic_library"
+    ],
+    "missing_required_scanner": "fail_closed",
+    "scanner_timeout": "fail_closed"
+  },
+  "rebuild": {
+    "required_before_publish": true,
+    "compare": ["artifact_digest", "declared_file_manifest", "dependency_lock_identity"],
+    "source_artifact_mismatch": "reject",
+    "missing_rebuild_evidence": "fail_closed"
+  },
+  "approval": {
+    "required_for": ["release_from_quarantine", "policy_override"],
+    "bind_to": ["artifact_digest", "source_digest", "policy_digest", "risk_receipt_digest", "rebuild_receipt_digest"],
+    "stale_approval": "reject"
+  },
+  "storage": {
+    "quarantine": "separate",
+    "evidence": "separate",
+    "published": "separate",
+    "promotion_identity": "least_privilege"
+  },
+  "states": ["received", "quarantined", "evaluated", "pending_approval", "rejected", "publishable", "published"],
+  "allowed_transitions": [
+    ["received", "quarantined"],
+    ["quarantined", "evaluated"],
+    ["evaluated", "rejected"],
+    ["evaluated", "pending_approval"],
+    ["evaluated", "publishable"],
+    ["pending_approval", "rejected"],
+    ["pending_approval", "publishable"],
+    ["publishable", "published"]
+  ],
+  "publication": {
+    "required_evidence": ["risk_receipt", "rebuild_receipt", "policy_receipt", "artifact_digest"],
+    "missing_required_evidence": "fail_closed",
+    "mutable_tag_only_identity": "reject"
+  }
+}
