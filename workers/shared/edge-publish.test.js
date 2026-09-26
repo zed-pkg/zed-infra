@@ -461,3 +461,125 @@ test("explicit non-public JSON metadata is refused even without an object marker
     await assert.rejects(r2VersionMetadata(env, ROUTE), { name: "NonPublicObjectError" });
   }
 });
+
+async function requestFromForm(form, declaredLength) {
+  const encoded = new Response(form);
+  const body = new Uint8Array(await encoded.arrayBuffer());
+  return new Request("https://registry.zpkg.net/v1/packages/oresoftware/k8s-telemetry-rs/versions/0.2.0", {
+    method: "PUT",
+    headers: {
+      authorization: `Bearer ${TOKEN}`,
+      "content-type": encoded.headers.get("content-type"),
+      "content-length": declaredLength ?? String(body.byteLength),
+    },
+    body,
+  });
+}
+
+for (const variant of ["duplicate-meta", "duplicate-artifact", "unknown-part"]) {
+  test(`multipart admission rejects ${variant} without writes`, async () => {
+    const bytes = new TextEncoder().encode("multipart fixture");
+    const meta = await metaFor(bytes);
+    const form = new FormData();
+    form.append("meta", JSON.stringify(meta));
+    form.append("artifact", new Blob([bytes]), "pkg.tar.gz");
+    if (variant === "duplicate-meta") {
+      form.append("meta", JSON.stringify({ ...meta, visibility: "private" }));
+    } else if (variant === "duplicate-artifact") {
+      form.append("artifact", new Blob(["different bytes"]), "second.tar.gz");
+    } else {
+      form.append("unexpected", "must not be ignored");
+    }
+    const env = enabledEnv();
+    const result = await handleEdgePublish(await requestFromForm(form), env, ROUTE);
+    assert.equal(result.status, 400);
+    assert.equal(result.body.error, "invalid_publish_body");
+    assert.equal(env.ARTIFACTS.objects.size, 0);
+  });
+}
+
+for (const length of ["-1", "+1", "1.5", "1e3", "0x10", "01", "9007199254740992", ""]) {
+  test(`invalid Content-Length ${JSON.stringify(length)} is rejected without consuming the body`, async () => {
+    const request = await publishRequest(new Uint8Array([1]), await metaFor(new Uint8Array([1])));
+    request.headers.set("content-length", length);
+    const result = await handleEdgePublish(request, enabledEnv(), ROUTE);
+    assert.equal(result.status, 411);
+    assert.equal(request.bodyUsed, false);
+  });
+}
+
+test("actual multipart byte count cannot exceed a small declared length", async () => {
+  const bytes = new TextEncoder().encode("untrusted length");
+  const request = await publishRequest(bytes, await metaFor(bytes));
+  request.headers.set("content-length", "1");
+  const env = enabledEnv();
+  const result = await handleEdgePublish(request, env, ROUTE);
+  assert.equal(result.status, 413);
+  assert.equal(env.ARTIFACTS.objects.size, 0);
+});
+
+test("an over-declared multipart body cannot publish", async () => {
+  const bytes = new TextEncoder().encode("truncated transport");
+  const request = await publishRequest(bytes, await metaFor(bytes));
+  request.headers.set("content-length", String(Number(request.headers.get("content-length")) + 1));
+  const env = enabledEnv();
+  const result = await handleEdgePublish(request, env, ROUTE);
+  assert.equal(result.status, 400);
+  assert.equal(result.body.error, "publish_length_mismatch");
+  assert.equal(env.ARTIFACTS.objects.size, 0);
+});
+
+test("metadata limit counts UTF-8 bytes instead of UTF-16 code units", async () => {
+  const bytes = new Uint8Array([1]);
+  const meta = await metaFor(bytes, { padding: "😀".repeat(270000) });
+  assert.ok(JSON.stringify(meta).length < 1024 * 1024);
+  const env = enabledEnv();
+  const result = await handleEdgePublish(await publishRequest(bytes, meta), env, ROUTE);
+  assert.equal(result.status, 413);
+  assert.equal(result.body.error, "invalid_publish_meta");
+  assert.equal(env.ARTIFACTS.objects.size, 0);
+});
+
+test("streaming overflow cancels the source before draining unbounded input", async () => {
+  const bytes = new TextEncoder().encode("stream fixture");
+  const original = await publishRequest(bytes, await metaFor(bytes));
+  const encoded = new Uint8Array(await original.arrayBuffer());
+  let pulls = 0;
+  let cancelled = false;
+  const body = new ReadableStream({
+    pull(controller) {
+      pulls += 1;
+      controller.enqueue(pulls === 1 ? encoded.subarray(0, 32) : encoded.subarray(32));
+    },
+    cancel() {
+      cancelled = true;
+    },
+  }, { highWaterMark: 0 });
+  const headers = new Headers(original.headers);
+  headers.set("content-length", "64");
+  const request = new Request(original.url, { method: "PUT", body, headers, duplex: "half" });
+  const result = await handleEdgePublish(request, enabledEnv(), ROUTE);
+  assert.equal(result.status, 413);
+  assert.equal(cancelled, true);
+  assert.equal(pulls, 2);
+});
+
+test("early multipart parser rejection also cancels the upload source", async () => {
+  let cancelled = false;
+  const request = new Request("https://registry.zpkg.net/", {
+    method: "PUT",
+    headers: { authorization: `Bearer ${TOKEN}`, "content-type": "text/plain", "content-length": "1024" },
+    body: new ReadableStream({
+      pull(controller) {
+        controller.enqueue(new Uint8Array([1]));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    }, { highWaterMark: 0 }),
+    duplex: "half",
+  });
+  const result = await handleEdgePublish(request, enabledEnv(), ROUTE);
+  assert.equal(result.status, 400);
+  assert.equal(cancelled, true);
+});

@@ -50,6 +50,14 @@ public-only contract; an explicit value must be exactly `public`. Newly
 published artifact and version objects carry R2 custom metadata
 `visibility=public`. This storage marker is not a user-authentication proof.
 
+The publication body requires a canonical decimal `Content-Length` below the
+combined artifact/metadata limit. The parser receives bytes through a counting
+stream that rejects overflow and cancels the source; a short body is rejected
+before any publication. Exactly one `meta` field and one `artifact` file are
+accepted. Duplicate or additional fields are invalid, and the metadata limit
+counts UTF-8 bytes. These checks also cover service-binding requests, where a
+caller can construct a Request whose length header does not match its body.
+
 The CDN rejects objects with an explicit non-public/invalid visibility marker
 before copying their headers or handling GET, HEAD, Range, or conditional
 requests. Registry R2 metadata reads and version listings likewise reject
