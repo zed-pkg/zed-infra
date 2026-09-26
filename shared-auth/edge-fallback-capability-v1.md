@@ -17,7 +17,7 @@ long-lived credential to third-party hosts.
 
 ## Capability shape
 
-Shared Auth / zed-api-server will issue a compact RS256 JWT with:
+Shared Auth / zed-api-server will issue a compact ES256/P-256 JWT with:
 
 - `zed_edge_capability = 1`
 - exact issuer
@@ -27,7 +27,7 @@ Shared Auth / zed-api-server will issue a compact RS256 JWT with:
 - unique `jti`
 - one or more exact read grants
 
-A v1 capability lives for at most five minutes. The Cloudflare verifier receives
+A v1 capability lives for at most five minutes. The capability uses the existing Shared Auth ES256/P-256 signing and JWKS lifecycle. The Cloudflare verifier receives
 a pinned/cached JWKS snapshot from deployment configuration and performs no
 network I/O while verifying the JWT. An already-issued token can therefore be
 verified while both zed-api-server and Shared Auth are unavailable.
