@@ -157,6 +157,18 @@ function normalizePackage(pkg) {
   });
 }
 
+function normalizeArtifact(artifact) {
+  if (artifact === undefined || artifact === null) return null;
+  if (!artifact || Array.isArray(artifact) || typeof artifact !== "object") {
+    throw new Error("invalid artifact");
+  }
+  const sha256 = stringClaim(artifact.sha256, "artifact.sha256");
+  if (!/^[a-f0-9]{64}$/.test(sha256)) {
+    throw new Error("invalid artifact.sha256");
+  }
+  return Object.freeze({ sha256 });
+}
+
 function normalizeClaims(claims, policy) {
   const now = Number.isSafeInteger(policy.now) ? policy.now : Math.floor(Date.now() / 1000);
   const skew = Number.isSafeInteger(policy.clockSkewSeconds) ? policy.clockSkewSeconds : 30;
@@ -195,6 +207,7 @@ function normalizeClaims(claims, policy) {
     capabilities: Object.freeze(capabilities),
     package: normalizePackage(claims.package),
     source: normalizeSource(claims.source),
+    artifact: normalizeArtifact(claims.artifact),
   });
 }
 
@@ -265,6 +278,17 @@ export function authorizeFallback(capability, request) {
     );
   }
   return false;
+}
+
+export function authorizePrivateArtifact(capability, sha256) {
+  return (
+    Boolean(capability) &&
+    typeof sha256 === "string" &&
+    /^[a-f0-9]{64}$/.test(sha256) &&
+    capability.capabilities?.includes(CAPABILITY) === true &&
+    capability.proof?.reconciliation === "reconciled" &&
+    capability.artifact?.sha256 === sha256
+  );
 }
 
 export function privateFallbackHeaders(providerCredential) {
