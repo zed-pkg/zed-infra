@@ -35,6 +35,21 @@ remaining public backups are:
 The GitHub path is proven by `zed-pkg-test/zed-pkg-e2e`
 `scripts/github_api_fallback.py`.
 
+### Authenticated fallback is a separate trust path
+
+Private-package outage recovery is being built as a distinct capability path,
+not by attaching a user's raw `Authorization` header, SSH key, GitHub PAT, or
+npm token to the existing public fallback. The first fail-closed verifier and
+provider planner live in `shared/edge-capability.js`; their contract is
+documented in
+[`shared-auth/edge-fallback-capability-v1.md`](../shared-auth/edge-fallback-capability-v1.md).
+
+The live registry Worker does **not** consume these capabilities yet. Production
+wiring waits for the canonical `zed-interfaces` schema, issuer endpoint,
+provider credential brokers, private/no-store cache proof, and the outage E2E
+matrix. Until those gates land, private GitHub/npm/Cargo sources continue to
+fail closed when the Zed origin is unavailable.
+
 `org.zpkg.net` is deliberately different from the origin-backed hostnames:
 `org-proxy` is the origin, so its Wrangler Custom Domain creates the DNS record
 and certificate. It never accepts an arbitrary `next`, `return_to`, or target
