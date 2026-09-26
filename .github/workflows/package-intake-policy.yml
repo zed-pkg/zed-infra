@@ -1,0 +1,32 @@
+name: secure package intake policy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "policy/package-intake.v1.json"
+      - "scripts/check-package-intake-policy.mjs"
+      - ".github/workflows/package-intake-policy.yml"
+  pull_request:
+    paths:
+      - "policy/package-intake.v1.json"
+      - "scripts/check-package-intake-policy.mjs"
+      - ".github/workflows/package-intake-policy.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: package-intake-policy-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Check policy syntax
+        run: node --check scripts/check-package-intake-policy.mjs
+      - name: Enforce fail-closed intake invariants
+        run: node scripts/check-package-intake-policy.mjs
