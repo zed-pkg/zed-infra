@@ -8,7 +8,7 @@ cannot: GitHub and *public* native registries as a read-only backup when
 | Worker | Hostname | Role |
 | --- | --- | --- |
 | `api-proxy` | `api.zpkg.net` | Full stateful API pass-through. Authentication, authorization, and writes remain origin-owned. Transport and Cloudflare origin failures become typed, cache-disabled 503s; this hostname never substitutes GitHub content for the API. |
-| `registry-proxy` | `registry.zpkg.net` | A total `(method, path) -> action` state machine exposes only the current machine-registry routes from `zed-api-server.rs`; `/v1/account/*`, auth, admin, and unknown paths fail before origin I/O. On an origin outage, package/version reads may use anonymously proven public npm, crates.io, or GitHub data. Writes stay origin-only. |
+| `registry-proxy` | `registry.zpkg.net` | A total `(method, path) -> action` state machine exposes only the current machine-registry routes from `zed-api-server.rs`; `/v1/account/*`, auth, admin, and unknown paths fail before origin I/O. On an origin outage, package/version reads may use public R2 metadata or anonymously proven public npm, crates.io, or GitHub data. Writes stay origin-only except for the explicitly enabled operator public-publication path below. |
 | `cdn-proxy` | `cdn.zpkg.net` | A zone Worker Route is the hostname's public byte boundary. Its private R2 binding exposes only content-addressed artifacts and signed metadata. Coordinate paths never read R2; they require an anonymously successful npm/crates.io or GitHub Release read. |
 | `web-proxy` | `web.zpkg.net` | Alias of `user.zpkg.net`. |
 | `app-proxy` | `app.zpkg.net` | Alias of `user.zpkg.net`; origin failures plus exact `/`, `/login`, and `/signup` origin 404s become a cache-disabled maintenance response while the app routes are unavailable. |
@@ -34,6 +34,44 @@ remaining public backups are:
 
 The GitHub path is proven by `zed-pkg-test/zed-pkg-e2e`
 `scripts/github_api_fallback.py`.
+
+## Public publication and private-package boundary
+
+During an origin outage, version publication can run at the edge only when
+`EDGE_PUBLISH_ENABLED` is exactly `true`, `EDGE_PUBLISH_TOKEN` is configured,
+and the request supplies that operator credential. This existing exception is
+for **public publication only**. The operator token does not prove user
+identity or ownership of a package namespace.
+
+Publication rejects explicit non-public, unknown, or malformed `visibility`
+values in either the publish metadata or `manifest.package` before writing
+R2 or attempting a GHCR mirror. An omitted visibility retains the legacy
+public-only contract; an explicit value must be exactly `public`. Newly
+published artifact and version objects carry R2 custom metadata
+`visibility=public`. This storage marker is not a user-authentication proof.
+
+The CDN rejects objects with an explicit non-public/invalid visibility marker
+before copying their headers or handling GET, HEAD, Range, or conditional
+requests. Registry R2 metadata reads and version listings likewise reject
+marked non-public objects, and parsed version documents reject explicit
+non-public visibility. A restriction is a terminal, non-enumerating,
+`no-store` 404; it never triggers a guessed public mirror lookup.
+
+**This is not mixed public/private bucket support.** Unmarked legacy objects
+remain public under the existing storage contract, and direct CDN metadata
+reads rely on the R2 marker rather than interpreting the JSON body. All
+writers must be brought under a reviewed visibility/ownership contract before
+private content enters this bucket. Existing cached content also requires an
+explicit cache-remediation plan; changing an object marker cannot retract
+bytes already downloaded or cached elsewhere. Full private registry and
+artifact ownership work remains tracked in
+[zed-api-server.rs#101](https://github.com/zed-pkg/zed-api-server.rs/issues/101).
+
+The follow-up authenticated fallback work must consume Shared Auth's shared
+verification/proof-policy boundary, enforce expiration and revocation
+freshness during outages, and bind delegated credentials to one upstream and
+resource scope. This patch does not forward user tokens or SSH keys, grant
+private downloads, change Worker bindings, or deploy production resources.
 
 ## Authenticated fallback boundary
 
