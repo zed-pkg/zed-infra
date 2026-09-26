@@ -29,6 +29,7 @@ async function startRegistry(t, bindings = {}) {
             "shared/native-public.js",
             "shared/edge-publish.js",
             "shared/ghcr.js",
+            "shared/public-visibility.js",
           ].map((path) => ({ type: "ESModule", path: `${root}${path}` })),
           modulesRoot: root,
           compatibilityDate: "2026-08-28",
@@ -50,6 +51,7 @@ async function startRegistry(t, bindings = {}) {
             "cdn-proxy/src/index.js",
             "shared/github-fallback.js",
             "shared/native-public.js",
+            "shared/public-visibility.js",
           ].map((path) => ({ type: "ESModule", path: `${root}${path}` })),
           modulesRoot: root,
           compatibilityDate: "2026-08-28",
@@ -74,7 +76,7 @@ function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
-async function publish(base, { name = "pkg", version, bytes, token = TOKEN, omitLength = false }) {
+async function publish(base, { name = "pkg", version, bytes, token = TOKEN, omitLength = false, visibility }) {
   const form = new FormData();
   form.set(
     "meta",
@@ -92,6 +94,7 @@ async function publish(base, { name = "pkg", version, bytes, token = TOKEN, omit
       sha256: sha256(bytes),
       size: bytes.byteLength,
       format: "tar.gz",
+      ...(visibility === undefined ? {} : { visibility }),
     }),
   );
   form.set("artifact", new Blob([bytes], { type: "application/gzip" }), "pkg.tar.gz");
@@ -227,4 +230,39 @@ test("a published artifact is served with real range and validator semantics", {
 
   const unknown = await fetch(new URL(`/v1/artifacts/${"0".repeat(64)}`, base));
   assert.equal(unknown.status, 503, "an unpublished digest is not invented");
+});
+
+test("private edge publication writes no R2 objects in workerd", { timeout: 60_000 }, async (t) => {
+  const { base, mf } = await startRegistry(t);
+  const response = await publish(base, {
+    version: "1.0.0", bytes: Buffer.from("private runtime payload"), visibility: "private",
+  });
+  assert.equal(response.status, 422);
+  assert.equal((await response.json()).error, "edge_publication_requires_public_visibility");
+  const bucket = await mf.getR2Bucket("ARTIFACTS", "zpkg-registry-proxy");
+  assert.deepEqual((await bucket.list()).objects, []);
+});
+
+test("workerd public CDN refuses private R2 objects including conditional and range requests", { timeout: 60_000 }, async (t) => {
+  const { mf } = await startRegistry(t);
+  const bucket = await mf.getR2Bucket("ARTIFACTS", "zpkg-cdn");
+  const cdn = await mf.getWorker("zpkg-cdn");
+  const key = `artifacts/${sha256(Buffer.from("private"))}.tar.gz`;
+  const stored = await bucket.put(key, "private", {
+    customMetadata: { visibility: "private" },
+    httpMetadata: { cacheControl: "public, max-age=31536000, immutable" },
+  });
+  for (const init of [
+    {},
+    { method: "HEAD" },
+    { headers: { range: "bytes=0-2" } },
+    { headers: { "if-none-match": stored.httpEtag } },
+  ]) {
+    const response = await cdn.fetch(`https://cdn.zpkg.net/${key}`, init);
+    assert.equal(response.status, 404);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    assert.equal(response.headers.get("etag"), null);
+    assert.equal(response.headers.get("content-range"), null);
+    assert.doesNotMatch(await response.text(), /private/);
+  }
 });

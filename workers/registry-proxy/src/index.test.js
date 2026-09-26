@@ -344,3 +344,32 @@ test("a digest-named asset whose reported digest disagrees is refused", async ()
   });
   assert.equal(response.status, 503);
 });
+
+for (const suffix of ["", "/versions/1.0.0"]) {
+  test(`non-public R2 metadata is a terminal uncached denial: ${suffix || "package"}`, async () => {
+    const seen = [];
+    globalThis.fetch = async (input) => {
+      const url = input instanceof Request ? input.url : String(input);
+      seen.push(url);
+      assert.ok(url.startsWith("https://api.zpkg.net/"), "must not probe third-party mirrors");
+      return new Response(null, { status: 503 });
+    };
+    for (const method of ["GET", "HEAD"]) {
+      const response = await worker.fetch(request(`/v1/packages/acme/secret${suffix}`, { method }), {
+        ORIGIN_URL: "https://api.zpkg.net",
+        ARTIFACTS: {
+          async get() { return { customMetadata: { visibility: "private" } }; },
+          async list() { return { truncated: false, objects: [{ key: "metadata/acme/secret/versions/1.0.0.json", customMetadata: { visibility: "private" } }] }; },
+        },
+      });
+      assert.equal(response.status, 404);
+      assert.equal(response.headers.get("cache-control"), "no-store");
+      const body = await response.text();
+      assert.doesNotMatch(body, /secret|1\.0\.0/);
+      if (method === "HEAD") {
+        assert.equal(body, "");
+      }
+    }
+    assert.equal(seen.length, 2);
+  });
+}

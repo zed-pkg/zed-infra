@@ -35,6 +35,7 @@
  */
 
 import { ghcrRepositoryPath, pushArtifactToGhcr } from "./ghcr.js";
+import { permitsPublicVisibility, requirePublicObject, NonPublicObjectError } from "./public-visibility.js";
 
 export const PUBLISH_META_FIELD = "meta";
 export const PUBLISH_ARTIFACT_FIELD = "artifact";
@@ -153,6 +154,15 @@ export function validatePublishMeta(meta, route) {
       detail: "meta.manifest.package does not match the published coordinates",
     };
   }
+  // The operator credential grants no private namespace authorization. Never
+  // downgrade explicit private/unknown visibility into a public R2/GHCR copy.
+  if (!permitsPublicVisibility(meta) || !permitsPublicVisibility(pkg)) {
+    return {
+      status: 422,
+      code: "edge_publication_requires_public_visibility",
+      detail: "non-public publication requires the registry origin",
+    };
+  }
   if (typeof meta.sha256 !== "string" || !SHA256.test(meta.sha256)) {
     return { status: 422, code: "invalid_publish_meta", detail: "meta.sha256 is not a sha256" };
   }
@@ -244,9 +254,14 @@ export async function r2PackageMetadata(env, route) {
   do {
     let page;
     try {
-      page = await env.ARTIFACTS.list({ prefix, cursor, limit: 1000 });
+      page = await env.ARTIFACTS.list({ prefix, cursor, limit: 1000, include: ["customMetadata"] });
     } catch {
       return null;
+    }
+    // A restriction is terminal, not an invitation to guess a public mirror.
+    // Do not expose even the version names of a marked non-public package.
+    for (const object of page.objects) {
+      requirePublicObject(object);
     }
     objects.push(...page.objects);
     cursor = page.truncated ? page.cursor : undefined;
@@ -281,6 +296,7 @@ async function readJsonObject(env, key) {
     return null;
   }
   if (!object) return null;
+  requirePublicObject(object);
   let text;
   try {
     text = await object.text();
@@ -288,13 +304,19 @@ async function readJsonObject(env, key) {
     return null;
   }
   if (text.length > MAX_PUBLISH_META_BYTES) return null;
+  let metadata;
   try {
-    return JSON.parse(text);
+    metadata = JSON.parse(text);
   } catch {
     // A malformed object is treated as absent: serving half a document would
     // be worse than reporting the version as missing.
     return null;
   }
+  if (!permitsPublicVisibility(metadata)
+      || (metadata.package !== undefined && !permitsPublicVisibility(metadata.package))) {
+    throw new NonPublicObjectError();
+  }
+  return metadata;
 }
 
 /**
@@ -427,6 +449,7 @@ export async function handleEdgePublish(request, env, route, now = () => new Dat
   // digest, so a concurrent or repeated write stores identical bytes and an
   // abandoned one is unreferenced garbage, never a wrong answer.
   await env.ARTIFACTS.put(objectKey, bytes, {
+    customMetadata: { visibility: "public" },
     httpMetadata: {
       contentType: objectKey.endsWith(".zip") ? "application/zip" : "application/gzip",
       cacheControl: "public, max-age=31536000, immutable",
@@ -437,6 +460,7 @@ export async function handleEdgePublish(request, env, route, now = () => new Dat
   // R2, so exactly one of any number of concurrent publishes establishes the
   // version. `put` answers null when the precondition fails.
   const claimed = await env.ARTIFACTS.put(versionKey, JSON.stringify(versionMetadata), {
+    customMetadata: { visibility: "public" },
     httpMetadata: { contentType: "application/json" },
     onlyIf: new Headers({ "If-None-Match": "*" }),
   });

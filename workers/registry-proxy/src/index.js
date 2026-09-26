@@ -39,6 +39,7 @@ import {
   toPackageMetadata,
   toVersionMetadata,
 } from "../../shared/native-public.js";
+import { NonPublicObjectError } from "../../shared/public-visibility.js";
 
 const MAX_GITHUB_JSON_BYTES = 1024 * 1024;
 const MAX_GITHUB_FEED_BYTES = 1024 * 1024;
@@ -163,7 +164,13 @@ export default {
     try {
       const published = await r2PublishedFallback(route, env);
       if (published) return responseForMethod(request.method, published);
-    } catch {
+    } catch (error) {
+      if (error instanceof NonPublicObjectError) {
+        return responseForMethod(
+          request.method,
+          problem(404, "not_found", "no such public package"),
+        );
+      }
       // A bucket problem must not deny the remaining public sources.
     }
 
