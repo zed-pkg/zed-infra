@@ -216,7 +216,7 @@ function validateClaims(rawClaims, policy) {
   if (rawClaims.iss !== policy.issuer) {
     throw new EdgeCapabilityError("invalid_issuer", "capability issuer does not match");
   }
-  if (!audienceContains(rawClaims.aud, policy.audience)) {
+  if (rawClaims.aud !== policy.audience) {
     throw new EdgeCapabilityError("invalid_audience", "capability audience does not match");
   }
   if (
@@ -478,9 +478,6 @@ function decodeBase64Url(value, name) {
   return bytes;
 }
 
-function audienceContains(value, audience) {
-  return value === audience || (Array.isArray(value) && value.length <= 8 && value.includes(audience));
-}
 
 function integerClaim(value, name) {
   if (!Number.isSafeInteger(value) || value < 0) {
@@ -530,7 +527,7 @@ export class EdgeCapabilityError extends Error {
  * @typedef {{
  *   zed_edge_capability: 1,
  *   iss: string,
- *   aud: string | string[],
+ *   aud: string,
  *   sub: string,
  *   iat: number,
  *   nbf: number,
