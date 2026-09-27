@@ -432,6 +432,15 @@ function assertProviderDestination(grant, url) {
   }
 }
 
+function pathIsWithin(pathname, prefix) {
+  const normalizedPath = pathname.replace(/\/+$/, "");
+  const normalizedPrefix = prefix.replace(/\/+$/, "");
+  return (
+    normalizedPath === normalizedPrefix ||
+    normalizedPath.startsWith(`${normalizedPrefix}/`)
+  );
+}
+
 function pathBeginsWithSegments(pathname, expected) {
   const rawSegments = pathname.split("/").slice(1);
   if (rawSegments.length < expected.length) return false;
