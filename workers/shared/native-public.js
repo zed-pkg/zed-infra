@@ -446,7 +446,10 @@ export function toVersionMetadata(host, org, name, version, body, download) {
     published_at:
       download.published_at || body.time?.[version] || body.version?.created_at || "1970-01-01T00:00:00Z",
     yanked: Boolean(body.yanked || body.version?.yanked),
-    mirrors: [{ kind: `native-${host.id}`, url: download.url }],
+    // The Rust wire contract has no native-registry MirrorKind. The canonical
+    // native URL is already `download_url`; advertising a made-up mirror kind
+    // would make the otherwise-valid VersionMetadata fail deserialization.
+    mirrors: [],
     native_host: host.id,
   };
 }
