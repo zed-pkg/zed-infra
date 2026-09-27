@@ -54,3 +54,19 @@ responses bound to another capability id, inverted lifetimes, alternate ports
 for fixed GitHub/npm origins, and encoded dot/path-separator segments that
 could be normalized outside the authorized repository. JWT headers are
 closed-world: only `alg`, `typ`, and `kid` are accepted.
+
+
+## Capability v2 lineage gate
+
+Live broker-backed private fallback requires `EdgeFallbackCapabilityV2`.
+The Worker derives broker identity only from the verified capability:
+
+- `sub` -> canonical principal;
+- `sid` -> Shared Auth session lineage;
+- `parent_jti` -> delegated parent-token lineage;
+- `jti` -> edge capability id;
+- `exp` -> absolute credential lifetime ceiling.
+
+V1 remains readable for compatibility but cannot enter the credential-broker
+path because it lacks `sid` and `parent_jti`. These identifiers are distinct
+and must never be substituted for one another.
