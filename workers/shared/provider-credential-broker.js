@@ -47,6 +47,7 @@ const RESPONSE_KEYS = new Set([
  * @param {{
  *   principal: string,
  *   sessionLineage: string,
+ *   parentJti: string,
  *   capabilityId: string,
  *   capabilityExpiresAt: number,
  *   requestedTtlSeconds?: number,
@@ -88,6 +89,7 @@ export async function requestProviderCredential(broker, plan, context) {
     credential_ref: plan.credentialRef,
     principal: context.principal,
     session_lineage: context.sessionLineage,
+    parent_jti: context.parentJti,
     capability_id: context.capabilityId,
     requested_ttl_seconds: ttl,
   };
@@ -183,6 +185,7 @@ function validateContext(context) {
   for (const [name, value] of [
     ["principal", context.principal],
     ["session lineage", context.sessionLineage],
+    ["parent delegated token id", context.parentJti],
     ["capability id", context.capabilityId],
   ]) {
     if (typeof value !== "string" || !IDENTIFIER.test(value)) {
