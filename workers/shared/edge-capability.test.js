@@ -293,3 +293,71 @@ test("provider, package, and resource must all match one grant", async () => {
     (error) => error instanceof EdgeCapabilityError && error.code === "grant_mismatch",
   );
 });
+
+test("rejects unversioned JWT header fields and inconsistent temporal ordering", async () => {
+  await expectCode(
+    verifyEdgeCapability(await sign(baseClaims(), { crit: ["future-extension"] }), {
+      issuer: ISSUER,
+      jwks: jwks(),
+      nowEpochSeconds: NOW,
+    }),
+    "unknown_field",
+  );
+
+  await expectCode(
+    verify(baseClaims({ iat: NOW - 10, nbf: NOW + 20, exp: NOW + 10 })),
+    "invalid_lifetime",
+  );
+  await expectCode(
+    verify(baseClaims({ iat: NOW - 10, nbf: NOW - 20, exp: NOW + 20 })),
+    "invalid_lifetime",
+  );
+});
+
+test("fixed provider destinations reject alternate ports and path-escape encodings", async () => {
+  const githubClaims = await verify();
+  for (const url of [
+    "https://api.github.com:444/repos/acme/private-lib/releases",
+    "https://api.github.com/repos/acme/private-lib/%2e%2e/other",
+    "https://api.github.com/repos/acme/private-lib/foo%2f..%2fother",
+  ]) {
+    assert.throws(
+      () =>
+        planProviderRequest(githubClaims, {
+          provider: "github",
+          package: "acme/private-lib",
+          resource: "acme/private-lib",
+          url,
+        }),
+      (error) =>
+        error instanceof EdgeCapabilityError &&
+        error.code === "provider_destination_mismatch",
+    );
+  }
+
+  const npmClaims = await verify(
+    baseClaims({
+      grants: [
+        {
+          provider: "npm",
+          operation: "read",
+          package: "acme/private-js",
+          resource: "@acme/private-js",
+          credential_ref: "npm:scope:acme",
+        },
+      ],
+    }),
+  );
+  assert.throws(
+    () =>
+      planProviderRequest(npmClaims, {
+        provider: "npm",
+        package: "acme/private-js",
+        resource: "@acme/private-js",
+        url: "https://registry.npmjs.org:444/@acme%2Fprivate-js",
+      }),
+    (error) =>
+      error instanceof EdgeCapabilityError &&
+      error.code === "provider_destination_mismatch",
+  );
+});

@@ -24,6 +24,8 @@ const CARGO_CRATE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 const CREDENTIAL_REF = /^[A-Za-z0-9][A-Za-z0-9:._/-]{0,191}$/;
 const JTI = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,191}$/;
 
+const HEADER_KEYS = new Set(["alg", "typ", "kid"]);
+
 const CLAIM_KEYS = new Set([
   "zed_edge_capability",
   "iss",
@@ -80,7 +82,11 @@ export async function verifyEdgeCapability(token, options) {
 
   const header = decodeJsonSegment(parts[0], "header");
   const claims = decodeJsonSegment(parts[1], "claims");
-  if (!isRecord(header) || header.alg !== "ES256" || header.typ !== "JWT") {
+  if (!isRecord(header)) {
+    throw new EdgeCapabilityError("invalid_header", "JWT header must be an object");
+  }
+  rejectUnknownKeys(header, HEADER_KEYS, "header");
+  if (header.alg !== "ES256" || header.typ !== "JWT") {
     throw new EdgeCapabilityError("unsupported_algorithm", "only typ=JWT alg=ES256 is accepted");
   }
   if (typeof header.kid !== "string" || !JTI.test(header.kid)) {
@@ -235,7 +241,7 @@ function validateClaims(rawClaims, policy) {
   const iat = integerClaim(rawClaims.iat, "iat");
   const exp = integerClaim(rawClaims.exp, "exp");
   const nbf = rawClaims.nbf === undefined ? iat : integerClaim(rawClaims.nbf, "nbf");
-  if (exp <= iat || exp - iat > policy.maxTtlSeconds) {
+  if (exp <= iat || nbf < iat || nbf > exp || exp - iat > policy.maxTtlSeconds) {
     throw new EdgeCapabilityError(
       "invalid_lifetime",
       "capability lifetime must be positive and within the configured maximum",
@@ -370,12 +376,19 @@ function assertProviderDestination(grant, url) {
   switch (grant.provider) {
     case "github": {
       const [owner, repo] = grant.resource.split("/");
-      const prefix = `/${owner}/${repo}`;
-      const apiPrefix = `/repos${prefix}`;
+      if (url.port) {
+        throw new EdgeCapabilityError(
+          "provider_destination_mismatch",
+          "GitHub fallback is restricted to the default HTTPS port",
+        );
+      }
       const allowed =
-        (url.hostname === "api.github.com" && pathIsWithin(url.pathname, apiPrefix)) ||
-        (url.hostname === "github.com" && pathIsWithin(url.pathname, prefix)) ||
-        (url.hostname === "raw.githubusercontent.com" && pathIsWithin(url.pathname, prefix));
+        (url.hostname === "api.github.com" &&
+          pathBeginsWithSegments(url.pathname, ["repos", owner, repo])) ||
+        (url.hostname === "github.com" &&
+          pathBeginsWithSegments(url.pathname, [owner, repo])) ||
+        (url.hostname === "raw.githubusercontent.com" &&
+          pathBeginsWithSegments(url.pathname, [owner, repo]));
       if (!allowed) {
         throw new EdgeCapabilityError(
           "provider_destination_mismatch",
@@ -385,7 +398,7 @@ function assertProviderDestination(grant, url) {
       return;
     }
     case "npm": {
-      if (url.hostname !== "registry.npmjs.org") {
+      if (url.hostname !== "registry.npmjs.org" || url.port) {
         throw new EdgeCapabilityError(
           "provider_destination_mismatch",
           "npm fallback is restricted to registry.npmjs.org",
@@ -422,7 +435,31 @@ function assertProviderDestination(grant, url) {
 function pathIsWithin(pathname, prefix) {
   const normalizedPath = pathname.replace(/\/+$/, "");
   const normalizedPrefix = prefix.replace(/\/+$/, "");
-  return normalizedPath === normalizedPrefix || normalizedPath.startsWith(`${normalizedPrefix}/`);
+  return (
+    normalizedPath === normalizedPrefix ||
+    normalizedPath.startsWith(`${normalizedPrefix}/`)
+  );
+}
+
+function pathBeginsWithSegments(pathname, expected) {
+  const rawSegments = pathname.split("/").slice(1);
+  if (rawSegments.length < expected.length) return false;
+
+  const decoded = [];
+  for (const segment of rawSegments) {
+    let value;
+    try {
+      value = decodeURIComponent(segment);
+    } catch {
+      return false;
+    }
+    if (value === "." || value === ".." || value.includes("/") || value.includes("\\")) {
+      return false;
+    }
+    decoded.push(value);
+  }
+
+  return expected.every((segment, index) => decoded[index] === segment);
 }
 
 function parseJwks(value) {

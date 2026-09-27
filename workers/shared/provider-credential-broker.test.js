@@ -55,6 +55,7 @@ function validCredential(overrides = {}) {
     kind: "github-app-installation",
     resource: "acme/private-lib",
     credential_ref: "github-app:zed-pkg:installation-42",
+    capability_id: "capability-0001",
     access_token: "ghs_test_token_1234567890",
     issued_at: NOW,
     expires_at: NOW + 90,
@@ -109,6 +110,7 @@ test("sends only a scoped, secret-free broker request", async () => {
   assert.equal("access_token" in seen.body, false);
 
   assert.equal(credential.resource, "acme/private-lib");
+  assert.equal(credential.capabilityId, "capability-0001");
   assert.equal(credential.cachePolicy, "private-no-store");
 });
 
@@ -217,4 +219,41 @@ test("builds GitHub headers only from a validated broker credential", async () =
     authorization: "Bearer ghs_test_token_1234567890",
     "x-github-api-version": "2022-11-28",
   });
+});
+
+test("rejects broker response replay across capabilities and stale issuance", async () => {
+  await expectCode(
+    requestProviderCredential(
+      broker(async () =>
+        response(validCredential({ capability_id: "capability-other" })),
+      ),
+      plan(),
+      context(),
+    ),
+    "scope_mismatch",
+  );
+
+  await expectCode(
+    requestProviderCredential(
+      broker(async () =>
+        response(validCredential({ issued_at: NOW - 31, expires_at: NOW + 30 })),
+      ),
+      plan(),
+      context(),
+    ),
+    "invalid_response",
+  );
+});
+
+test("rejects inverted broker credential lifetime", async () => {
+  await expectCode(
+    requestProviderCredential(
+      broker(async () =>
+        response(validCredential({ issued_at: NOW + 10, expires_at: NOW + 5 })),
+      ),
+      plan(),
+      context(),
+    ),
+    "invalid_response",
+  );
 });
