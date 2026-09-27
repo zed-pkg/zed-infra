@@ -7,9 +7,8 @@ const SAFE_MAVEN_GROUP = /^[A-Za-z0-9][A-Za-z0-9._-]{0,191}$/;
  *
  * This file is intentionally data-first. Adding a registry here does not by
  * itself authorize arbitrary outbound fetches: callers must still build URLs
- * from the canonical bases below and must validate redirects against the
- * per-registry allowlist. Credentials are never attached to public fallback
- * reads.
+ * from canonical bases and validate redirects against the per-registry
+ * allowlist. Credentials are never attached to public fallback reads.
  */
 export const NATIVE_REGISTRIES = Object.freeze({
   npm: registry("npm", ["npm", "npmjs", "npmjs.com"], ["registry.npmjs.org"], "npm"),
@@ -21,7 +20,7 @@ export const NATIVE_REGISTRIES = Object.freeze({
   rubygems: registry("rubygems", ["rubygems", "gem", "bundler", "ruby"], ["rubygems.org"], "rubygems"),
   "go-proxy": registry("go-proxy", ["go", "golang", "go-proxy", "proxy.golang.org"], ["proxy.golang.org", "sum.golang.org"], "go"),
   hex: registry("hex", ["hex", "hexpm", "elixir", "erlang", "beam"], ["hex.pm", "repo.hex.pm"], "hex"),
-  conan: registry("conan", ["conan", "conancenter", "cpp", "c++"], ["center2.conan.io"], "conan"),
+  conan: registry("conan", ["conan", "conancenter", "cpp"], ["center2.conan.io"], "conan"),
   hackage: registry("hackage", ["hackage", "cabal", "stack", "haskell"], ["hackage.haskell.org"], "hackage"),
   clojars: registry("clojars", ["clojars", "clojure"], ["repo.clojars.org", "clojars.org"], "maven"),
   cpan: registry("cpan", ["cpan", "perl"], ["www.cpan.org", "cpan.metacpan.org", "fastapi.metacpan.org"], "cpan"),
@@ -39,7 +38,15 @@ export const NATIVE_REGISTRIES = Object.freeze({
 const ALIASES = new Map();
 for (const entry of Object.values(NATIVE_REGISTRIES)) {
   for (const alias of entry.aliases) {
-    ALIASES.set(normalizeEcosystem(alias), entry);
+    const normalized = normalizeEcosystem(alias);
+    if (!normalized) {
+      continue;
+    }
+    const existing = ALIASES.get(normalized);
+    if (existing && existing.id !== entry.id) {
+      throw new Error(`duplicate native registry alias: ${normalized}`);
+    }
+    ALIASES.set(normalized, entry);
   }
 }
 
@@ -53,13 +60,22 @@ function registry(id, aliases, hosts, coordinateKind) {
 }
 
 export function normalizeEcosystem(value) {
-  if (typeof value !== "string") return "";
+  if (typeof value !== "string") {
+    return "";
+  }
   const normalized = value.trim().toLowerCase().replace(/[_ .]+/g, "-");
-  return ECOSYSTEM.test(normalized) ? normalized : "";
+  if (!ECOSYSTEM.test(normalized)) {
+    return "";
+  }
+  return normalized;
 }
 
 export function nativeRegistryFromOrg(org) {
-  return ALIASES.get(normalizeEcosystem(org)) || null;
+  const normalized = normalizeEcosystem(org);
+  if (!normalized) {
+    return null;
+  }
+  return ALIASES.get(normalized) || null;
 }
 
 /**
@@ -70,15 +86,21 @@ export function nativeRegistryFromOrg(org) {
  * The `z1_` prefix prevents accidental collision with legacy plain names.
  */
 export function encodeNativeCoordinate(value) {
-  if (typeof value !== "string" || value.length === 0 || value.length > 1024) return null;
+  if (typeof value !== "string" || value.length === 0 || value.length > 1024) {
+    return null;
+  }
   const bytes = new TextEncoder().encode(value);
   let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
   return `z1_${btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "")}`;
 }
 
 export function decodeNativeCoordinate(value) {
-  if (typeof value !== "string" || !/^z1_[A-Za-z0-9_-]{1,2048}$/.test(value)) return null;
+  if (typeof value !== "string" || !/^z1_[A-Za-z0-9_-]{1,2048}$/.test(value)) {
+    return null;
+  }
   const raw = value.slice(3).replace(/-/g, "+").replace(/_/g, "/");
   const padded = raw + "=".repeat((4 - (raw.length % 4)) % 4);
   try {
@@ -95,7 +117,9 @@ export function isValidNativeCoordinate(registryEntry, coordinate) {
   if (!registryEntry || typeof coordinate !== "string" || coordinate.length === 0 || coordinate.length > 1024) {
     return false;
   }
-  if (/\0|\r|\n/.test(coordinate)) return false;
+  if (/\0|\r|\n/.test(coordinate)) {
+    return false;
+  }
 
   switch (registryEntry.coordinateKind) {
     case "npm":
@@ -117,13 +141,19 @@ export function isValidNativeCoordinate(registryEntry, coordinate) {
 }
 
 export function decodeAndValidateNativeCoordinate(registryEntry, encodedOrLegacy) {
-  const decoded = encodedOrLegacy?.startsWith?.("z1_") ? decodeNativeCoordinate(encodedOrLegacy) : encodedOrLegacy;
-  if (!isValidNativeCoordinate(registryEntry, decoded)) return null;
+  const decoded = encodedOrLegacy?.startsWith?.("z1_")
+    ? decodeNativeCoordinate(encodedOrLegacy)
+    : encodedOrLegacy;
+  if (!isValidNativeCoordinate(registryEntry, decoded)) {
+    return null;
+  }
   return decoded;
 }
 
 export function isAllowedNativeHost(registryEntry, rawUrl) {
-  if (!registryEntry || typeof rawUrl !== "string") return false;
+  if (!registryEntry || typeof rawUrl !== "string") {
+    return false;
+  }
   let url;
   try {
     url = new URL(rawUrl);
@@ -158,7 +188,9 @@ function isSlashPair(value) {
 }
 
 function isSlashPath(value) {
-  if (value.includes("\\") || value.includes("..") || value.startsWith("/") || value.endsWith("/")) return false;
+  if (value.includes("\\") || value.includes("..") || value.startsWith("/") || value.endsWith("/")) {
+    return false;
+  }
   const parts = value.split("/");
   return parts.length >= 2 && parts.length <= 32 && parts.every((part) => SAFE_COMPONENT.test(part));
 }
@@ -169,7 +201,9 @@ function isTerraformCoordinate(value) {
 }
 
 function isOciCoordinate(value) {
-  if (value.includes("\\") || value.includes("..") || value.startsWith("/") || value.endsWith("/")) return false;
+  if (value.includes("\\") || value.includes("..") || value.startsWith("/") || value.endsWith("/")) {
+    return false;
+  }
   const parts = value.split("/");
   return parts.length >= 1 && parts.length <= 16 && parts.every((part) => /^[a-z0-9]+(?:[._-][a-z0-9]+)*$/.test(part));
 }
