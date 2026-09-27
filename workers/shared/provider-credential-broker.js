@@ -12,6 +12,7 @@
 export const BROKER_CONTRACT_VERSION = 1;
 export const BROKER_MAX_TTL_SECONDS = 300;
 export const BROKER_MAX_RESPONSE_BYTES = 16 * 1024;
+export const BROKER_FRESHNESS_SKEW_SECONDS = 30;
 
 const BROKER_URL = "https://credential-broker.internal/v1/credentials";
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9:._/-]{0,255}$/;
@@ -23,6 +24,7 @@ const RESPONSE_KEYS = new Set([
   "kind",
   "resource",
   "credential_ref",
+  "capability_id",
   "access_token",
   "issued_at",
   "expires_at",
@@ -136,7 +138,7 @@ export async function requestProviderCredential(broker, plan, context) {
     throw new CredentialBrokerError("invalid_response", "credential broker returned invalid JSON");
   }
 
-  return validateGithubCredential(raw, plan, now, ttl);
+  return validateGithubCredential(raw, plan, context, now, ttl);
 }
 
 /**
@@ -192,7 +194,7 @@ function validateContext(context) {
   }
 }
 
-function validateGithubCredential(raw, plan, now, requestedTtl) {
+function validateGithubCredential(raw, plan, context, now, requestedTtl) {
   if (!isRecord(raw)) {
     throw new CredentialBrokerError("invalid_response", "broker response must be an object");
   }
@@ -204,8 +206,15 @@ function validateGithubCredential(raw, plan, now, requestedTtl) {
   ) {
     throw new CredentialBrokerError("invalid_response", "broker returned the wrong credential type");
   }
-  if (raw.resource !== plan.resource || raw.credential_ref !== plan.credentialRef) {
-    throw new CredentialBrokerError("scope_mismatch", "broker widened or changed credential scope");
+  if (
+    raw.resource !== plan.resource ||
+    raw.credential_ref !== plan.credentialRef ||
+    raw.capability_id !== context.capabilityId
+  ) {
+    throw new CredentialBrokerError(
+      "scope_mismatch",
+      "broker widened or changed credential/capability scope",
+    );
   }
   if (
     typeof raw.access_token !== "string" ||
@@ -218,10 +227,18 @@ function validateGithubCredential(raw, plan, now, requestedTtl) {
   if (!Number.isSafeInteger(raw.issued_at) || !Number.isSafeInteger(raw.expires_at)) {
     throw new CredentialBrokerError("invalid_response", "broker credential timestamps are invalid");
   }
-  if (raw.issued_at > now + 30 || raw.expires_at <= now) {
-    throw new CredentialBrokerError("invalid_response", "broker credential is not currently valid");
+  if (
+    raw.issued_at < now - BROKER_FRESHNESS_SKEW_SECONDS ||
+    raw.issued_at > now + BROKER_FRESHNESS_SKEW_SECONDS ||
+    raw.expires_at <= now ||
+    raw.expires_at <= raw.issued_at
+  ) {
+    throw new CredentialBrokerError(
+      "invalid_response",
+      "broker credential is stale or not currently valid",
+    );
   }
-  if (raw.expires_at - now > requestedTtl + 30) {
+  if (raw.expires_at - now > requestedTtl + BROKER_FRESHNESS_SKEW_SECONDS) {
     throw new CredentialBrokerError("ttl_widened", "broker credential exceeds requested lifetime");
   }
 
@@ -248,6 +265,7 @@ function validateGithubCredential(raw, plan, now, requestedTtl) {
     kind: "github-app-installation",
     resource: raw.resource,
     credentialRef: raw.credential_ref,
+    capabilityId: raw.capability_id,
     accessToken: raw.access_token,
     issuedAt: raw.issued_at,
     expiresAt: raw.expires_at,
@@ -288,6 +306,7 @@ export class CredentialBrokerError extends Error {
  *   kind: "github-app-installation",
  *   resource: string,
  *   credentialRef: string,
+ *   capabilityId: string,
  *   accessToken: string,
  *   issuedAt: number,
  *   expiresAt: number,
