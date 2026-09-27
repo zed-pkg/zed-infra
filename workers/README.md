@@ -50,12 +50,29 @@ public-only contract; an explicit value must be exactly `public`. Newly
 published artifact and version objects carry R2 custom metadata
 `visibility=public`. This storage marker is not a user-authentication proof.
 
+The publication body requires a canonical decimal `Content-Length` below the
+combined artifact/metadata limit. The parser receives bytes through a counting
+stream that rejects overflow and cancels the source; a short body is rejected
+before any publication. Exactly one `meta` field and one `artifact` file are
+accepted. Duplicate or additional fields are invalid, and the metadata limit
+counts UTF-8 bytes. These checks also cover service-binding requests, where a
+caller can construct a Request whose length header does not match its body.
+
 The CDN rejects objects with an explicit non-public/invalid visibility marker
 before copying their headers or handling GET, HEAD, Range, or conditional
 requests. Registry R2 metadata reads and version listings likewise reject
 marked non-public objects, and parsed version documents reject explicit
 non-public visibility. A restriction is a terminal, non-enumerating,
 `no-store` 404; it never triggers a guessed public mirror lookup.
+
+Registry R2 JSON reads admit at most 1 MiB of UTF-8 bytes, checked both against
+the object size and while streaming; rejected streams are cancelled. Package
+listings stop after 10 pages or 10,000 objects and reject missing/repeated
+continuation cursors. An incomplete listing or unreadable newest document
+returns no R2 result, allowing the existing public fallback chain to continue;
+it never returns a partial version list. Packages exceeding this emergency
+read budget need the origin or a public upstream. These limits do not add
+private-package authorization.
 
 **This is not mixed public/private bucket support.** Unmarked legacy objects
 remain public under the existing storage contract, and direct CDN metadata
