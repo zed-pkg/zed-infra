@@ -28,7 +28,8 @@ The response must bind:
 - `kind = github-app-installation`;
 - the exact `owner/repo`;
 - the exact `credential_ref`;
-- a lifetime no longer than the request/capability lifetime;
+- the exact capability id that authorized the broker request;
+- a fresh issuance timestamp and a lifetime no longer than the request/capability lifetime;
 - read-only `contents` and optional read-only `metadata` permissions.
 
 Unknown response fields fail closed so a future secret-bearing field cannot be
@@ -44,3 +45,12 @@ This module is not wired into the public fallback state machine yet. Live
 private fallback still requires the edge capability verifier, Zed ACL/issuer
 integration, service binding configuration, outage/revocation/key-rotation E2E
 coverage, and provider-specific destination confinement.
+
+
+## Replay and destination hardening
+
+The edge rejects broker credentials issued outside a 30-second freshness window,
+responses bound to another capability id, inverted lifetimes, alternate ports
+for fixed GitHub/npm origins, and encoded dot/path-separator segments that
+could be normalized outside the authorized repository. JWT headers are
+closed-world: only `alg`, `typ`, and `kid` are accepted.
