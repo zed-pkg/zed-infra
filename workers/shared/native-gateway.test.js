@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   allowedNativeGatewayUrl,
+  handleNativeGateway,
   nativeGatewayRequestHeaders,
   parseNativeGatewayPath,
 } from "./native-gateway.js";
@@ -60,6 +61,9 @@ test("gateway refuses arbitrary origins, plaintext, userinfo, ports, and travers
     "https://proxy.golang.org:8443/golang.org/x/text/@v/list",
     "https://proxy.golang.org/golang.org/x/text/../secret",
     "https://proxy.golang.org/golang.org/x/text/%2e%2e/secret",
+    "https://proxy.golang.org/golang.org/x/text/%252e%252e/secret",
+    "https://proxy.golang.org/golang.org/x/text/..\\secret",
+    "https://proxy.golang.org/golang.org/x/te\nxt",
   ]) {
     assert.equal(allowedNativeGatewayUrl(route.provider, rawUrl), null, rawUrl);
   }
@@ -89,4 +93,74 @@ test("unknown provider paths are not gateway routes", () => {
   assert.equal(parseNativeGatewayPath("/v1/native/artifactory"), null);
   assert.equal(parseNativeGatewayPath("/v1/native/../../evil"), null);
   assert.equal(parseNativeGatewayPath("/v1/native/go-proxy/extra"), null);
+});
+
+function gatewayRequest(method = "GET") {
+  const url = new URL("https://registry.zpkg.net/v1/native/go-proxy");
+  url.searchParams.set("url", "https://proxy.golang.org/golang.org/x/text/@v/list");
+  return new Request(url, { method, headers: { authorization: "Bearer caller-token" } });
+}
+
+test("gateway validates redirects before normalization and cancels every rejected body", async (t) => {
+  for (const location of ["../secret", "%2e%2e/secret", "%252e%252e/secret", "https://evil.example/file"]) {
+    let calls = 0;
+    let cancelled = false;
+    const upstream = new Response(new ReadableStream({ cancel() { cancelled = true; } }), {
+      status: 302, headers: { location },
+    });
+    const mock = t.mock.method(globalThis, "fetch", async () => { calls += 1; return upstream; });
+    const response = await handleNativeGateway(gatewayRequest(), {});
+    assert.equal(response.status, 502, location);
+    assert.equal(calls, 1, location);
+    assert.equal(cancelled, true, location);
+    mock.mock.restore();
+  }
+});
+
+test("gateway follows allowed redirects without credentials and does not public-cache upstream responses", async (t) => {
+  let calls = 0;
+  let cancelled = false;
+  t.mock.method(globalThis, "fetch", async (url, options) => {
+    calls += 1;
+    assert.equal(options.headers.has("authorization"), false);
+    assert.equal(options.redirect, "manual");
+    if (calls === 1) {
+      return new Response(new ReadableStream({ cancel() { cancelled = true; } }), {
+        status: 302, headers: { location: "/allowed" },
+      });
+    }
+    assert.equal(url, "https://proxy.golang.org/allowed");
+    return new Response("<script>bad()</script>", {
+      headers: { "cache-control": "private, no-store", "set-cookie": "secret=x", "content-type": "text/html" },
+    });
+  });
+  const response = await handleNativeGateway(gatewayRequest(), {});
+  assert.equal(response.status, 200);
+  assert.equal(calls, 2);
+  assert.equal(cancelled, true);
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.equal(response.headers.get("set-cookie"), null);
+  assert.equal(response.headers.get("content-security-policy"), "default-src 'none'; sandbox");
+  assert.equal(await response.text(), "<script>bad()</script>");
+});
+
+test("gateway bounds redirects and cancels discarded HEAD bodies", async (t) => {
+  let cancelled = 0;
+  let calls = 0;
+  const mock = t.mock.method(globalThis, "fetch", async () => {
+    calls += 1;
+    return new Response(new ReadableStream({ cancel() { cancelled += 1; } }), {
+      status: 302, headers: { location: "/loop" },
+    });
+  });
+  assert.equal((await handleNativeGateway(gatewayRequest(), {})).status, 502);
+  assert.equal(calls, 5);
+  assert.equal(cancelled, 5);
+  mock.mock.restore();
+  t.mock.method(globalThis, "fetch", async () => new Response(new ReadableStream({
+    cancel() { cancelled += 1; },
+  })));
+  const response = await handleNativeGateway(gatewayRequest("HEAD"), {});
+  assert.equal(response.body, null);
+  assert.equal(cancelled, 6);
 });

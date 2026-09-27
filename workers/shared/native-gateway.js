@@ -43,6 +43,11 @@ export function allowedNativeGatewayUrl(provider, rawUrl) {
   if (!provider || typeof rawUrl !== "string" || rawUrl.length === 0 || rawUrl.length > 4096) {
     return null;
   }
+  // URL parsing normalizes dot segments and backslashes. Inspect the original
+  // spelling first, including redirects, before that evidence disappears.
+  if (unsafeRawReference(rawUrl)) {
+    return null;
+  }
   let url;
   try {
     url = new URL(rawUrl);
@@ -67,6 +72,11 @@ export function allowedNativeGatewayUrl(provider, rawUrl) {
   return url;
 }
 
+function unsafeRawReference(reference) {
+  return /[\u0000-\u0020\u007f]/.test(reference)
+    || containsUnsafePath(reference.split(/[?#]/, 1)[0]);
+}
+
 function containsUnsafePath(pathname) {
   let decoded;
   try {
@@ -77,6 +87,7 @@ function containsUnsafePath(pathname) {
   return (
     decoded.includes("..") ||
     decoded.includes("\\") ||
+    /%[0-9a-f]{2}/i.test(decoded) ||
     decoded.includes("\0") ||
     /[\r\n]/.test(decoded)
   );
@@ -158,7 +169,8 @@ export async function handleNativeGateway(request, env) {
 
     if (REDIRECT_STATUSES.has(response.status)) {
       const location = response.headers.get("location");
-      if (!location || redirects === MAX_REDIRECTS) {
+      await response.body?.cancel().catch(() => {});
+      if (!location || unsafeRawReference(location) || redirects === MAX_REDIRECTS) {
         return gatewayProblem(502, "native_redirect_rejected", "native registry redirect chain is invalid");
       }
       let redirected;
@@ -174,6 +186,9 @@ export async function handleNativeGateway(request, env) {
       continue;
     }
 
+    if (method === "HEAD") {
+      await response.body?.cancel().catch(() => {});
+    }
     return gatewayResponse(request, response, route.provider.id, current);
   }
 
@@ -202,9 +217,10 @@ function gatewayResponse(request, upstream, providerId, finalUrl) {
   headers.set("x-zed-source", `native-gateway-${providerId}`);
   headers.set("x-zed-native-upstream", finalUrl.hostname);
   headers.set("access-control-allow-origin", "*");
-  if (!headers.has("cache-control")) {
-    headers.set("cache-control", upstream.ok ? "public, max-age=60" : "no-store");
-  }
+  // Host admission alone does not make arbitrary upstream responses cacheable
+  // (for example a signed URL or a response marked private by its registry).
+  headers.set("cache-control", "no-store");
+  headers.set("content-security-policy", "default-src 'none'; sandbox");
   return new Response(request.method === "HEAD" ? null : upstream.body, {
     status: upstream.status,
     statusText: upstream.statusText,
