@@ -10,6 +10,7 @@
  */
 
 export const EDGE_CAPABILITY_VERSION = 1;
+export const EDGE_CAPABILITY_VERSION_V2 = 2;
 export const EDGE_CAPABILITY_AUDIENCE = "zed-edge-fallback";
 export const EDGE_CAPABILITY_MAX_TTL_SECONDS = 300;
 export const EDGE_CAPABILITY_CLOCK_SKEW_SECONDS = 30;
@@ -23,10 +24,11 @@ const NPM_SCOPED_PACKAGE = /^@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*$/;
 const CARGO_CRATE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 const CREDENTIAL_REF = /^[A-Za-z0-9][A-Za-z0-9:._/-]{0,191}$/;
 const JTI = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,191}$/;
+const LINEAGE_ID = /^[A-Za-z0-9][A-Za-z0-9:._/-]{0,255}$/;
 
 const HEADER_KEYS = new Set(["alg", "typ", "kid"]);
 
-const CLAIM_KEYS = new Set([
+const CLAIM_KEYS_V1 = new Set([
   "zed_edge_capability",
   "iss",
   "aud",
@@ -36,6 +38,12 @@ const CLAIM_KEYS = new Set([
   "exp",
   "jti",
   "grants",
+]);
+
+const CLAIM_KEYS_V2 = new Set([
+  ...CLAIM_KEYS_V1,
+  "sid",
+  "parent_jti",
 ]);
 
 const GRANT_KEYS = new Set([
@@ -50,7 +58,7 @@ const GRANT_KEYS = new Set([
 const PROVIDERS = new Set(["github", "npm", "cargo-registry"]);
 
 /**
- * Verify a compact ES256 JWT and validate the v1 edge capability claims.
+ * Verify a compact ES256 JWT and validate the v1/v2 edge capability claims.
  *
  * JWKS is supplied by deployment/runtime configuration. This function never
  * performs network I/O, so an already-issued capability remains verifiable
@@ -157,8 +165,11 @@ export async function verifyEdgeCapability(token, options) {
  * @returns {ProviderRequestPlan}
  */
 export function planProviderRequest(claims, request) {
-  if (!claims || claims.zed_edge_capability !== EDGE_CAPABILITY_VERSION) {
-    throw new EdgeCapabilityError("unverified_capability", "a verified v1 capability is required");
+  if (!claims || !isSupportedCapabilityVersion(claims.zed_edge_capability)) {
+    throw new EdgeCapabilityError(
+      "unverified_capability",
+      "a verified edge fallback capability is required",
+    );
   }
   const operation = request?.operation ?? "read";
   if (operation !== "read") {
@@ -206,6 +217,43 @@ export function planProviderRequest(claims, request) {
   });
 }
 
+
+/**
+ * Derive the broker context only from a verified v2 capability.
+ *
+ * V1 intentionally fails closed here: it does not carry the Shared Auth
+ * lineage needed for outage-time revocation/provenance checks.
+ *
+ * @param {EdgeCapabilityClaims} claims
+ * @returns {{
+ *   principal: string,
+ *   sessionLineage: string,
+ *   parentJti: string,
+ *   capabilityId: string,
+ *   capabilityExpiresAt: number,
+ * }}
+ */
+export function brokerContextFromCapability(claims) {
+  if (
+    !claims ||
+    claims.zed_edge_capability !== EDGE_CAPABILITY_VERSION_V2 ||
+    typeof claims.sid !== "string" ||
+    typeof claims.parent_jti !== "string"
+  ) {
+    throw new EdgeCapabilityError(
+      "lineage_required",
+      "broker-backed private fallback requires a verified v2 capability",
+    );
+  }
+  return Object.freeze({
+    principal: claims.sub,
+    sessionLineage: claims.sid,
+    parentJti: claims.parent_jti,
+    capabilityId: claims.jti,
+    capabilityExpiresAt: claims.exp,
+  });
+}
+
 /**
  * @param {unknown} rawClaims
  * @param {{issuer:string,audience:string,nowEpochSeconds:number,maxTtlSeconds:number,clockSkewSeconds:number}} policy
@@ -215,11 +263,15 @@ function validateClaims(rawClaims, policy) {
   if (!isRecord(rawClaims)) {
     throw new EdgeCapabilityError("invalid_claims", "capability claims must be an object");
   }
-  rejectUnknownKeys(rawClaims, CLAIM_KEYS, "claims");
-
-  if (rawClaims.zed_edge_capability !== EDGE_CAPABILITY_VERSION) {
+  const version = rawClaims.zed_edge_capability;
+  if (!isSupportedCapabilityVersion(version)) {
     throw new EdgeCapabilityError("invalid_version", "unsupported edge capability version");
   }
+  rejectUnknownKeys(
+    rawClaims,
+    version === EDGE_CAPABILITY_VERSION_V2 ? CLAIM_KEYS_V2 : CLAIM_KEYS_V1,
+    "claims",
+  );
   if (rawClaims.iss !== policy.issuer) {
     throw new EdgeCapabilityError("invalid_issuer", "capability issuer does not match");
   }
@@ -236,6 +288,25 @@ function validateClaims(rawClaims, policy) {
   }
   if (typeof rawClaims.jti !== "string" || !JTI.test(rawClaims.jti)) {
     throw new EdgeCapabilityError("invalid_jti", "capability jti is missing or invalid");
+  }
+
+  let sid;
+  let parentJti;
+  if (version === EDGE_CAPABILITY_VERSION_V2) {
+    if (typeof rawClaims.sid !== "string" || !LINEAGE_ID.test(rawClaims.sid)) {
+      throw new EdgeCapabilityError("invalid_lineage", "v2 capability sid is missing or invalid");
+    }
+    if (
+      typeof rawClaims.parent_jti !== "string" ||
+      !LINEAGE_ID.test(rawClaims.parent_jti)
+    ) {
+      throw new EdgeCapabilityError(
+        "invalid_lineage",
+        "v2 capability parent_jti is missing or invalid",
+      );
+    }
+    sid = rawClaims.sid;
+    parentJti = rawClaims.parent_jti;
   }
 
   const iat = integerClaim(rawClaims.iat, "iat");
@@ -263,10 +334,13 @@ function validateClaims(rawClaims, policy) {
   const grants = rawClaims.grants.map(validateGrant);
 
   return Object.freeze({
-    zed_edge_capability: EDGE_CAPABILITY_VERSION,
+    zed_edge_capability: version,
     iss: rawClaims.iss,
     aud: rawClaims.aud,
     sub: rawClaims.sub,
+    ...(version === EDGE_CAPABILITY_VERSION_V2
+      ? { sid, parent_jti: parentJti }
+      : {}),
     iat,
     nbf,
     exp,
@@ -517,6 +591,10 @@ function decodeBase64Url(value, name) {
 }
 
 
+function isSupportedCapabilityVersion(value) {
+  return value === EDGE_CAPABILITY_VERSION || value === EDGE_CAPABILITY_VERSION_V2;
+}
+
 function integerClaim(value, name) {
   if (!Number.isSafeInteger(value) || value < 0) {
     throw new EdgeCapabilityError("invalid_time_claim", `${name} must be a non-negative integer`);
@@ -563,10 +641,12 @@ export class EdgeCapabilityError extends Error {
 
 /**
  * @typedef {{
- *   zed_edge_capability: 1,
+ *   zed_edge_capability: 1 | 2,
  *   iss: string,
  *   aud: string,
  *   sub: string,
+ *   sid?: string,
+ *   parent_jti?: string,
  *   iat: number,
  *   nbf: number,
  *   exp: number,
