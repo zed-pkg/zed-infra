@@ -24,6 +24,7 @@ function context(overrides = {}) {
   return {
     principal: "user:test",
     sessionLineage: "session:abc-123",
+    parentJti: "parent-token-0001",
     capabilityId: "capability-0001",
     capabilityExpiresAt: NOW + 120,
     requestedTtlSeconds: 90,
@@ -102,6 +103,7 @@ test("sends only a scoped, secret-free broker request", async () => {
     credential_ref: "github-app:zed-pkg:installation-42",
     principal: "user:test",
     session_lineage: "session:abc-123",
+    parent_jti: "parent-token-0001",
     capability_id: "capability-0001",
     requested_ttl_seconds: 90,
   });
@@ -256,4 +258,20 @@ test("rejects inverted broker credential lifetime", async () => {
     ),
     "invalid_response",
   );
+});
+
+test("requires parent delegated-token lineage before contacting the broker", async () => {
+  let called = false;
+  await expectCode(
+    requestProviderCredential(
+      broker(async () => {
+        called = true;
+        return response(validCredential());
+      }),
+      plan(),
+      context({ parentJti: undefined }),
+    ),
+    "invalid_context",
+  );
+  assert.equal(called, false);
 });
