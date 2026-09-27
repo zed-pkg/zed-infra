@@ -3,6 +3,7 @@ import { before, test } from "node:test";
 
 import {
   EdgeCapabilityError,
+  brokerContextFromCapability,
   planProviderRequest,
   verifyEdgeCapability,
 } from "./edge-capability.js";
@@ -359,5 +360,65 @@ test("fixed provider destinations reject alternate ports and path-escape encodin
     (error) =>
       error instanceof EdgeCapabilityError &&
       error.code === "provider_destination_mismatch",
+  );
+});
+
+test("v2 preserves signed Shared Auth lineage and derives broker context", async () => {
+  const claims = await verify(
+    baseClaims({
+      zed_edge_capability: 2,
+      sid: "session:abc-123",
+      parent_jti: "parent-token-0001",
+    }),
+  );
+  assert.equal(claims.zed_edge_capability, 2);
+  assert.equal(claims.sid, "session:abc-123");
+  assert.equal(claims.parent_jti, "parent-token-0001");
+  assert.deepEqual(brokerContextFromCapability(claims), {
+    principal: "user:test",
+    sessionLineage: "session:abc-123",
+    parentJti: "parent-token-0001",
+    capabilityId: "capability-0001",
+    capabilityExpiresAt: NOW + 120,
+  });
+});
+
+test("broker context fails closed for v1 or malformed v2 lineage", async () => {
+  const v1 = await verify();
+  assert.throws(
+    () => brokerContextFromCapability(v1),
+    (error) => error instanceof EdgeCapabilityError && error.code === "lineage_required",
+  );
+
+  await expectCode(
+    verify(
+      baseClaims({
+        zed_edge_capability: 2,
+        sid: "session:abc-123",
+      }),
+    ),
+    "invalid_lineage",
+  );
+  await expectCode(
+    verify(
+      baseClaims({
+        zed_edge_capability: 2,
+        sid: "session:abc-123",
+        parent_jti: "parent token with spaces",
+      }),
+    ),
+    "invalid_lineage",
+  );
+});
+
+test("v1 remains closed-world and cannot smuggle v2 lineage fields", async () => {
+  await expectCode(
+    verify(
+      baseClaims({
+        sid: "session:abc-123",
+        parent_jti: "parent-token-0001",
+      }),
+    ),
+    "unknown_field",
   );
 });
