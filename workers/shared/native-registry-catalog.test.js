@@ -52,6 +52,13 @@ test("common package manager aliases resolve to canonical registries", () => {
   assert.equal(nativeRegistryFromOrg("mamba").id, "conda-forge");
   assert.equal(nativeRegistryFromOrg("tofu").id, "terraform");
   assert.equal(nativeRegistryFromOrg("dockerhub").id, "docker");
+  assert.equal(nativeRegistryFromOrg("cpp").id, "conan");
+});
+
+test("invalid ecosystem tokens never become aliases", () => {
+  for (const value of ["", " ", "c++", "../npm", "npm/../../x", "\n", "🔥"]) {
+    assert.equal(nativeRegistryFromOrg(value), null, value);
+  }
 });
 
 test("native coordinate codec round-trips multi-part package identifiers", () => {
