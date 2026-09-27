@@ -48,6 +48,8 @@ export const PUBLISH_ARTIFACT_FIELD = "artifact";
  */
 export const MAX_PUBLISH_ARTIFACT_BYTES = 32 * 1024 * 1024;
 export const MAX_PUBLISH_META_BYTES = 1024 * 1024;
+export const MAX_METADATA_LIST_PAGES = 10;
+export const MAX_METADATA_LIST_OBJECTS = 10000;
 
 const ORG_NAME = /^[a-z0-9][a-z0-9-]*$/;
 const VERSION = /^[0-9A-Za-z][0-9A-Za-z.+-]{0,127}$/;
@@ -250,6 +252,8 @@ export async function r2PackageMetadata(env, route) {
   const prefix = `metadata/${route.org}/${route.name}/versions/`;
 
   const objects = [];
+  const cursors = new Set();
+  let pages = 0;
   let cursor;
   do {
     let page;
@@ -258,13 +262,27 @@ export async function r2PackageMetadata(env, route) {
     } catch {
       return null;
     }
+    pages += 1;
+    if (!page || !Array.isArray(page.objects) || typeof page.truncated !== "boolean") {
+      return null;
+    }
     // A restriction is terminal, not an invitation to guess a public mirror.
     // Do not expose even the version names of a marked non-public package.
     for (const object of page.objects) {
       requirePublicObject(object);
     }
+    if (objects.length + page.objects.length > MAX_METADATA_LIST_OBJECTS) {
+      return null;
+    }
     objects.push(...page.objects);
     cursor = page.truncated ? page.cursor : undefined;
+    if (page.truncated) {
+      if (pages >= MAX_METADATA_LIST_PAGES || typeof cursor !== "string"
+          || cursor.length === 0 || cursors.has(cursor)) {
+        return null;
+      }
+      cursors.add(cursor);
+    }
   } while (cursor);
 
   const published = objects
@@ -274,7 +292,10 @@ export async function r2PackageMetadata(env, route) {
 
   const versions = published.map((object) => object.key.slice(prefix.length, -".json".length));
   const newest = await readJsonObject(env, published[0].key);
-  const facts = newest && typeof newest.package === "object" ? newest.package : {};
+  if (!newest) {
+    return null;
+  }
+  const facts = typeof newest.package === "object" ? newest.package : {};
   const metadata = {
     org: route.org,
     name: route.name,
@@ -296,14 +317,50 @@ async function readJsonObject(env, key) {
     return null;
   }
   if (!object) return null;
-  requirePublicObject(object);
-  let text;
   try {
-    text = await object.text();
-  } catch {
+    requirePublicObject(object);
+  } catch (error) {
+    await object.body?.cancel().catch(() => {});
+    throw error;
+  }
+  if (!Number.isSafeInteger(object.size) || object.size < 0 || object.size > MAX_PUBLISH_META_BYTES) {
+    await object.body?.cancel().catch(() => {});
     return null;
   }
-  if (text.length > MAX_PUBLISH_META_BYTES) return null;
+  if (!object.body) {
+    return null;
+  }
+  const reader = object.body.getReader();
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  let bytes = 0;
+  let complete = false;
+  let text;
+  try {
+    text = "";
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) {
+        complete = true;
+        break;
+      }
+      bytes += chunk.value.byteLength;
+      if (bytes > MAX_PUBLISH_META_BYTES || bytes > object.size) {
+        return null;
+      }
+      text += decoder.decode(chunk.value, { stream: true });
+    }
+    text += decoder.decode();
+    if (bytes !== object.size) {
+      return null;
+    }
+  } catch {
+    return null;
+  } finally {
+    if (!complete) {
+      await reader.cancel().catch(() => {});
+    }
+    reader.releaseLock();
+  }
   let metadata;
   try {
     metadata = JSON.parse(text);
@@ -343,12 +400,12 @@ export async function handleEdgePublish(request, env, route, now = () => new Dat
     };
   }
 
-  // Parsing multipart buffers the whole body, so the bound has to be enforced
-  // before that starts. A request that does not declare its length cannot be
-  // bounded in advance and is refused rather than read.
+  // Reject invalid declarations before reading, then enforce that declaration
+  // against actual streamed bytes before handing each chunk to the parser.
   const rawLength = request.headers.get("content-length");
   const declaredLength = Number(rawLength);
-  if (rawLength === null || !Number.isInteger(declaredLength) || declaredLength < 0) {
+  if (rawLength === null || !/^(0|[1-9][0-9]*)$/.test(rawLength)
+      || !Number.isSafeInteger(declaredLength)) {
     return {
       status: 411,
       body: { error: "length_required", detail: "edge publishing requires Content-Length" },
@@ -361,13 +418,73 @@ export async function handleEdgePublish(request, env, route, now = () => new Dat
     };
   }
 
-  let form;
-  try {
-    form = await request.formData();
-  } catch {
+  const contentType = request.headers.get("content-type") || "";
+  if (!/^multipart\/form-data\s*;/i.test(contentType)) {
+    if (request.body) {
+      await request.body.cancel().catch(() => {});
+    }
     return {
       status: 400,
       body: { error: "invalid_publish_body", detail: "body is not multipart/form-data" },
+    };
+  }
+
+  let receivedBytes = 0;
+  let exceededLength = false;
+  const transferAbort = new AbortController();
+  let transfer = Promise.resolve();
+  let form;
+  try {
+    const limiter = new TransformStream({
+      transform(chunk, controller) {
+        receivedBytes += chunk.byteLength;
+        if (receivedBytes > declaredLength) {
+          exceededLength = true;
+          controller.error(new Error("publish body exceeds declared length"));
+          return;
+        }
+        controller.enqueue(chunk);
+      },
+    });
+    if (request.body) {
+      // Observe pipe completion so cancellation has reached the upload source
+      // before returning a rejection. Parser failures must not leave a pump.
+      transfer = request.body.pipeTo(limiter.writable, { signal: transferAbort.signal }).catch(() => {});
+    }
+    form = await new Response(request.body ? limiter.readable : null, {
+      headers: { "content-type": contentType },
+    }).formData();
+  } catch {
+    if (exceededLength) {
+      return {
+        status: 413,
+        body: { error: "artifact_too_large", detail: "publish body exceeds declared length" },
+      };
+    }
+    return {
+      status: 400,
+      body: { error: "invalid_publish_body", detail: "body is not multipart/form-data" },
+    };
+  } finally {
+    transferAbort.abort();
+    await transfer;
+  }
+  if (receivedBytes !== declaredLength) {
+    return {
+      status: 400,
+      body: { error: "publish_length_mismatch", detail: "publish body does not match Content-Length" },
+    };
+  }
+
+  // Exactly one metadata part and one artifact part. Never let parser-specific
+  // first/last-field behavior decide which visibility or digest is admitted.
+  const fields = [...form.keys()];
+  if (fields.length !== 2
+      || form.getAll(PUBLISH_META_FIELD).length !== 1
+      || form.getAll(PUBLISH_ARTIFACT_FIELD).length !== 1) {
+    return {
+      status: 400,
+      body: { error: "invalid_publish_body", detail: "expected exactly one meta and one artifact part" },
     };
   }
 
@@ -382,7 +499,7 @@ export async function handleEdgePublish(request, env, route, now = () => new Dat
       },
     };
   }
-  if (rawMeta.length > MAX_PUBLISH_META_BYTES) {
+  if (new TextEncoder().encode(rawMeta).byteLength > MAX_PUBLISH_META_BYTES) {
     return { status: 413, body: { error: "invalid_publish_meta", detail: "meta part is too large" } };
   }
 
@@ -397,16 +514,16 @@ export async function handleEdgePublish(request, env, route, now = () => new Dat
     return { status: invalid.status, body: { error: invalid.code, detail: invalid.detail } };
   }
 
-  const bytes = new Uint8Array(await artifact.arrayBuffer());
-  if (bytes.byteLength === 0) {
+  if (artifact.size === 0) {
     return { status: 422, body: { error: "empty_artifact", detail: "artifact part is empty" } };
   }
-  if (bytes.byteLength > MAX_PUBLISH_ARTIFACT_BYTES) {
+  if (artifact.size > MAX_PUBLISH_ARTIFACT_BYTES) {
     return {
       status: 413,
       body: { error: "artifact_too_large", detail: "artifact exceeds the edge size limit" },
     };
   }
+  const bytes = new Uint8Array(await artifact.arrayBuffer());
 
   // Recompute rather than trust: the declared digest is what consumers pin,
   // so it has to describe the bytes that were actually stored.
