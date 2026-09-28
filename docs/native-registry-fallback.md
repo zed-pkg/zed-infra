@@ -22,26 +22,26 @@ Catalog membership is not network authorization. The catalog gives Zed a stable 
 | --- | --- | --- | --- |
 | npm | yes | active | JSON metadata + `.tgz`; scoped names use encoded coordinates |
 | crates.io | yes | active | crates API + checksum + `.crate` mapped to `tar.gz` wire format |
-| PyPI | yes | active | JSON API; sdist only; SHA-256 required |
-| NuGet | yes | active | v3 flat container; `.nupkg` mapped to `zip` |
-| Maven Central | yes | fail-closed | Maven coordinate/POM/JAR protocol still needs dedicated adapter |
-| Packagist | yes | fail-closed | Dist/source URLs require repository-bound GitHub/CDN validation |
+| PyPI | yes | active | JSON API; sdist only; SHA-256 required and filename bound to metadata |
+| Maven Central | yes | active | Solr/GAV metadata + deterministic JAR path; JAR maps to `zip` and is edge-hashed when SHA-256 is absent |
+| NuGet | yes | active | v3 flat container; canonical index version + `.nupkg` mapped to `zip` |
+| Hackage | yes | active | package JSON version map + canonical `.tar.gz`; artifact is edge-hashed |
+| JSR | yes | active | official npm-compatibility registry; scoped JSR packages map to immutable `.tgz` artifacts |
+| Packagist | yes | fail-closed | Composer metadata minification and repository-bound GitHub/CDN dist validation still required |
 | RubyGems | yes | fail-closed | `.gem` container semantics need an explicit artifact contract |
-| Go Module Proxy | yes | fail-closed | module path escaping and `.info/.mod/.zip` protocol required |
-| Hex | yes | fail-closed | release metadata/tarball semantics need dedicated adapter |
+| Go Module Proxy | yes | fail-closed | `@v/list` is bounded `text/plain`; `.info/.mod/.zip` parser path and Go path escaping still required |
+| Hex | yes | fail-closed | release metadata/tarball semantics need dedicated artifact-format support |
 | ConanCenter | yes | fail-closed | recipe/package-ID protocol required |
-| Hackage | yes | fail-closed | package index and tarball protocol required |
-| Clojars | yes | fail-closed | Maven-compatible coordinate/artifact adapter required |
+| Clojars | yes | fail-closed | Maven-compatible coordinate/artifact adapter requires audited Clojars metadata mapping |
 | CPAN | yes | fail-closed | author/distribution metadata mapping required |
 | LuaRocks | yes | fail-closed | rockspec/source archive mapping required |
 | OPAM | yes | fail-closed | repository index/source mapping required |
 | Julia General | yes | fail-closed | registry tree/package-server semantics required |
-| CRAN | yes | fail-closed | current/archive package index mapping required |
+| CRAN | yes | fail-closed | PACKAGES index/current/archive mapping required |
 | conda-forge | yes | fail-closed | `.conda`/`.tar.bz2` artifact contract required |
 | CocoaPods | yes | fail-closed | spec/source URL validation required |
-| JSR | yes | fail-closed | JSR metadata/artifact protocol required |
-| Terraform Registry | yes | fail-closed | provider/module variants and platform checks required |
-| Docker Hub | yes | fail-closed | OCI bearer challenge, manifests, blobs and digest semantics required |
+| Terraform Registry | yes | fail-closed | module download uses `X-Terraform-Get`; providers are platform-specific |
+| Docker Hub | yes | fail-closed | OCI bearer challenge, manifests, blobs and multi-layer digest semantics required |
 
 The fail-closed entries are intentional. Adding an upstream hostname to the catalog must never make that hostname reachable from user-controlled package coordinates.
 
@@ -62,6 +62,18 @@ Public fallback reads follow these rules:
 - invalid/private/unpublished responses do not reveal upstream internals and do not authorize alternate URLs;
 - unsupported protocols return no native fallback and continue to the independent GitHub path.
 
+## Artifact-format boundary
+
+The current Rust `ArtifactFormat` wire contract exposes `tar.gz` and `zip`. An adapter may activate only when its install artifact maps truthfully to one of those formats or when the wire contract is expanded first.
+
+That is why Maven JARs can be represented as `zip`, Hackage and JSR archives can be represented as `tar.gz`, while RubyGems `.gem`, Hex package containers, conda `.conda`/`.tar.bz2`, and OCI manifests/layers remain fail-closed. The edge must not relabel an incompatible package solely to make it pass deserialization.
+
+## Independent CI witness
+
+The source repository's Actions budget is not treated as proof of correctness. The native-registry fallback branch is also exercised from `zed-pkg-test/security-adversarial-e2e`, a public test-organization repository with an independent GitHub Actions budget. That workflow checks out the exact zed-infra branch, installs the locked Worker runtime, audits dependencies, runs the full Worker test suite, then explicitly reruns the native-registry catalog, security, and adapter contracts.
+
+A source-repository cancellation caused by Actions-minute exhaustion is therefore not interpreted as a test failure. Conversely, an actual failing assertion in either repository remains a real blocker.
+
 ## Publish boundary
 
 Native-registry publishing is not a transparent outage retry.
@@ -75,7 +87,7 @@ Any future native multi-publish flow must therefore be explicit, provider-scoped
 Before moving an ecosystem from fail-closed to active, add tests for all of the following:
 
 1. canonical package metadata URL;
-2. canonical exact-version metadata URL;
+2. canonical exact-version metadata URL, or documented package-metadata reuse when the native protocol has no separate version endpoint;
 3. package-coordinate validation, including traversal and encoded-path negatives;
 4. anonymous/public proof and private/missing responses;
 5. exact artifact URL/path binding;
@@ -83,6 +95,7 @@ Before moving an ecosystem from fail-closed to active, add tests for all of the 
 7. metadata size/content-type bounds;
 8. artifact size bound;
 9. digest source or edge hashing path;
-10. mapping into the existing Rust `ArtifactFormat` and `VersionMetadata` wire contract;
+10. truthful mapping into the existing Rust `ArtifactFormat` and `VersionMetadata` wire contract;
 11. malformed metadata and wrong-package/wrong-version negative cases;
-12. integration through the registry proxy without bypassing R2-first/GitHub-last ordering.
+12. integration through the registry proxy without bypassing R2-first/GitHub-last ordering;
+13. an independent test-org Actions run so source-org minute exhaustion cannot create a false negative.
