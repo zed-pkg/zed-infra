@@ -41,6 +41,8 @@ const REQUIRED_REGISTRIES = [
 ];
 
 const ACTIVE_REGISTRIES = [
+  "cpan",
+  "cran",
   "crates-io",
   "go-proxy",
   "hackage",
@@ -57,11 +59,9 @@ const INACTIVE_REGISTRIES = [
   "hex",
   "conan",
   "clojars",
-  "cpan",
   "luarocks",
   "opam",
   "julia",
-  "cran",
   "conda-forge",
   "cocoapods",
   "terraform",
