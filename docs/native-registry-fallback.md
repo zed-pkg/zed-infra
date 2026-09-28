@@ -18,6 +18,8 @@ For package/version reads the edge uses this order:
 
 Catalog membership is not network authorization. The catalog gives Zed a stable ecosystem ID, aliases, coordinate grammar, and exact upstream host set. A separate active-adapter table controls which ecosystems can actually perform fallback network reads.
 
+There are currently **10 active adapters** and **12 catalog-only, fail-closed protocols**.
+
 | Ecosystem | Catalog | Edge read adapter | Notes |
 | --- | --- | --- | --- |
 | npm | yes | active | JSON metadata + `.tgz`; scoped names use encoded coordinates |
@@ -27,17 +29,17 @@ Catalog membership is not network authorization. The catalog gives Zed a stable 
 | NuGet | yes | active | v3 flat container; canonical index version + `.nupkg` mapped to `zip` |
 | Go Module Proxy | yes | active | exact `@v/list` text parser, `.info` JSON, official `!lowercase` path/version escaping, deterministic `.zip`; bounded edge hashing |
 | Hackage | yes | active | package JSON version map + canonical `.tar.gz`; artifact is edge-hashed |
+| CPAN / MetaCPAN | yes | active | exact distribution/version lookup; release name, SHA-256, positive byte size and `authors/id` archive path are all bound before accepting `.tar.gz` |
+| CRAN | yes | active | exact per-package `DESCRIPTION` parser; current source release only via deterministic `src/contrib/<package>_<version>.tar.gz`; bounded edge hashing |
 | JSR | yes | active | official npm-compatibility registry; scoped JSR packages map to revision-bound immutable `.tgz` artifacts |
 | Packagist | yes | fail-closed | Composer metadata minification and repository-bound GitHub/CDN dist validation still required |
 | RubyGems | yes | fail-closed | `.gem` container semantics need an explicit artifact contract |
 | Hex | yes | fail-closed | release metadata/tarball semantics need dedicated artifact-format support |
 | ConanCenter | yes | fail-closed | recipe/package-ID protocol required |
 | Clojars | yes | fail-closed | Maven-compatible coordinate/artifact adapter requires audited Clojars metadata mapping |
-| CPAN | yes | fail-closed | author/distribution metadata mapping required |
 | LuaRocks | yes | fail-closed | rockspec/source archive mapping required |
 | OPAM | yes | fail-closed | repository index/source mapping required |
 | Julia General | yes | fail-closed | registry tree/package-server semantics required |
-| CRAN | yes | fail-closed | PACKAGES index/current/archive mapping required |
 | conda-forge | yes | fail-closed | `.conda`/`.tar.bz2` artifact contract required |
 | CocoaPods | yes | fail-closed | spec/source URL validation required |
 | Terraform Registry | yes | fail-closed | module download uses `X-Terraform-Get`; providers are platform-specific |
@@ -57,6 +59,28 @@ The Go module proxy adapter follows the public GOPROXY wire protocol rather than
 - the ZIP is mapped truthfully to Zed's `zip` wire format and SHA-256 is computed at the edge when the native proxy does not supply one.
 
 The edge hashing path intentionally keeps Zed's existing 32 MiB degraded-mode artifact bound. The public Go module protocol can represent larger modules, so this fallback is deliberately a bounded emergency path rather than a claim of complete GOPROXY equivalence.
+
+## CPAN / MetaCPAN degraded-mode limits
+
+The CPAN adapter uses the MetaCPAN `download_url` metadata endpoint rather than turning the CPAN mirror tree into a generic file proxy.
+
+- package lookup returns the distribution selected by MetaCPAN; degraded package metadata therefore represents the current selected release rather than a complete historical index;
+- exact-version lookup includes the requested version in the MetaCPAN query and accepts only a metadata response that identifies that same version;
+- the release identity must be exactly `<distribution>-<version>`;
+- the artifact must be an HTTPS `cpan.metacpan.org/authors/id/.../<distribution>-<version>.tar.gz` URL with no userinfo, explicit port, query or fragment;
+- MetaCPAN must supply a lowercase SHA-256 and a positive integer artifact byte size before the candidate is trusted;
+- because digest and byte size are both upstream-bound, the edge does not silently downgrade a known CPAN digest into an unverified alternate path.
+
+## CRAN degraded-mode limits
+
+CRAN intentionally uses a narrow current-release path instead of parsing the global `PACKAGES` index or guessing archive history.
+
+- metadata is fetched only from exact HTTPS `cran.r-project.org/web/packages/<package>/DESCRIPTION`;
+- the non-JSON parser is enabled only for `text/plain` responses from that exact URL shape;
+- only a small whitelist of DESCRIPTION fields is retained, and package/version syntax is validated before use;
+- the accepted source artifact is exactly `https://cran.r-project.org/src/contrib/<package>_<version>.tar.gz`;
+- because `DESCRIPTION` describes the current package page, a request for a historical version fails closed rather than walking `src/contrib/Archive` without a separate audited archive protocol;
+- CRAN does not supply the SHA-256 in this metadata path, so the existing bounded edge hashing path establishes transport SHA-256 and compressed size before returning version metadata.
 
 ## Security invariants
 
@@ -80,11 +104,11 @@ Public fallback reads follow these rules:
 
 The current Rust `ArtifactFormat` wire contract exposes `tar.gz` and `zip`. An adapter may activate only when its install artifact maps truthfully to one of those formats or when the wire contract is expanded first.
 
-That is why Maven JARs and Go module ZIPs can be represented as `zip`, and Hackage and JSR archives can be represented as `tar.gz`, while RubyGems `.gem`, Hex package containers, conda `.conda`/`.tar.bz2`, and OCI manifests/layers remain fail-closed. The edge must not relabel an incompatible package solely to make it pass deserialization.
+That is why Maven JARs and Go module ZIPs can be represented as `zip`, and crates.io, Hackage, JSR, CPAN and CRAN source archives can be represented as `tar.gz`, while RubyGems `.gem`, Hex package containers, conda `.conda`/`.tar.bz2`, and OCI manifests/layers remain fail-closed. The edge must not relabel an incompatible package solely to make it pass deserialization.
 
 ## Independent CI witness
 
-The source repository's Actions budget is not treated as proof of correctness. The native-registry fallback branch is also exercised from `zed-pkg-test/security-adversarial-e2e`, a public test-organization repository with an independent GitHub Actions budget. The witness checks out an exact zed-infra commit SHA and asserts that checkout before testing. Its fast job audits the locked Worker dependencies and runs the native-registry catalog, security, and adapter contracts independently from the longer full Worker suite.
+The source repository's Actions budget is not treated as proof of correctness. The native-registry fallback branch is also exercised from `zed-pkg-test/security-adversarial-e2e`, a public test-organization repository with an independent GitHub Actions budget. The witness checks out an exact zed-infra commit SHA and asserts that checkout before testing. Its fast job audits the locked Worker dependencies and runs the native-registry catalog, security, wire-contract, preserved-core, production-dispatcher, and protocol-adapter tests independently from the longer full Worker suite.
 
 A source-repository cancellation caused by Actions-minute exhaustion is therefore not interpreted as a test failure. Conversely, an actual failing assertion in either repository remains a real blocker. The exact source SHA in the witness must be advanced whenever PR 108 changes before its green result can be used as merge evidence.
 
