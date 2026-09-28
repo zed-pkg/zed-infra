@@ -30,7 +30,7 @@ export const NATIVE_REGISTRIES = Object.freeze({
   cran: registry("cran", ["cran", "r", "r-project"], ["cloud.r-project.org", "cran.r-project.org"], "cran"),
   "conda-forge": registry("conda-forge", ["conda", "conda-forge", "mamba"], ["conda.anaconda.org"], "conda"),
   cocoapods: registry("cocoapods", ["cocoapods", "pod", "swift", "objective-c"], ["cdn.cocoapods.org", "github.com", "raw.githubusercontent.com"], "cocoapods"),
-  jsr: registry("jsr", ["jsr", "deno", "bun"], ["jsr.io"], "jsr"),
+  jsr: registry("jsr", ["jsr", "deno", "bun"], ["jsr.io", "npm.jsr.io"], "jsr"),
   terraform: registry("terraform", ["terraform", "terraform-registry", "opentofu", "tofu"], ["registry.terraform.io", "releases.hashicorp.com", "github.com", "objects.githubusercontent.com"], "terraform"),
   docker: registry("docker", ["docker", "docker-hub", "dockerhub", "oci"], ["registry-1.docker.io", "auth.docker.io", "production.cloudflare.docker.com"], "oci"),
 });
