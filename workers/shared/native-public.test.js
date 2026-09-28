@@ -13,7 +13,7 @@ import {
   readBoundedJson,
 } from "./native-public.js";
 
-test("production native dispatcher exposes exactly eleven audited adapters", () => {
+test("production native dispatcher exposes exactly twelve audited adapters", () => {
   assert.deepEqual(publicNativeFallbackIds().sort(), [
     "clojars",
     "cpan",
@@ -25,15 +25,17 @@ test("production native dispatcher exposes exactly eleven audited adapters", () 
     "maven",
     "npm",
     "nuget",
+    "packagist",
     "pypi",
   ]);
   assert.equal(publicNativeHostFromOrg("clojars")?.id, "clojars");
   assert.equal(publicNativeHostFromOrg("cpan")?.id, "cpan");
   assert.equal(publicNativeHostFromOrg("cran")?.id, "cran");
+  assert.equal(publicNativeHostFromOrg("packagist")?.id, "packagist");
+  assert.equal(publicNativeHostFromOrg("composer")?.id, "packagist");
   for (const token of [
     "rubygems",
     "hex",
-    "packagist",
     "conan",
     "luarocks",
     "opam",
@@ -148,5 +150,59 @@ test("production CRAN adapter parses only exact DESCRIPTION endpoints", async ()
   assert.equal(
     isAllowedNativeDownloadUrl(host, download.url, "jsonlite", "2.0.0"),
     true,
+  );
+});
+
+test("production Packagist adapter binds stable package identity to an immutable GitHub commit", () => {
+  const host = publicNativeHostFromOrg("packagist");
+  const coordinate = "vendor/package";
+  const name = encodeNativeCoordinate(coordinate);
+  const reference = "a".repeat(40);
+  const body = {
+    minified: "composer/2.0",
+    packages: {
+      [coordinate]: [
+        {
+          name: coordinate,
+          version: "1.2.3",
+          source: {
+            type: "git",
+            url: "https://github.com/upstream/project.git",
+            reference,
+          },
+          dist: {
+            type: "zip",
+            url: `https://api.github.com/repos/upstream/project/zipball/${reference}`,
+            reference,
+            shasum: "",
+          },
+        },
+      ],
+    },
+  };
+  assert.equal(
+    nativePackageMetadataUrl(host, name),
+    "https://repo.packagist.org/p2/vendor/package.json",
+  );
+  assert.equal(nativeVersionMetadataUrl(host, name, "dev-main"), null);
+  const download = downloadFromNativeVersion(host, name, "1.2.3", body);
+  assert.equal(download?.format, "zip");
+  assert.equal(
+    download?.url,
+    `https://codeload.github.com/upstream/project/zip/${reference}`,
+  );
+  assert.equal(
+    isAllowedNativeDownloadUrl(host, download.url, name, "1.2.3", download),
+    true,
+  );
+  assert.equal(
+    isAllowedNativeDownloadUrl(
+      host,
+      `https://codeload.github.com/upstream/project/zip/${"b".repeat(40)}`,
+      name,
+      "1.2.3",
+      download,
+    ),
+    false,
   );
 });
