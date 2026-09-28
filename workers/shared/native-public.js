@@ -96,7 +96,14 @@ function isSafeNativeVersion(version) {
 }
 
 export function isHighLikelihoodPublic(host, name) {
-  return Boolean(host && nativeCoordinate(host, name));
+  const coordinate = nativeCoordinate(host, name);
+  if (!coordinate) {
+    return false;
+  }
+  if (host?.id === "jsr") {
+    return Boolean(jsrCompatCoordinate(coordinate));
+  }
+  return true;
 }
 
 export function nativeHeaders(accept = "application/json") {
@@ -122,13 +129,8 @@ export function nativePackageMetadataUrl(host, name) {
       return `${host.metadata}/${encodeURIComponent(coordinate.toLowerCase())}/index.json`;
     case "hackage":
       return `${host.metadata}/${encodeURIComponent(coordinate)}`;
-    case "jsr": {
-      const compat = jsrCompatCoordinate(coordinate);
-      if (!compat) {
-        return null;
-      }
-      return `${host.metadata}/${encodeURIComponent(compat)}`;
-    }
+    case "jsr":
+      return jsrPackumentUrl(host, coordinate);
     default:
       return null;
   }
@@ -153,13 +155,11 @@ export function nativeVersionMetadataUrl(host, name, version) {
       return `${host.metadata}/${encodeURIComponent(coordinate.toLowerCase())}/index.json`;
     case "hackage":
       return `${host.metadata}/${encodeURIComponent(coordinate)}`;
-    case "jsr": {
-      const compat = jsrCompatCoordinate(coordinate);
-      if (!compat) {
-        return null;
-      }
-      return `${host.metadata}/${encodeURIComponent(compat)}/${encodeURIComponent(version)}`;
-    }
+    case "jsr":
+      // JSR's documented npm-compatibility endpoint is a package packument.
+      // Reuse it and select body.versions[version] rather than depending on an
+      // undocumented version-path variant of the npm registry API.
+      return jsrPackumentUrl(host, coordinate);
     default:
       return null;
   }
@@ -314,11 +314,14 @@ export function isAllowedNativeDownloadUrl(host, rawUrl, name, version) {
     }
     const compat = jsrCompatCoordinate(coordinate);
     const decodedPath = safeDecodedPath(url.pathname);
-    if (!compat || !decodedPath || !decodedPath.endsWith(".tgz")) {
+    if (!compat || !decodedPath) {
       return false;
     }
-    const slug = compat.split("/").at(-1);
-    return decodedPath.includes(slug);
+    const slug = compat.slice("@jsr/".length);
+    const expected = new RegExp(
+      `^/~/[0-9]+/@jsr/${escapeRegExp(slug)}/${escapeRegExp(version)}\\.tgz$`,
+    );
+    return expected.test(decodedPath);
   }
 
   return false;
@@ -415,8 +418,21 @@ export function downloadFromNativeVersion(host, name, version, body) {
     return null;
   }
 
-  if (host?.id === "npm" || host?.id === "jsr") {
+  if (host?.id === "npm") {
     const dist = body.dist || body.versions?.[version]?.dist;
+    if (!dist?.tarball || !isAllowedNativeDownloadUrl(host, dist.tarball, name, version)) {
+      return null;
+    }
+    return {
+      url: dist.tarball,
+      sha256: integrityToSha256(dist.integrity),
+      size: 0,
+      format: "tar.gz",
+    };
+  }
+
+  if (host?.id === "jsr") {
+    const dist = body.versions?.[version]?.dist;
     if (!dist?.tarball || !isAllowedNativeDownloadUrl(host, dist.tarball, name, version)) {
       return null;
     }
@@ -777,6 +793,15 @@ function jsrCompatCoordinate(coordinate) {
   return `@jsr/${parts[0]}__${parts[1]}`;
 }
 
+function jsrPackumentUrl(host, coordinate) {
+  const compat = jsrCompatCoordinate(coordinate);
+  if (!compat) {
+    return null;
+  }
+  const slug = compat.slice("@jsr/".length);
+  return `${host.metadata}/@jsr/${encodeURIComponent(slug)}`;
+}
+
 function safeDecodedPath(pathname) {
   try {
     return decodeURIComponent(pathname);
@@ -791,6 +816,10 @@ function safeDecodedFilename(pathname) {
     return null;
   }
   return path.split("/").at(-1) || null;
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function sortVersionsDesc(a, b) {
