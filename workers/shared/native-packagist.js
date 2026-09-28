@@ -74,12 +74,17 @@ export function packagistDownload(body, coordinate, requestedVersion) {
   if (!isExactGithubRepository(row.source?.url, parts[0], parts[1])) {
     return null;
   }
-  const expectedUrl = `https://api.github.com/repos/${encodeURIComponent(parts[0])}/${encodeURIComponent(parts[1])}/zipball/${reference}`;
-  if (row.dist?.url !== expectedUrl) {
+  const advertisedUrl = `https://api.github.com/repos/${encodeURIComponent(parts[0])}/${encodeURIComponent(parts[1])}/zipball/${reference}`;
+  if (row.dist?.url !== advertisedUrl) {
     return null;
   }
+
+  // Fetch the immutable codeload URL directly instead of following the GitHub
+  // API redirect. This keeps the metadata-bound commit reference in the URL
+  // that the generic edge downloader validates at every hop.
+  const url = `https://codeload.github.com/${encodeURIComponent(parts[0])}/${encodeURIComponent(parts[1])}/legacy.zip/${reference}`;
   return {
-    url: expectedUrl,
+    url,
     sha256: "",
     size: 0,
     format: "zip",
@@ -101,6 +106,7 @@ export function isAllowedPackagistDownloadUrl(rawUrl, coordinate, requestedVersi
   }
   if (
     url.protocol !== "https:" ||
+    url.hostname !== "codeload.github.com" ||
     url.username ||
     url.password ||
     url.port ||
@@ -110,38 +116,21 @@ export function isAllowedPackagistDownloadUrl(rawUrl, coordinate, requestedVersi
     return false;
   }
 
+  const match = url.pathname.match(/^\/([^/]+)\/([^/]+)\/legacy\.zip\/([a-f0-9]{40})$/);
+  if (!match) {
+    return false;
+  }
   const owner = parts[0].toLowerCase();
   const repo = parts[1].toLowerCase();
   const expectedReference = typeof reference === "string" ? reference.toLowerCase() : null;
   if (expectedReference && !GIT_SHA.test(expectedReference)) {
     return false;
   }
-
-  if (url.hostname === "api.github.com") {
-    const match = url.pathname.match(/^\/repos\/([^/]+)\/([^/]+)\/zipball\/([a-f0-9]{40})$/);
-    if (!match) {
-      return false;
-    }
-    return (
-      decodeURIComponent(match[1]).toLowerCase() === owner &&
-      decodeURIComponent(match[2]).toLowerCase() === repo &&
-      (!expectedReference || match[3] === expectedReference)
-    );
-  }
-
-  if (url.hostname === "codeload.github.com") {
-    const match = url.pathname.match(/^\/([^/]+)\/([^/]+)\/(?:legacy\.zip|zip)\/([a-f0-9]{40})$/);
-    if (!match) {
-      return false;
-    }
-    return (
-      decodeURIComponent(match[1]).toLowerCase() === owner &&
-      decodeURIComponent(match[2]).toLowerCase() === repo &&
-      (!expectedReference || match[3] === expectedReference)
-    );
-  }
-
-  return false;
+  return (
+    decodeURIComponent(match[1]).toLowerCase() === owner &&
+    decodeURIComponent(match[2]).toLowerCase() === repo &&
+    (!expectedReference || match[3] === expectedReference)
+  );
 }
 
 export function packagistDescription(body) {
