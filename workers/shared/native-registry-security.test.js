@@ -42,6 +42,7 @@ const REQUIRED_REGISTRIES = [
 
 const ACTIVE_REGISTRIES = [
   "crates-io",
+  "go-proxy",
   "hackage",
   "jsr",
   "maven",
@@ -53,7 +54,6 @@ const ACTIVE_REGISTRIES = [
 const INACTIVE_REGISTRIES = [
   "packagist",
   "rubygems",
-  "go-proxy",
   "hex",
   "conan",
   "clojars",
@@ -182,6 +182,7 @@ test("active registries resolve only through their catalog identities", () => {
   }
 
   assert.equal(publicNativeHostFromOrg("maven-central")?.id, "maven");
+  assert.equal(publicNativeHostFromOrg("golang")?.id, "go-proxy");
   assert.equal(publicNativeHostFromOrg("cabal")?.id, "hackage");
   assert.equal(publicNativeHostFromOrg("deno")?.id, "jsr");
 });
