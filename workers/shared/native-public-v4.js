@@ -12,6 +12,7 @@ import {
   packagistCoordinate,
   packagistDescription,
   packagistDownload,
+  packagistLatest,
   packagistMetadataUrl,
   packagistRepoUrl,
   packagistVersions,
@@ -103,11 +104,11 @@ export function nativeTarballUrls(host, name, version, filename) {
 export function isAllowedNativeDownloadUrl(host, rawUrl, name, version, candidate = null) {
   if (host?.id === "packagist") {
     const coordinate = packagistNativeCoordinate(host, name);
-    const reference = candidate?.reference || null;
     return Boolean(
       coordinate &&
       safeStableVersion(version) &&
-      isAllowedPackagistDownloadUrl(rawUrl, coordinate, version, reference),
+      candidate &&
+      isAllowedPackagistDownloadUrl(rawUrl, candidate),
     );
   }
   return v3.isAllowedNativeDownloadUrl(host, rawUrl, name, version, candidate);
@@ -118,12 +119,10 @@ export function isPrivateOrUnpublished(host, body) {
     return !(
       body &&
       typeof body === "object" &&
-      body.package &&
-      typeof body.package === "object" &&
-      typeof body.package.name === "string" &&
-      body.package.versions &&
-      typeof body.package.versions === "object" &&
-      !Array.isArray(body.package.versions)
+      body.packages &&
+      typeof body.packages === "object" &&
+      !Array.isArray(body.packages) &&
+      (body.minified === undefined || body.minified === "composer/2.0")
     );
   }
   return v3.isPrivateOrUnpublished(host, body);
@@ -161,10 +160,10 @@ export function toPackageMetadata(host, org, name, body) {
   return {
     org,
     name,
-    description: packagistDescription(body),
+    description: packagistDescription(body, coordinate),
     vcs: "git",
     repo_url: packagistRepoUrl(body, coordinate),
-    latest: versions[0] || null,
+    latest: packagistLatest(body, coordinate, versions),
     tags: [],
     versions,
     native_host: host.id,
