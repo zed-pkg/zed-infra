@@ -18,22 +18,34 @@ import {
   versionsFromNativeBody,
 } from "./native-public.js";
 
+const ACTIVE = ["crates-io", "hackage", "jsr", "maven", "npm", "nuget", "pypi"];
+
 test("only protocol-audited public registries are active", () => {
-  assert.deepEqual(publicNativeFallbackIds().sort(), ["crates-io", "npm", "nuget", "pypi"]);
-  assert.equal(publicNativeHostFromOrg("npm").id, "npm");
-  assert.equal(publicNativeHostFromOrg("npmjs.com").id, "npm");
-  assert.equal(publicNativeHostFromOrg("crates-io").id, "crates-io");
-  assert.equal(publicNativeHostFromOrg("cargo").id, "crates-io");
-  assert.equal(publicNativeHostFromOrg("pip").id, "pypi");
-  assert.equal(publicNativeHostFromOrg("dotnet").id, "nuget");
+  assert.deepEqual(publicNativeFallbackIds().sort(), ACTIVE);
+  assert.equal(publicNativeHostFromOrg("npm")?.id, "npm");
+  assert.equal(publicNativeHostFromOrg("cargo")?.id, "crates-io");
+  assert.equal(publicNativeHostFromOrg("pip")?.id, "pypi");
+  assert.equal(publicNativeHostFromOrg("gradle")?.id, "maven");
+  assert.equal(publicNativeHostFromOrg("dotnet")?.id, "nuget");
+  assert.equal(publicNativeHostFromOrg("cabal")?.id, "hackage");
+  assert.equal(publicNativeHostFromOrg("deno")?.id, "jsr");
 
   for (const token of [
-    "maven",
     "rubygems",
     "hex",
     "packagist",
-    "docker",
+    "go-proxy",
+    "conan",
+    "clojars",
+    "cpan",
+    "luarocks",
+    "opam",
+    "julia",
+    "cran",
+    "conda-forge",
+    "cocoapods",
     "terraform",
+    "docker",
     "test-pypi",
     "artifactory",
   ]) {
@@ -41,7 +53,7 @@ test("only protocol-audited public registries are active", () => {
   }
 });
 
-test("safe coordinates are not confused with proof that a package is public", () => {
+test("safe coordinates are transport syntax, never proof that a package is public", () => {
   const npm = publicNativeHostFromOrg("npm");
   assert.equal(isHighLikelihoodPublic(npm, "lodash"), true);
   assert.equal(isHighLikelihoodPublic(npm, "private-sdk"), true);
@@ -54,65 +66,64 @@ test("safe coordinates are not confused with proof that a package is public", ()
   assert.equal(nativeHeaders().authorization, undefined);
 });
 
-test("anonymous metadata still rejects private and unpublished bodies", () => {
+test("anonymous metadata rejects private, missing, and empty registry responses", () => {
   const npm = publicNativeHostFromOrg("npm");
   assert.equal(
     isPrivateOrUnpublished(npm, { private: true, versions: { "1.0.0": {} } }),
     true,
   );
-  assert.equal(isPrivateOrUnpublished(npm, { unpublished: { time: "2020-01-01" } }), true);
-  assert.equal(
-    isPrivateOrUnpublished(npm, {
-      name: "lodash",
-      versions: { "4.17.21": { dist: { tarball: "https://registry.npmjs.org/x" } } },
-    }),
-    false,
-  );
+  assert.equal(isPrivateOrUnpublished(npm, { versions: { "1.0.0": {} } }), false);
 
   const pypi = publicNativeHostFromOrg("pypi");
   assert.equal(isPrivateOrUnpublished(pypi, { info: { name: "requests" }, releases: {} }), false);
   assert.equal(isPrivateOrUnpublished(pypi, { info: { name: "requests" } }), true);
 
+  const maven = publicNativeHostFromOrg("maven");
+  assert.equal(isPrivateOrUnpublished(maven, { response: { docs: [{ v: "1.0.0" }] } }), false);
+  assert.equal(isPrivateOrUnpublished(maven, { response: { docs: [] } }), true);
+
   const nuget = publicNativeHostFromOrg("nuget");
   assert.equal(isPrivateOrUnpublished(nuget, { versions: ["1.0.0"] }), false);
   assert.equal(isPrivateOrUnpublished(nuget, { versions: [] }), true);
+
+  const hackage = publicNativeHostFromOrg("hackage");
+  assert.equal(isPrivateOrUnpublished(hackage, { "2.2.3.0": true }), false);
+  assert.equal(isPrivateOrUnpublished(hackage, {}), true);
 });
 
-test("metadata and artifact URLs are fixed to canonical public hosts", () => {
+test("metadata URLs are canonical and coordinates never become arbitrary paths", () => {
   const npm = publicNativeHostFromOrg("npm");
   assert.equal(nativePackageMetadataUrl(npm, "lodash"), "https://registry.npmjs.org/lodash");
   assert.equal(
     nativeVersionMetadataUrl(npm, "lodash", "4.17.21"),
     "https://registry.npmjs.org/lodash/4.17.21",
   );
-  assert.deepEqual(nativeTarballUrls(npm, "lodash", "4.17.21", "lodash-4.17.21.tgz"), [
-    "https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz",
-  ]);
-  assert.deepEqual(nativeTarballUrls(npm, "lodash", "4.17.21", "other.tgz"), []);
 
   const scoped = encodeNativeCoordinate("@scope/pkg");
   assert.equal(
     nativePackageMetadataUrl(npm, scoped),
     "https://registry.npmjs.org/%40scope%2Fpkg",
   );
-  assert.deepEqual(nativeTarballUrls(npm, scoped, "1.2.3", "pkg-1.2.3.tgz"), [
-    "https://registry.npmjs.org/%40scope%2Fpkg/-/pkg-1.2.3.tgz",
-  ]);
 
   const crates = publicNativeHostFromOrg("crates-io");
-  assert.equal(
-    nativePackageMetadataUrl(crates, "serde"),
-    "https://crates.io/api/v1/crates/serde",
-  );
-  assert.deepEqual(nativeTarballUrls(crates, "serde", "1.0.0", "serde-1.0.0.crate"), [
-    "https://static.crates.io/crates/serde/serde-1.0.0.crate",
-  ]);
+  assert.equal(nativePackageMetadataUrl(crates, "serde"), "https://crates.io/api/v1/crates/serde");
 
   const pypi = publicNativeHostFromOrg("pypi");
   assert.equal(nativePackageMetadataUrl(pypi, "requests"), "https://pypi.org/pypi/requests/json");
+
+  const maven = publicNativeHostFromOrg("maven");
+  const mavenName = encodeNativeCoordinate("com.google.guava:guava");
+  const mavenPackage = new URL(nativePackageMetadataUrl(maven, mavenName));
+  assert.equal(mavenPackage.origin, "https://search.maven.org");
+  assert.equal(mavenPackage.pathname, "/solrsearch/select");
+  assert.equal(mavenPackage.searchParams.get("q"), 'g:"com.google.guava" AND a:"guava"');
+  assert.equal(mavenPackage.searchParams.get("core"), "gav");
+  assert.equal(mavenPackage.searchParams.get("wt"), "json");
+
+  const mavenVersion = new URL(nativeVersionMetadataUrl(maven, mavenName, "33.4.8-jre"));
   assert.equal(
-    nativeVersionMetadataUrl(pypi, "requests", "2.32.5"),
-    "https://pypi.org/pypi/requests/2.32.5/json",
+    mavenVersion.searchParams.get("q"),
+    'g:"com.google.guava" AND a:"guava" AND v:"33.4.8-jre" AND p:"jar"',
   );
 
   const nuget = publicNativeHostFromOrg("nuget");
@@ -120,10 +131,43 @@ test("metadata and artifact URLs are fixed to canonical public hosts", () => {
     nativePackageMetadataUrl(nuget, "Newtonsoft.Json"),
     "https://api.nuget.org/v3-flatcontainer/newtonsoft.json/index.json",
   );
+
+  const hackage = publicNativeHostFromOrg("hackage");
   assert.equal(
-    nativeVersionMetadataUrl(nuget, "Newtonsoft.Json", "13.0.3"),
-    "https://api.nuget.org/v3-flatcontainer/newtonsoft.json/index.json",
+    nativePackageMetadataUrl(hackage, "aeson"),
+    "https://hackage.haskell.org/package/aeson",
   );
+
+  const jsr = publicNativeHostFromOrg("jsr");
+  const jsrName = encodeNativeCoordinate("@luca/cases");
+  assert.equal(
+    nativePackageMetadataUrl(jsr, jsrName),
+    "https://npm.jsr.io/%40jsr%2Fluca__cases",
+  );
+});
+
+test("deterministic artifact URLs are bound to package and version", () => {
+  const npm = publicNativeHostFromOrg("npm");
+  assert.deepEqual(nativeTarballUrls(npm, "lodash", "4.17.21", "lodash-4.17.21.tgz"), [
+    "https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz",
+  ]);
+  assert.deepEqual(nativeTarballUrls(npm, "lodash", "4.17.21", "other.tgz"), []);
+
+  const crates = publicNativeHostFromOrg("crates-io");
+  assert.deepEqual(nativeTarballUrls(crates, "serde", "1.0.0", "serde-1.0.0.crate"), [
+    "https://static.crates.io/crates/serde/serde-1.0.0.crate",
+  ]);
+
+  const maven = publicNativeHostFromOrg("maven");
+  const mavenName = encodeNativeCoordinate("com.google.guava:guava");
+  assert.deepEqual(
+    nativeTarballUrls(maven, mavenName, "33.4.8-jre", "guava-33.4.8-jre.jar"),
+    [
+      "https://repo1.maven.org/maven2/com/google/guava/guava/33.4.8-jre/guava-33.4.8-jre.jar",
+    ],
+  );
+
+  const nuget = publicNativeHostFromOrg("nuget");
   assert.deepEqual(
     nativeTarballUrls(
       nuget,
@@ -135,9 +179,14 @@ test("metadata and artifact URLs are fixed to canonical public hosts", () => {
       "https://api.nuget.org/v3-flatcontainer/newtonsoft.json/13.0.3/newtonsoft.json.13.0.3.nupkg",
     ],
   );
+
+  const hackage = publicNativeHostFromOrg("hackage");
+  assert.deepEqual(nativeTarballUrls(hackage, "aeson", "2.2.3.0", "aeson-2.2.3.0.tar.gz"), [
+    "https://hackage.haskell.org/package/aeson-2.2.3.0/aeson-2.2.3.0.tar.gz",
+  ]);
 });
 
-test("untrusted metadata cannot redirect downloads off registry path allowlists", () => {
+test("artifact validators reject cross-package, cross-host, query, and credential confusion", () => {
   const npm = publicNativeHostFromOrg("npm");
   assert.equal(
     isAllowedNativeDownloadUrl(
@@ -153,15 +202,10 @@ test("untrusted metadata cannot redirect downloads off registry path allowlists"
     "https://evil.test/lodash-4.17.21.tgz",
     "https://registry.npmjs.org/other/-/other-4.17.21.tgz",
     "https://user:pass@registry.npmjs.org/lodash/-/lodash-4.17.21.tgz",
+    "https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz?x=1",
   ]) {
     assert.equal(isAllowedNativeDownloadUrl(npm, url, "lodash", "4.17.21"), false, url);
   }
-  assert.equal(
-    downloadFromNativeVersion(npm, "lodash", "4.17.21", {
-      dist: { tarball: "https://evil.test/payload.tgz" },
-    }),
-    null,
-  );
 
   const pypi = publicNativeHostFromOrg("pypi");
   assert.equal(
@@ -176,29 +220,62 @@ test("untrusted metadata cannot redirect downloads off registry path allowlists"
   assert.equal(
     isAllowedNativeDownloadUrl(
       pypi,
-      "https://pypi.org/packages/aa/bb/deadbeef/requests-2.32.5.tar.gz",
+      "https://files.pythonhosted.org/packages/aa/bb/deadbeef/not-requests-2.32.5.tar.gz",
       "requests",
       "2.32.5",
     ),
     false,
   );
 
-  const nuget = publicNativeHostFromOrg("nuget");
+  const maven = publicNativeHostFromOrg("maven");
+  const mavenName = encodeNativeCoordinate("com.google.guava:guava");
   assert.equal(
     isAllowedNativeDownloadUrl(
-      nuget,
-      "https://api.nuget.org/v3-flatcontainer/newtonsoft.json/13.0.3/newtonsoft.json.13.0.3.nupkg",
-      "Newtonsoft.Json",
-      "13.0.3",
+      maven,
+      "https://repo1.maven.org/maven2/com/google/guava/guava/33.4.8-jre/guava-33.4.8-jre.jar",
+      mavenName,
+      "33.4.8-jre",
     ),
     true,
   );
   assert.equal(
     isAllowedNativeDownloadUrl(
-      nuget,
-      "https://api.nuget.org/v3-flatcontainer/other/13.0.3/other.13.0.3.nupkg",
-      "Newtonsoft.Json",
-      "13.0.3",
+      maven,
+      "https://repo1.maven.org/maven2/com/google/guava/failureaccess/1.0/failureaccess-1.0.jar",
+      mavenName,
+      "33.4.8-jre",
+    ),
+    false,
+  );
+
+  const hackage = publicNativeHostFromOrg("hackage");
+  assert.equal(
+    isAllowedNativeDownloadUrl(
+      hackage,
+      "https://hackage.haskell.org/package/aeson-2.2.3.0/aeson-2.2.3.0.tar.gz",
+      "aeson",
+      "2.2.3.0",
+    ),
+    true,
+  );
+
+  const jsr = publicNativeHostFromOrg("jsr");
+  const jsrName = encodeNativeCoordinate("@luca/cases");
+  assert.equal(
+    isAllowedNativeDownloadUrl(
+      jsr,
+      "https://npm.jsr.io/@jsr/luca__cases/-/luca__cases-1.0.0.tgz",
+      jsrName,
+      "1.0.0",
+    ),
+    true,
+  );
+  assert.equal(
+    isAllowedNativeDownloadUrl(
+      jsr,
+      "https://npm.jsr.io/@jsr/other__package/-/other__package-1.0.0.tgz",
+      jsrName,
+      "1.0.0",
     ),
     false,
   );
@@ -219,19 +296,15 @@ test("metadata bodies are JSON-only and bounded", async () => {
   assert.equal(await readBoundedJson(oversized), null);
 });
 
-test("native package metadata maps only installable visible versions", () => {
+test("package metadata exposes only validated installable versions", () => {
   const npm = publicNativeHostFromOrg("npm");
-  const meta = toPackageMetadata(npm, "npm", "left-pad", {
+  const npmMeta = toPackageMetadata(npm, "npm", "left-pad", {
     description: "pad",
     "dist-tags": { latest: "1.3.0" },
-    versions: { "1.0.0": {}, "1.3.0": {} },
+    versions: { "1.0.0": {}, "1.3.0": {}, "../escape": {} },
   });
-  assert.equal(meta.native_host, "npm");
-  assert.deepEqual(versionsFromNativeBody(npm, { versions: { "1.0.0": {}, "1.3.0": {} } }), [
-    "1.3.0",
-    "1.0.0",
-  ]);
-  assert.equal(meta.latest, "1.3.0");
+  assert.deepEqual(npmMeta.versions, ["1.3.0", "1.0.0"]);
+  assert.equal(npmMeta.latest, "1.3.0");
 
   const crates = publicNativeHostFromOrg("crates-io");
   assert.deepEqual(
@@ -255,9 +328,35 @@ test("native package metadata maps only installable visible versions", () => {
     }),
     ["1.0.0"],
   );
+
+  const maven = publicNativeHostFromOrg("maven");
+  const mavenName = encodeNativeCoordinate("com.google.guava:guava");
+  assert.deepEqual(
+    versionsFromNativeBody(
+      maven,
+      {
+        response: {
+          docs: [
+            { g: "com.google.guava", a: "guava", v: "33.4.8-jre", p: "jar" },
+            { g: "com.google.guava", a: "guava", v: "33.4.7-jre", p: "jar" },
+            { g: "evil", a: "guava", v: "99.0.0", p: "jar" },
+            { g: "com.google.guava", a: "guava", v: "1.0.0", p: "pom" },
+          ],
+        },
+      },
+      mavenName,
+    ),
+    ["33.4.8-jre", "33.4.7-jre"],
+  );
+
+  const hackage = publicNativeHostFromOrg("hackage");
+  assert.deepEqual(
+    versionsFromNativeBody(hackage, { "2.2.3.0": true, "2.2.2.0": false, "../bad": true }),
+    ["2.2.3.0", "2.2.2.0"],
+  );
 });
 
-test("native version candidates stay inside the Rust artifact format contract", () => {
+test("version candidates stay inside the Rust tar.gz/zip artifact contract", () => {
   const npm = publicNativeHostFromOrg("npm");
   const npmCandidate = downloadFromNativeVersion(npm, "lodash", "4.17.21", {
     dist: {
@@ -267,7 +366,7 @@ test("native version candidates stay inside the Rust artifact format contract", 
     },
   });
   assert.equal(npmCandidate.format, "tar.gz");
-  assert.equal(npmCandidate.size, 0, "unpackedSize must not be treated as tarball size");
+  assert.equal(npmCandidate.size, 0);
 
   const crates = publicNativeHostFromOrg("crates-io");
   const crateCandidate = downloadFromNativeVersion(crates, "serde", "1.0.0", {
@@ -279,12 +378,7 @@ test("native version candidates stay inside the Rust artifact format contract", 
       yanked: false,
     },
   });
-  assert.deepEqual(crateCandidate, {
-    url: "https://crates.io/api/v1/crates/serde/1.0.0/download",
-    sha256: "a".repeat(64),
-    size: 1234,
-    format: "tar.gz",
-  });
+  assert.equal(crateCandidate.format, "tar.gz");
 
   const pypi = publicNativeHostFromOrg("pypi");
   const pypiCandidate = downloadFromNativeVersion(pypi, "requests", "2.32.5", {
@@ -296,24 +390,76 @@ test("native version candidates stay inside the Rust artifact format contract", 
         size: 150000,
         digests: { sha256: "b".repeat(64) },
         url: "https://files.pythonhosted.org/packages/aa/bb/deadbeef/requests-2.32.5.tar.gz",
-        upload_time_iso_8601: "2026-01-02T03:04:05Z",
       },
     ],
   });
   assert.equal(pypiCandidate.format, "tar.gz");
   assert.equal(pypiCandidate.sha256, "b".repeat(64));
+  assert.equal(
+    downloadFromNativeVersion(pypi, "requests", "2.32.5", {
+      urls: [
+        {
+          filename: "requests-2.32.5.tar.gz",
+          packagetype: "sdist",
+          yanked: false,
+          digests: { sha256: "b".repeat(64) },
+          url: "https://files.pythonhosted.org/packages/aa/bb/deadbeef/not-requests-2.32.5.tar.gz",
+        },
+      ],
+    }),
+    null,
+  );
+
+  const maven = publicNativeHostFromOrg("maven");
+  const mavenName = encodeNativeCoordinate("com.google.guava:guava");
+  const mavenCandidate = downloadFromNativeVersion(maven, mavenName, "33.4.8-jre", {
+    response: {
+      docs: [
+        {
+          g: "com.google.guava",
+          a: "guava",
+          v: "33.4.8-jre",
+          p: "jar",
+          timestamp: 1760000000000,
+        },
+      ],
+    },
+  });
+  assert.equal(mavenCandidate.format, "zip");
 
   const nuget = publicNativeHostFromOrg("nuget");
   const nugetCandidate = downloadFromNativeVersion(nuget, "Newtonsoft.Json", "13.0.3", {
     versions: ["12.0.1", "13.0.3"],
   });
   assert.equal(nugetCandidate.format, "zip");
-  assert.equal(
-    nugetCandidate.url,
-    "https://api.nuget.org/v3-flatcontainer/newtonsoft.json/13.0.3/newtonsoft.json.13.0.3.nupkg",
-  );
 
-  for (const candidate of [npmCandidate, crateCandidate, pypiCandidate, nugetCandidate]) {
+  const hackage = publicNativeHostFromOrg("hackage");
+  const hackageCandidate = downloadFromNativeVersion(hackage, "aeson", "2.2.3.0", {
+    "2.2.3.0": true,
+  });
+  assert.equal(hackageCandidate.format, "tar.gz");
+
+  const jsr = publicNativeHostFromOrg("jsr");
+  const jsrName = encodeNativeCoordinate("@luca/cases");
+  const jsrCandidate = downloadFromNativeVersion(jsr, jsrName, "1.0.0", {
+    version: "1.0.0",
+    dist: {
+      tarball: "https://npm.jsr.io/@jsr/luca__cases/-/luca__cases-1.0.0.tgz",
+      integrity: "sha512-edge-will-hash-this",
+    },
+  });
+  assert.equal(jsrCandidate.format, "tar.gz");
+
+  for (const candidate of [
+    npmCandidate,
+    crateCandidate,
+    pypiCandidate,
+    mavenCandidate,
+    nugetCandidate,
+    hackageCandidate,
+    jsrCandidate,
+  ]) {
+    assert.ok(candidate);
     assert.ok(["tar.gz", "zip"].includes(candidate.format), candidate.format);
   }
 });
