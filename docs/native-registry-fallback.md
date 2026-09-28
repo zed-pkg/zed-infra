@@ -18,7 +18,7 @@ For package/version reads the edge uses this order:
 
 Catalog membership is not network authorization. The catalog gives Zed a stable ecosystem ID, aliases, coordinate grammar, and exact upstream host set. A separate active-adapter table controls which ecosystems can actually perform fallback network reads.
 
-There are currently **10 active adapters** and **12 catalog-only, fail-closed protocols**.
+There are currently **11 active adapters** and **11 catalog-only, fail-closed protocols**.
 
 | Ecosystem | Catalog | Edge read adapter | Notes |
 | --- | --- | --- | --- |
@@ -29,6 +29,7 @@ There are currently **10 active adapters** and **12 catalog-only, fail-closed pr
 | NuGet | yes | active | v3 flat container; canonical index version + `.nupkg` mapped to `zip` |
 | Go Module Proxy | yes | active | exact `@v/list` text parser, `.info` JSON, official `!lowercase` path/version escaping, deterministic `.zip`; bounded edge hashing |
 | Hackage | yes | active | package JSON version map + canonical `.tar.gz`; artifact is edge-hashed |
+| Clojars | yes | active | public artifact JSON + deterministic Maven JAR path for stable releases; snapshots stay fail-closed; JAR maps to `zip` and is edge-hashed |
 | CPAN / MetaCPAN | yes | active | exact distribution/version lookup; release name, SHA-256, positive byte size and `authors/id` archive path are all bound before accepting `.tar.gz` |
 | CRAN | yes | active | exact per-package `DESCRIPTION` parser; current source release only via deterministic `src/contrib/<package>_<version>.tar.gz`; bounded edge hashing |
 | JSR | yes | active | official npm-compatibility registry; scoped JSR packages map to revision-bound immutable `.tgz` artifacts |
@@ -36,7 +37,6 @@ There are currently **10 active adapters** and **12 catalog-only, fail-closed pr
 | RubyGems | yes | fail-closed | `.gem` container semantics need an explicit artifact contract |
 | Hex | yes | fail-closed | release metadata/tarball semantics need dedicated artifact-format support |
 | ConanCenter | yes | fail-closed | recipe/package-ID protocol required |
-| Clojars | yes | fail-closed | Maven-compatible coordinate/artifact adapter requires audited Clojars metadata mapping |
 | LuaRocks | yes | fail-closed | rockspec/source archive mapping required |
 | OPAM | yes | fail-closed | repository index/source mapping required |
 | Julia General | yes | fail-closed | registry tree/package-server semantics required |
@@ -59,6 +59,18 @@ The Go module proxy adapter follows the public GOPROXY wire protocol rather than
 - the ZIP is mapped truthfully to Zed's `zip` wire format and SHA-256 is computed at the edge when the native proxy does not supply one.
 
 The edge hashing path intentionally keeps Zed's existing 32 MiB degraded-mode artifact bound. The public Go module protocol can represent larger modules, so this fallback is deliberately a bounded emergency path rather than a claim of complete GOPROXY equivalence.
+
+## Clojars degraded-mode limits
+
+The Clojars adapter uses the public artifact API and the canonical Maven repository instead of assuming every Maven-shaped coordinate is available from Maven Central.
+
+- coordinates are explicit Maven-style `<group>:<artifact>` values transported through the reversible Zed coordinate codec;
+- metadata is fetched only from `https://clojars.org/api/artifacts/<group>/<artifact>` and the returned `group_name` and `jar_name` must match the requested identity;
+- only versions explicitly listed by the artifact API are eligible;
+- `-SNAPSHOT` versions are excluded because Maven snapshot repositories may use timestamped filenames and a deterministic `<artifact>-<version>.jar` must not be guessed;
+- stable artifacts are confined to the exact path `https://repo.clojars.org/<group path>/<artifact>/<version>/<artifact>-<version>.jar`;
+- JARs map truthfully to Zed's `zip` wire format and use the existing bounded edge SHA-256 path when Clojars metadata does not supply a trusted SHA-256;
+- an HTTPS SCM URL may be exposed as descriptive repository metadata, but it never authorizes artifact downloads from that SCM host.
 
 ## CPAN / MetaCPAN degraded-mode limits
 
@@ -104,7 +116,7 @@ Public fallback reads follow these rules:
 
 The current Rust `ArtifactFormat` wire contract exposes `tar.gz` and `zip`. An adapter may activate only when its install artifact maps truthfully to one of those formats or when the wire contract is expanded first.
 
-That is why Maven JARs and Go module ZIPs can be represented as `zip`, and crates.io, Hackage, JSR, CPAN and CRAN source archives can be represented as `tar.gz`, while RubyGems `.gem`, Hex package containers, conda `.conda`/`.tar.bz2`, and OCI manifests/layers remain fail-closed. The edge must not relabel an incompatible package solely to make it pass deserialization.
+That is why Maven Central and Clojars JARs, NuGet packages, and Go module ZIPs can be represented as `zip`, and crates.io, Hackage, JSR, CPAN and CRAN source archives can be represented as `tar.gz`, while RubyGems `.gem`, Hex package containers, conda `.conda`/`.tar.bz2`, and OCI manifests/layers remain fail-closed. The edge must not relabel an incompatible package solely to make it pass deserialization.
 
 ## Independent CI witness
 
