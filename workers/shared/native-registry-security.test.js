@@ -16,56 +16,19 @@ import {
 } from "./native-public.js";
 
 const REQUIRED_REGISTRIES = [
-  "npm",
-  "crates-io",
-  "pypi",
-  "maven",
-  "nuget",
-  "packagist",
-  "rubygems",
-  "go-proxy",
-  "hex",
-  "conan",
-  "hackage",
-  "clojars",
-  "cpan",
-  "luarocks",
-  "opam",
-  "julia",
-  "cran",
-  "conda-forge",
-  "cocoapods",
-  "jsr",
-  "terraform",
-  "docker",
+  "npm", "crates-io", "pypi", "maven", "nuget", "packagist", "rubygems",
+  "go-proxy", "hex", "conan", "hackage", "clojars", "cpan", "luarocks",
+  "opam", "julia", "cran", "conda-forge", "cocoapods", "jsr", "terraform", "docker",
 ];
 
 const ACTIVE_REGISTRIES = [
-  "clojars",
-  "cpan",
-  "cran",
-  "crates-io",
-  "go-proxy",
-  "hackage",
-  "jsr",
-  "maven",
-  "npm",
-  "nuget",
-  "packagist",
-  "pypi",
+  "clojars", "cpan", "cran", "crates-io", "go-proxy", "hackage", "jsr",
+  "maven", "npm", "nuget", "packagist", "pypi", "terraform",
 ];
 
 const INACTIVE_REGISTRIES = [
-  "rubygems",
-  "hex",
-  "conan",
-  "luarocks",
-  "opam",
-  "julia",
-  "conda-forge",
-  "cocoapods",
-  "terraform",
-  "docker",
+  "rubygems", "hex", "conan", "luarocks", "opam", "julia", "conda-forge",
+  "cocoapods", "docker",
 ];
 
 test("the complete requested registry catalog is present exactly once", () => {
@@ -135,7 +98,7 @@ test("multi-part coordinates round-trip without becoming path syntax", () => {
     ["clojars", "org.clojars.example:artifact"],
     ["packagist", "vendor/package"],
     ["go-proxy", "github.com/owner/module/v2"],
-    ["terraform", "hashicorp/aws/provider"],
+    ["terraform", "hashicorp/consul/aws"],
     ["docker", "library/postgres"],
   ];
 
@@ -191,7 +154,7 @@ test("active registries resolve only through their catalog identities", () => {
 });
 
 test("catalog entries with generic GitHub/CDN hosts stay fail-closed until path semantics are audited", () => {
-  for (const id of ["julia", "cocoapods", "terraform", "docker"]) {
+  for (const id of ["julia", "cocoapods", "docker"]) {
     const entry = NATIVE_REGISTRIES[id];
     assert.ok(entry, id);
     assert.equal(publicNativeHostFromOrg(id), null, id);
@@ -204,4 +167,10 @@ test("Packagist is active only through its audited dispatcher, not generic catal
   assert.deepEqual(host?.artifactHosts, ["codeload.github.com"]);
   assert.equal(host?.artifactHosts.includes("github.com"), false);
   assert.equal(host?.artifactHosts.includes("api.github.com"), false);
+});
+
+test("Terraform activation is module-only and confines artifacts to codeload", () => {
+  const host = publicNativeHostFromOrg("terraform");
+  assert.equal(host?.id, "terraform");
+  assert.deepEqual(host?.artifactHosts, ["codeload.github.com"]);
 });
