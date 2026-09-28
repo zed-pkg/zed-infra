@@ -17,7 +17,7 @@ For package/version reads the edge uses this order:
 
 Catalog membership is not network authorization. The catalog supplies a stable ecosystem ID, aliases, coordinate grammar, and known upstream hosts. The production dispatcher separately controls which ecosystems may perform network reads.
 
-There are currently **12 active adapters** and **10 catalog-only, fail-closed protocols**.
+There are currently **13 production-active adapters** and **9 catalog entries that remain production fail-closed**. Two of those nine, RubyGems and Hex, already have protocol-specific staging adapters and security tests but intentionally remain network-disabled until the shared artifact/extraction contract can represent their native containers truthfully.
 
 | Ecosystem | Edge read adapter | Degraded-mode contract |
 | --- | --- | --- |
@@ -33,18 +33,24 @@ There are currently **12 active adapters** and **10 catalog-only, fail-closed pr
 | CRAN | active | exact per-package `DESCRIPTION`; current `src/contrib` source release only |
 | JSR | active | official npm-compat registry + revision-bound immutable `.tgz` |
 | Packagist | active | Composer p2 metadata + stable versions + repository/commit-bound GitHub ZIP |
-| RubyGems | fail-closed | `.gem` needs truthful artifact/extraction support |
-| Hex | fail-closed | native Hex release container semantics need artifact support |
+| Terraform Registry | active for modules only | exact module versions + `204`/`X-Terraform-Get`; confined GitHub tarball; providers remain closed |
+| RubyGems | staged / production fail-closed | exact public versions + SHA-256 + exact `.gem`; `.gem` needs shared artifact/extraction support |
+| Hex | staged / production fail-closed | public package/release API + retirement filtering + SHA-256 + exact Hex `.tar`; native package-tar support required |
 | ConanCenter | fail-closed | recipe/package-ID protocol required |
-| LuaRocks | fail-closed | rockspec/source protocol and parser required |
+| LuaRocks | fail-closed | repository-wide manifest + rockspec/source/binary selection needs a package-scoped/index-caching design |
 | OPAM | fail-closed | repository index/source mapping required |
 | Julia General | fail-closed | registry tree/package-server semantics required |
 | conda-forge | fail-closed | `.conda`/`.tar.bz2` need truthful artifact/extraction support |
 | CocoaPods | fail-closed | podspec/source URL validation required |
-| Terraform Registry | fail-closed | module/provider protocols are multi-step and providers are platform-specific |
 | Docker Hub | fail-closed | OCI bearer challenge, manifest/index and blob graph semantics required |
 
 Adding a hostname to the catalog never makes that hostname reachable from user-controlled coordinates.
+
+## Native-coordinate route contract
+
+Scoped and multi-part native coordinates are transported as reversible `z1_` base64url path segments. The registry finite-state machine must accept that transport syntax on package/version read routes while continuing to reject raw separators, percent-encoded ambiguity, traversal, oversize values, and malformed coordinates.
+
+The independent witness caught a real integration defect here: adapter-level tests were green, but the original registry route grammar accepted only lowercase Zed slugs, so valid `z1_...` coordinates were rejected before native fallback ran. The shared route classifier/parser now treats only a bounded `z1_[A-Za-z0-9_-]+` segment as native-coordinate transport and leaves ecosystem decoding/validation to the catalog layer. `native-coordinate-routing.test.js` keeps that boundary under regression coverage.
 
 ## Active protocol invariants
 
@@ -86,8 +92,38 @@ Adding a hostname to the catalog never makes that hostname reachable from user-c
 - dev branches are not eligible for degraded resolution;
 - accepted GitHub distributions must carry immutable source/dist references;
 - the adapter rewrites the accepted distribution to exact `https://codeload.github.com/<owner>/<repo>/zip/<commit>` form;
-- owner, repository and commit are carried in the candidate validation context and rechecked before download;
+- owner, repository and commit are carried in the candidate validation context and rechecked through the real registry-proxy artifact-fetch/hashing path;
+- redirects to a different repository or commit are rejected;
 - generic `github.com` or `api.github.com` catalog membership never authorizes an arbitrary download URL.
+
+### Terraform modules
+
+- only three-part module coordinates `<namespace>/<name>/<system>` are accepted by this adapter;
+- package discovery uses the exact public `/v1/modules/<namespace>/<name>/<system>/versions` endpoint;
+- exact versions use `/v1/modules/<namespace>/<name>/<system>/<version>/download`;
+- only an exact HTTPS Terraform Registry `204` response with a bounded `X-Terraform-Get` header is interpreted as download metadata;
+- arbitrary go-getter transports, relative URLs, recursive registry addresses, URL credentials, alternate hosts and ports are rejected;
+- the currently accepted GitHub tarball form is rewritten to an exact repo/ref-bound `codeload.github.com` `tar.gz` URL and then passed through the existing bounded hashing path;
+- provider coordinates such as `hashicorp/aws` do not match the module grammar and do not reach the module API. Provider protocol support remains fail-closed.
+
+## Staged but wire-format-gated protocols
+
+### RubyGems
+
+- metadata uses exact `https://rubygems.org/api/v1/versions/<gem>.json`;
+- only non-prerelease `platform == "ruby"` entries are eligible;
+- the selected release must supply a lowercase SHA-256;
+- artifact URL is exactly `https://rubygems.org/downloads/<gem>-<version>.gem`;
+- the staging candidate deliberately exposes `native_format: "gem"` and no shared `format` value, preventing accidental production activation before `.gem` extraction is supported.
+
+### Hex
+
+- public package metadata uses exact `https://hex.pm/api/packages/<name>` and must identify repository `hexpm`;
+- package-level retirement metadata excludes retired releases from staged version selection;
+- exact release metadata uses `https://hex.pm/api/packages/<name>/releases/<version>` and its lowercase SHA-256 checksum;
+- the package/release URLs returned in metadata must match the requested identity;
+- exact artifact URL is `https://repo.hex.pm/tarballs/<name>-<version>.tar`;
+- the staging candidate deliberately exposes `native_format: "hex-tar"` and no shared `format` value. Hex package tarballs are not mislabeled as `tar.gz`.
 
 ## Security invariants
 
@@ -102,19 +138,20 @@ Public fallback reads are anonymous and fail closed:
 - non-JSON parsers only on exact protocol-specific host/path/content-type surfaces;
 - redirects manually revalidated at every hop;
 - protocol-specific artifact paths, not merely host checks;
+- candidate identity context is carried into artifact validation when the protocol needs repository/reference binding;
 - upstream SHA-256/size required when the native protocol supplies them;
 - otherwise artifact bytes are bounded and SHA-256 is established at the edge before metadata is returned;
-- malformed, private, unpublished, wrong-package, wrong-version and cross-repository responses authorize nothing.
+- malformed, private, unpublished, retired, wrong-package, wrong-version and cross-repository responses authorize nothing.
 
 ## Artifact-format boundary
 
 The current authoritative Rust `ArtifactFormat` exposes only `tar.gz` and `zip`. An adapter may activate only when its install artifact maps truthfully to one of those formats, or after the shared interface and extraction stack are expanded first.
 
-That permits Maven/Clojars JARs, NuGet packages, Go module ZIPs and Packagist GitHub distributions to map to `zip`, and crates.io/Hackage/JSR/CPAN/CRAN archives to map to `tar.gz`. RubyGems `.gem`, native Hex containers, conda `.conda`/`.tar.bz2`, and OCI manifest/layer graphs remain fail-closed. The edge must never relabel an incompatible native container merely to pass deserialization.
+That permits Maven/Clojars JARs, NuGet packages, Go module ZIPs and Packagist GitHub distributions to map to `zip`, and crates.io/Hackage/JSR/CPAN/CRAN/Terraform-module archives to map to `tar.gz`. RubyGems `.gem`, native Hex package `.tar`, conda `.conda`/`.tar.bz2`, and OCI manifest/layer graphs remain fail-closed. The edge must never relabel an incompatible native container merely to pass deserialization.
 
 ## Independent CI witness
 
-Source-org Actions budget is not proof of correctness. `zed-pkg-test/security-adversarial-e2e#19` provides an independent public witness with its own Actions budget.
+Source-org Actions budget is not proof of correctness. `zed-pkg-test/security-adversarial-e2e#21` is the current independent public witness and uses the test org's Actions budget.
 
 The witness:
 
@@ -122,8 +159,10 @@ The witness:
 2. asserts the exact SHA before tests;
 3. installs the locked Worker dependencies;
 4. runs `npm audit --audit-level=low`;
-5. runs catalog, security, wire-contract, production-dispatcher and protocol-specific tests in the fast job;
+5. runs catalog, security, native-coordinate routing, wire-contract, production-dispatcher, staged-protocol and real registry-proxy integration tests in the fast job;
 6. runs the complete Worker suite independently with a longer timeout.
+
+The witness already caught real defects that adapter-only tests missed, including encoded native coordinates being blocked by the shared registry finite-state machine and Packagist candidate validation context being dropped by the artifact-fetch pipeline. Those failures were treated as blockers and fixed rather than being dismissed as Actions-minute noise.
 
 A source-repository cancellation due to Actions minutes is not interpreted as a failing assertion. A witness timeout is reported as a timeout, not a failed registry assertion. Any actual test assertion failure remains a blocker. The witness SHA must be advanced whenever PR 108 changes before its green result can be used as evidence.
 
@@ -140,7 +179,7 @@ Before promotion from catalog-only to production-active, require tests for:
 1. canonical package metadata URL;
 2. canonical exact-version URL or documented package-metadata reuse;
 3. coordinate/traversal validation;
-4. public/private/missing behavior;
+4. public/private/missing/retired behavior as applicable;
 5. exact artifact path binding;
 6. redirect confinement;
 7. metadata size/content-type bounds;
@@ -149,4 +188,5 @@ Before promotion from catalog-only to production-active, require tests for:
 10. truthful `ArtifactFormat`/`VersionMetadata` mapping;
 11. malformed/wrong-package/wrong-version negatives;
 12. registry-proxy integration preserving R2 -> native -> GitHub ordering;
-13. an independent test-org run pinned to the exact source SHA.
+13. encoded-coordinate routing coverage when the ecosystem needs multi-part coordinates;
+14. an independent test-org run pinned to the exact source SHA.

@@ -13,6 +13,7 @@ export const GHCR = "https://ghcr.io";
 export const USER_AGENT = "zed-pkg-edge/1.0 (+https://github.com/zed-pkg/zed-infra)";
 
 const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const NATIVE_COORDINATE = /^z1_[A-Za-z0-9_-]{1,1400}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
 const VERSION = /^[0-9A-Za-z][0-9A-Za-z.+-]*$/;
 const FILENAME = /^[A-Za-z0-9._+-]+$/;
@@ -20,6 +21,10 @@ const GIT_REF = /^[A-Za-z0-9._+-]+$/;
 
 export function isSlug(value) {
   return typeof value === "string" && SLUG.test(value) && value.length <= 128;
+}
+
+function isPackageNameSegment(value) {
+  return isSlug(value) || (typeof value === "string" && NATIVE_COORDINATE.test(value));
 }
 
 export function isSha256(value) {
@@ -145,14 +150,14 @@ const REGISTRY_ROUTE_SPECS = Object.freeze([
   { name: "list_packages", pattern: /^\/v1\/packages$/, methods: ["GET", "HEAD"] },
   {
     name: "get_package",
-    pattern: /^\/v1\/packages\/([a-z0-9-]+)\/([a-z0-9-]+)$/,
+    pattern: /^\/v1\/packages\/([a-z0-9-]+)\/((?:[a-z0-9-]+|z1_[A-Za-z0-9_-]{1,1400}))$/,
     methods: ["GET", "HEAD"],
     fallback: true,
   },
   {
     name: "version",
     pattern:
-      /^\/v1\/packages\/([a-z0-9-]+)\/([a-z0-9-]+)\/versions\/([0-9A-Za-z][0-9A-Za-z.+-]{0,127})$/,
+      /^\/v1\/packages\/([a-z0-9-]+)\/((?:[a-z0-9-]+|z1_[A-Za-z0-9_-]{1,1400}))\/versions\/([0-9A-Za-z][0-9A-Za-z.+-]{0,127})$/,
     methods: ["GET", "HEAD", "PUT"],
     fallback: true,
   },
@@ -299,12 +304,12 @@ export function parseRegistryPath(pathname) {
   if (artifact) return { kind: "get_artifact", sha256: artifact[1] };
 
   const version = path.match(
-    /^\/v1\/packages\/([a-z0-9-]+)\/([a-z0-9-]+)\/versions\/([^/]+)$/,
+    /^\/v1\/packages\/([a-z0-9-]+)\/([^/]+)\/versions\/([^/]+)$/,
   );
   if (
     version &&
     isSlug(version[1]) &&
-    isSlug(version[2]) &&
+    isPackageNameSegment(version[2]) &&
     isSafeSegment(version[3], VERSION)
   ) {
     return {
@@ -315,8 +320,8 @@ export function parseRegistryPath(pathname) {
     };
   }
 
-  const pkg = path.match(/^\/v1\/packages\/([a-z0-9-]+)\/([a-z0-9-]+)$/);
-  if (pkg && isSlug(pkg[1]) && isSlug(pkg[2])) {
+  const pkg = path.match(/^\/v1\/packages\/([a-z0-9-]+)\/([^/]+)$/);
+  if (pkg && isSlug(pkg[1]) && isPackageNameSegment(pkg[2])) {
     return { kind: "get_package", org: pkg[1], name: pkg[2] };
   }
 

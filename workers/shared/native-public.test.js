@@ -13,7 +13,7 @@ import {
   readBoundedJson,
 } from "./native-public.js";
 
-test("production native dispatcher exposes exactly twelve audited adapters", () => {
+test("production native dispatcher exposes exactly thirteen audited adapters", () => {
   assert.deepEqual(publicNativeFallbackIds().sort(), [
     "clojars",
     "cpan",
@@ -27,12 +27,14 @@ test("production native dispatcher exposes exactly twelve audited adapters", () 
     "nuget",
     "packagist",
     "pypi",
+    "terraform",
   ]);
   assert.equal(publicNativeHostFromOrg("clojars")?.id, "clojars");
   assert.equal(publicNativeHostFromOrg("cpan")?.id, "cpan");
   assert.equal(publicNativeHostFromOrg("cran")?.id, "cran");
   assert.equal(publicNativeHostFromOrg("packagist")?.id, "packagist");
   assert.equal(publicNativeHostFromOrg("composer")?.id, "packagist");
+  assert.equal(publicNativeHostFromOrg("terraform")?.id, "terraform");
   for (const token of [
     "rubygems",
     "hex",
@@ -42,7 +44,6 @@ test("production native dispatcher exposes exactly twelve audited adapters", () 
     "julia",
     "conda-forge",
     "cocoapods",
-    "terraform",
     "docker",
   ]) {
     assert.equal(publicNativeHostFromOrg(token), null, token);
@@ -201,6 +202,53 @@ test("production Packagist adapter binds stable package identity to an immutable
       `https://codeload.github.com/upstream/project/zip/${"b".repeat(40)}`,
       name,
       "1.2.3",
+      download,
+    ),
+    false,
+  );
+});
+
+test("production Terraform adapter supports modules while providers stay outside the module grammar", async () => {
+  const host = publicNativeHostFromOrg("terraform");
+  const name = encodeNativeCoordinate("hashicorp/consul/aws");
+  assert.equal(
+    nativePackageMetadataUrl(host, name),
+    "https://registry.terraform.io/v1/modules/hashicorp/consul/aws/versions",
+  );
+  assert.equal(
+    nativeVersionMetadataUrl(host, name, "0.0.1"),
+    "https://registry.terraform.io/v1/modules/hashicorp/consul/aws/0.0.1/download",
+  );
+  assert.equal(nativePackageMetadataUrl(host, encodeNativeCoordinate("hashicorp/aws")), null);
+
+  const response = new Response(null, {
+    status: 204,
+    headers: {
+      "x-terraform-get":
+        "https://api.github.com/repos/hashicorp/terraform-aws-consul/tarball/v0.0.1//*?archive=tar.gz",
+    },
+  });
+  Object.defineProperty(response, "url", {
+    value: "https://registry.terraform.io/v1/modules/hashicorp/consul/aws/0.0.1/download",
+  });
+  const body = await readBoundedJson(response);
+  assert.equal(isPrivateOrUnpublished(host, body), false);
+  const download = downloadFromNativeVersion(host, name, "0.0.1", body);
+  assert.equal(
+    download?.url,
+    "https://codeload.github.com/hashicorp/terraform-aws-consul/tar.gz/v0.0.1",
+  );
+  assert.equal(download?.format, "tar.gz");
+  assert.equal(
+    isAllowedNativeDownloadUrl(host, download.url, name, "0.0.1", download),
+    true,
+  );
+  assert.equal(
+    isAllowedNativeDownloadUrl(
+      host,
+      "https://codeload.github.com/hashicorp/terraform-aws-consul/tar.gz/v0.0.2",
+      name,
+      "0.0.1",
       download,
     ),
     false,

@@ -42,7 +42,7 @@ const BODY = {
   },
 };
 
-test("v4 stages Packagist as the only adapter beyond production v3", () => {
+test("v4 adds only Packagist and Terraform modules beyond production v3", () => {
   assert.deepEqual(publicNativeFallbackIds().sort(), [
     "clojars",
     "cpan",
@@ -56,9 +56,11 @@ test("v4 stages Packagist as the only adapter beyond production v3", () => {
     "nuget",
     "packagist",
     "pypi",
+    "terraform",
   ]);
   assert.equal(publicNativeHostFromOrg("packagist")?.id, "packagist");
   assert.equal(publicNativeHostFromOrg("composer")?.id, "packagist");
+  assert.equal(publicNativeHostFromOrg("terraform")?.id, "terraform");
 });
 
 test("v4 Packagist metadata and package normalization are identity-bound", () => {
