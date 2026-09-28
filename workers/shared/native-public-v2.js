@@ -175,13 +175,16 @@ export function isAllowedNativeDownloadUrl(host, rawUrl, name, version) {
 
 export function isPrivateOrUnpublished(host, body) {
   if (host?.id === "cpan") {
+    const size = Number(body?.size ?? body?.stat?.size ?? 0);
     return !(
       body &&
       typeof body === "object" &&
       cpanVersions(body).length === 1 &&
       typeof body.release === "string" &&
       typeof body.download_url === "string" &&
-      /^[a-f0-9]{64}$/.test(body.checksum_sha256 || "")
+      /^[a-f0-9]{64}$/.test(body.checksum_sha256 || "") &&
+      Number.isSafeInteger(size) &&
+      size > 0
     );
   }
   if (host?.id === "cran") {
