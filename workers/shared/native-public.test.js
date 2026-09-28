@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { encodeNativeCoordinate } from "./native-registry-catalog.js";
 import {
   downloadFromNativeVersion,
   isAllowedNativeDownloadUrl,
@@ -12,8 +13,9 @@ import {
   readBoundedJson,
 } from "./native-public.js";
 
-test("production native dispatcher exposes exactly ten audited adapters", () => {
+test("production native dispatcher exposes exactly eleven audited adapters", () => {
   assert.deepEqual(publicNativeFallbackIds().sort(), [
+    "clojars",
     "cpan",
     "cran",
     "crates-io",
@@ -25,6 +27,7 @@ test("production native dispatcher exposes exactly ten audited adapters", () => 
     "nuget",
     "pypi",
   ]);
+  assert.equal(publicNativeHostFromOrg("clojars")?.id, "clojars");
   assert.equal(publicNativeHostFromOrg("cpan")?.id, "cpan");
   assert.equal(publicNativeHostFromOrg("cran")?.id, "cran");
   for (const token of [
@@ -32,7 +35,6 @@ test("production native dispatcher exposes exactly ten audited adapters", () => 
     "hex",
     "packagist",
     "conan",
-    "clojars",
     "luarocks",
     "opam",
     "julia",
@@ -43,6 +45,44 @@ test("production native dispatcher exposes exactly ten audited adapters", () => 
   ]) {
     assert.equal(publicNativeHostFromOrg(token), null, token);
   }
+});
+
+test("production Clojars adapter binds stable Maven identity and JAR path", () => {
+  const host = publicNativeHostFromOrg("clojars");
+  const name = encodeNativeCoordinate("org.clojars.dantheman:test");
+  const body = {
+    latest_version: "0.0.3-SNAPSHOT",
+    latest_release: "0.0.2",
+    jar_name: "test",
+    group_name: "org.clojars.dantheman",
+    recent_versions: [
+      { version: "0.0.3-SNAPSHOT" },
+      { version: "0.0.2" },
+    ],
+  };
+  assert.equal(
+    nativePackageMetadataUrl(host, name),
+    "https://clojars.org/api/artifacts/org.clojars.dantheman/test",
+  );
+  assert.equal(nativeVersionMetadataUrl(host, name, "0.0.3-SNAPSHOT"), null);
+  assert.equal(isPrivateOrUnpublished(host, body), false);
+  const download = downloadFromNativeVersion(host, name, "0.0.2", body);
+  assert.deepEqual(download, {
+    url: "https://repo.clojars.org/org/clojars/dantheman/test/0.0.2/test-0.0.2.jar",
+    sha256: "",
+    size: 0,
+    format: "zip",
+  });
+  assert.equal(isAllowedNativeDownloadUrl(host, download.url, name, "0.0.2"), true);
+  assert.equal(
+    isAllowedNativeDownloadUrl(
+      host,
+      "https://repo.clojars.org/org/clojars/dantheman/other/0.0.2/other-0.0.2.jar",
+      name,
+      "0.0.2",
+    ),
+    false,
+  );
 });
 
 test("production CPAN adapter requires exact trusted digest and size metadata", () => {
