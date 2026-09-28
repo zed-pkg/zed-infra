@@ -51,11 +51,11 @@ const ACTIVE_REGISTRIES = [
   "maven",
   "npm",
   "nuget",
+  "packagist",
   "pypi",
 ];
 
 const INACTIVE_REGISTRIES = [
-  "packagist",
   "rubygems",
   "hex",
   "conan",
@@ -184,15 +184,24 @@ test("active registries resolve only through their catalog identities", () => {
 
   assert.equal(publicNativeHostFromOrg("maven-central")?.id, "maven");
   assert.equal(publicNativeHostFromOrg("clojure")?.id, "clojars");
+  assert.equal(publicNativeHostFromOrg("composer")?.id, "packagist");
   assert.equal(publicNativeHostFromOrg("golang")?.id, "go-proxy");
   assert.equal(publicNativeHostFromOrg("cabal")?.id, "hackage");
   assert.equal(publicNativeHostFromOrg("deno")?.id, "jsr");
 });
 
-test("registries with generic GitHub/CDN hosts cannot become accidental generic proxies", () => {
-  for (const id of ["packagist", "julia", "cocoapods", "terraform", "docker"]) {
+test("catalog entries with generic GitHub/CDN hosts stay fail-closed until path semantics are audited", () => {
+  for (const id of ["julia", "cocoapods", "terraform", "docker"]) {
     const entry = NATIVE_REGISTRIES[id];
     assert.ok(entry, id);
     assert.equal(publicNativeHostFromOrg(id), null, id);
   }
+});
+
+test("Packagist is active only through its audited dispatcher, not generic catalog host reachability", () => {
+  const host = publicNativeHostFromOrg("packagist");
+  assert.equal(host?.id, "packagist");
+  assert.deepEqual(host?.artifactHosts, ["codeload.github.com"]);
+  assert.equal(host?.artifactHosts.includes("github.com"), false);
+  assert.equal(host?.artifactHosts.includes("api.github.com"), false);
 });
