@@ -62,6 +62,10 @@ test("safe coordinates are transport syntax, never proof that a package is publi
 
   const encodedScope = encodeNativeCoordinate("@scope/name");
   assert.equal(isHighLikelihoodPublic(npm, encodedScope), true);
+
+  const jsr = publicNativeHostFromOrg("jsr");
+  assert.equal(isHighLikelihoodPublic(jsr, encodeNativeCoordinate("@luca/cases")), true);
+  assert.equal(isHighLikelihoodPublic(jsr, "unscoped"), false);
   assert.equal(nativeHeaders().Authorization, undefined);
   assert.equal(nativeHeaders().authorization, undefined);
 });
@@ -140,10 +144,12 @@ test("metadata URLs are canonical and coordinates never become arbitrary paths",
 
   const jsr = publicNativeHostFromOrg("jsr");
   const jsrName = encodeNativeCoordinate("@luca/cases");
+  assert.equal(nativePackageMetadataUrl(jsr, jsrName), "https://npm.jsr.io/@jsr/luca__cases");
   assert.equal(
-    nativePackageMetadataUrl(jsr, jsrName),
-    "https://npm.jsr.io/%40jsr%2Fluca__cases",
+    nativeVersionMetadataUrl(jsr, jsrName, "1.0.0"),
+    "https://npm.jsr.io/@jsr/luca__cases",
   );
+  assert.equal(nativePackageMetadataUrl(jsr, "unscoped"), null);
 });
 
 test("deterministic artifact URLs are bound to package and version", () => {
@@ -186,7 +192,7 @@ test("deterministic artifact URLs are bound to package and version", () => {
   ]);
 });
 
-test("artifact validators reject cross-package, cross-host, query, and credential confusion", () => {
+test("artifact validators reject cross-package, cross-version, query, and credential confusion", () => {
   const npm = publicNativeHostFromOrg("npm");
   assert.equal(
     isAllowedNativeDownloadUrl(
@@ -264,21 +270,20 @@ test("artifact validators reject cross-package, cross-host, query, and credentia
   assert.equal(
     isAllowedNativeDownloadUrl(
       jsr,
-      "https://npm.jsr.io/@jsr/luca__cases/-/luca__cases-1.0.0.tgz",
+      "https://npm.jsr.io/~/11/@jsr/luca__cases/1.0.0.tgz",
       jsrName,
       "1.0.0",
     ),
     true,
   );
-  assert.equal(
-    isAllowedNativeDownloadUrl(
-      jsr,
-      "https://npm.jsr.io/@jsr/other__package/-/other__package-1.0.0.tgz",
-      jsrName,
-      "1.0.0",
-    ),
-    false,
-  );
+  for (const url of [
+    "https://npm.jsr.io/~/11/@jsr/other__package/1.0.0.tgz",
+    "https://npm.jsr.io/~/11/@jsr/luca__cases/2.0.0.tgz",
+    "https://npm.jsr.io/@jsr/luca__cases/-/luca__cases-1.0.0.tgz",
+    "https://npm.jsr.io/~/revision/@jsr/luca__cases/1.0.0.tgz",
+  ]) {
+    assert.equal(isAllowedNativeDownloadUrl(jsr, url, jsrName, "1.0.0"), false, url);
+  }
 });
 
 test("metadata bodies are JSON-only and bounded", async () => {
@@ -353,6 +358,14 @@ test("package metadata exposes only validated installable versions", () => {
   assert.deepEqual(
     versionsFromNativeBody(hackage, { "2.2.3.0": true, "2.2.2.0": false, "../bad": true }),
     ["2.2.3.0", "2.2.2.0"],
+  );
+
+  const jsr = publicNativeHostFromOrg("jsr");
+  assert.deepEqual(
+    versionsFromNativeBody(jsr, {
+      versions: { "1.0.1": {}, "1.0.0": {}, "../bad": {} },
+    }),
+    ["1.0.1", "1.0.0"],
   );
 });
 
@@ -442,10 +455,13 @@ test("version candidates stay inside the Rust tar.gz/zip artifact contract", () 
   const jsr = publicNativeHostFromOrg("jsr");
   const jsrName = encodeNativeCoordinate("@luca/cases");
   const jsrCandidate = downloadFromNativeVersion(jsr, jsrName, "1.0.0", {
-    version: "1.0.0",
-    dist: {
-      tarball: "https://npm.jsr.io/@jsr/luca__cases/-/luca__cases-1.0.0.tgz",
-      integrity: "sha512-edge-will-hash-this",
+    versions: {
+      "1.0.0": {
+        dist: {
+          tarball: "https://npm.jsr.io/~/11/@jsr/luca__cases/1.0.0.tgz",
+          integrity: "sha512-edge-will-hash-this",
+        },
+      },
     },
   });
   assert.equal(jsrCandidate.format, "tar.gz");
