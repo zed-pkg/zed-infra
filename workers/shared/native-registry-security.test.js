@@ -40,6 +40,34 @@ const REQUIRED_REGISTRIES = [
   "docker",
 ];
 
+const ACTIVE_REGISTRIES = [
+  "crates-io",
+  "hackage",
+  "jsr",
+  "maven",
+  "npm",
+  "nuget",
+  "pypi",
+];
+
+const INACTIVE_REGISTRIES = [
+  "packagist",
+  "rubygems",
+  "go-proxy",
+  "hex",
+  "conan",
+  "clojars",
+  "cpan",
+  "luarocks",
+  "opam",
+  "julia",
+  "cran",
+  "conda-forge",
+  "cocoapods",
+  "terraform",
+  "docker",
+];
+
 test("the complete requested registry catalog is present exactly once", () => {
   assert.deepEqual(Object.keys(NATIVE_REGISTRIES).sort(), [...REQUIRED_REGISTRIES].sort());
 
@@ -137,34 +165,25 @@ test("coordinate decoder rejects traversal, malformed UTF-8 and oversized payloa
 });
 
 test("only protocol-audited registries are activated as network fallbacks", () => {
-  assert.deepEqual(publicNativeFallbackIds().sort(), ["crates-io", "npm", "nuget", "pypi"]);
+  assert.deepEqual(publicNativeFallbackIds().sort(), ACTIVE_REGISTRIES);
 
-  for (const id of [
-    "maven",
-    "packagist",
-    "rubygems",
-    "go-proxy",
-    "hex",
-    "conan",
-    "hackage",
-    "clojars",
-    "cpan",
-    "luarocks",
-    "opam",
-    "julia",
-    "cran",
-    "conda-forge",
-    "cocoapods",
-    "jsr",
-    "terraform",
-    "docker",
-  ]) {
+  for (const id of INACTIVE_REGISTRIES) {
     assert.equal(
       publicNativeHostFromOrg(id),
       null,
       `${id} must remain fail-closed until its protocol adapter is audited`,
     );
   }
+});
+
+test("active registries resolve only through their catalog identities", () => {
+  for (const id of ACTIVE_REGISTRIES) {
+    assert.equal(publicNativeHostFromOrg(id)?.id, id, id);
+  }
+
+  assert.equal(publicNativeHostFromOrg("maven-central")?.id, "maven");
+  assert.equal(publicNativeHostFromOrg("cabal")?.id, "hackage");
+  assert.equal(publicNativeHostFromOrg("deno")?.id, "jsr");
 });
 
 test("registries with generic GitHub/CDN hosts cannot become accidental generic proxies", () => {
