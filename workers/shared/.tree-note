@@ -1,1 +1,0 @@
-Existing adapter implementation and tests are promoted by Git blob identity, preserving their exact bytes while the dispatcher layer adds protocol-specific CPAN/CRAN behavior.
