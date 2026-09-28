@@ -18,7 +18,16 @@ import {
   versionsFromNativeBody,
 } from "./native-public.js";
 
-const ACTIVE = ["crates-io", "hackage", "jsr", "maven", "npm", "nuget", "pypi"];
+const ACTIVE = [
+  "crates-io",
+  "go-proxy",
+  "hackage",
+  "jsr",
+  "maven",
+  "npm",
+  "nuget",
+  "pypi",
+];
 
 test("only protocol-audited public registries are active", () => {
   assert.deepEqual(publicNativeFallbackIds().sort(), ACTIVE);
@@ -27,6 +36,7 @@ test("only protocol-audited public registries are active", () => {
   assert.equal(publicNativeHostFromOrg("pip")?.id, "pypi");
   assert.equal(publicNativeHostFromOrg("gradle")?.id, "maven");
   assert.equal(publicNativeHostFromOrg("dotnet")?.id, "nuget");
+  assert.equal(publicNativeHostFromOrg("golang")?.id, "go-proxy");
   assert.equal(publicNativeHostFromOrg("cabal")?.id, "hackage");
   assert.equal(publicNativeHostFromOrg("deno")?.id, "jsr");
 
@@ -34,7 +44,6 @@ test("only protocol-audited public registries are active", () => {
     "rubygems",
     "hex",
     "packagist",
-    "go-proxy",
     "conan",
     "clojars",
     "cpan",
@@ -66,6 +75,15 @@ test("safe coordinates are transport syntax, never proof that a package is publi
   const jsr = publicNativeHostFromOrg("jsr");
   assert.equal(isHighLikelihoodPublic(jsr, encodeNativeCoordinate("@luca/cases")), true);
   assert.equal(isHighLikelihoodPublic(jsr, "unscoped"), false);
+
+  const go = publicNativeHostFromOrg("go-proxy");
+  assert.equal(
+    isHighLikelihoodPublic(go, encodeNativeCoordinate("github.com/Azure/azure-sdk-for-go")),
+    true,
+  );
+  assert.equal(isHighLikelihoodPublic(go, encodeNativeCoordinate("owner/repo")), false);
+  assert.equal(isHighLikelihoodPublic(go, encodeNativeCoordinate("github.com/owner/../repo")), false);
+
   assert.equal(nativeHeaders().Authorization, undefined);
   assert.equal(nativeHeaders().authorization, undefined);
 });
@@ -89,6 +107,11 @@ test("anonymous metadata rejects private, missing, and empty registry responses"
   const nuget = publicNativeHostFromOrg("nuget");
   assert.equal(isPrivateOrUnpublished(nuget, { versions: ["1.0.0"] }), false);
   assert.equal(isPrivateOrUnpublished(nuget, { versions: [] }), true);
+
+  const go = publicNativeHostFromOrg("go-proxy");
+  assert.equal(isPrivateOrUnpublished(go, { versions: ["v0.1.0"] }), false);
+  assert.equal(isPrivateOrUnpublished(go, { Version: "v0.1.0", Time: "2026-01-01T00:00:00Z" }), false);
+  assert.equal(isPrivateOrUnpublished(go, { versions: [] }), true);
 
   const hackage = publicNativeHostFromOrg("hackage");
   assert.equal(isPrivateOrUnpublished(hackage, { "2.2.3.0": true }), false);
@@ -135,6 +158,18 @@ test("metadata URLs are canonical and coordinates never become arbitrary paths",
     nativePackageMetadataUrl(nuget, "Newtonsoft.Json"),
     "https://api.nuget.org/v3-flatcontainer/newtonsoft.json/index.json",
   );
+
+  const go = publicNativeHostFromOrg("go-proxy");
+  const goName = encodeNativeCoordinate("github.com/Azure/azure-sdk-for-go");
+  assert.equal(
+    nativePackageMetadataUrl(go, goName),
+    "https://proxy.golang.org/github.com/!azure/azure-sdk-for-go/@v/list",
+  );
+  assert.equal(
+    nativeVersionMetadataUrl(go, goName, "v1.2.3"),
+    "https://proxy.golang.org/github.com/!azure/azure-sdk-for-go/@v/v1.2.3.info",
+  );
+  assert.equal(nativePackageMetadataUrl(go, encodeNativeCoordinate("owner/repo")), null);
 
   const hackage = publicNativeHostFromOrg("hackage");
   assert.equal(
@@ -185,6 +220,12 @@ test("deterministic artifact URLs are bound to package and version", () => {
       "https://api.nuget.org/v3-flatcontainer/newtonsoft.json/13.0.3/newtonsoft.json.13.0.3.nupkg",
     ],
   );
+
+  const go = publicNativeHostFromOrg("go-proxy");
+  const goName = encodeNativeCoordinate("github.com/Azure/azure-sdk-for-go");
+  assert.deepEqual(nativeTarballUrls(go, goName, "v1.2.3", "v1.2.3.zip"), [
+    "https://proxy.golang.org/github.com/!azure/azure-sdk-for-go/@v/v1.2.3.zip",
+  ]);
 
   const hackage = publicNativeHostFromOrg("hackage");
   assert.deepEqual(nativeTarballUrls(hackage, "aeson", "2.2.3.0", "aeson-2.2.3.0.tar.gz"), [
@@ -254,6 +295,26 @@ test("artifact validators reject cross-package, cross-version, query, and creden
     false,
   );
 
+  const go = publicNativeHostFromOrg("go-proxy");
+  const goName = encodeNativeCoordinate("github.com/Azure/azure-sdk-for-go");
+  assert.equal(
+    isAllowedNativeDownloadUrl(
+      go,
+      "https://proxy.golang.org/github.com/!azure/azure-sdk-for-go/@v/v1.2.3.zip",
+      goName,
+      "v1.2.3",
+    ),
+    true,
+  );
+  for (const url of [
+    "https://proxy.golang.org/github.com/!azure/other/@v/v1.2.3.zip",
+    "https://proxy.golang.org/github.com/!azure/azure-sdk-for-go/@v/v1.2.4.zip",
+    "https://proxy.golang.org/github.com/!azure/azure-sdk-for-go/@v/v1.2.3.zip?download=1",
+    "https://proxy.golang.org.evil.test/github.com/!azure/azure-sdk-for-go/@v/v1.2.3.zip",
+  ]) {
+    assert.equal(isAllowedNativeDownloadUrl(go, url, goName, "v1.2.3"), false, url);
+  }
+
   const hackage = publicNativeHostFromOrg("hackage");
   assert.equal(
     isAllowedNativeDownloadUrl(
@@ -286,7 +347,7 @@ test("artifact validators reject cross-package, cross-version, query, and creden
   }
 });
 
-test("metadata bodies are JSON-only and bounded", async () => {
+test("metadata bodies are bounded and Go text parsing is confined to the canonical list endpoint", async () => {
   const good = new Response(JSON.stringify({ ok: true }), {
     headers: { "content-type": "application/json", "content-length": "11" },
   });
@@ -299,6 +360,30 @@ test("metadata bodies are JSON-only and bounded", async () => {
     headers: { "content-type": "application/json", "content-length": "2000000" },
   });
   assert.equal(await readBoundedJson(oversized), null);
+
+  const goList = new Response("v0.1.0\nv0.2.0\n../bad\n", {
+    headers: { "content-type": "text/plain; charset=utf-8" },
+  });
+  Object.defineProperty(goList, "url", {
+    value: "https://proxy.golang.org/golang.org/x/mod/@v/list",
+  });
+  assert.deepEqual(await readBoundedJson(goList), { versions: ["v0.1.0", "v0.2.0"] });
+
+  const wrongHostText = new Response("v0.1.0\n", {
+    headers: { "content-type": "text/plain" },
+  });
+  Object.defineProperty(wrongHostText, "url", {
+    value: "https://evil.test/golang.org/x/mod/@v/list",
+  });
+  assert.equal(await readBoundedJson(wrongHostText), null);
+
+  const wrongPathText = new Response("v0.1.0\n", {
+    headers: { "content-type": "text/plain" },
+  });
+  Object.defineProperty(wrongPathText, "url", {
+    value: "https://proxy.golang.org/golang.org/x/mod/@v/v0.1.0.mod",
+  });
+  assert.equal(await readBoundedJson(wrongPathText), null);
 });
 
 test("package metadata exposes only validated installable versions", () => {
@@ -352,6 +437,14 @@ test("package metadata exposes only validated installable versions", () => {
       mavenName,
     ),
     ["33.4.8-jre", "33.4.7-jre"],
+  );
+
+  const go = publicNativeHostFromOrg("go-proxy");
+  assert.deepEqual(
+    versionsFromNativeBody(go, {
+      versions: ["v1.2.3", "v1.2.2", "bad", "../escape"],
+    }),
+    ["v1.2.3", "v1.2.2"],
   );
 
   const hackage = publicNativeHostFromOrg("hackage");
@@ -446,6 +539,26 @@ test("version candidates stay inside the Rust tar.gz/zip artifact contract", () 
   });
   assert.equal(nugetCandidate.format, "zip");
 
+  const go = publicNativeHostFromOrg("go-proxy");
+  const goName = encodeNativeCoordinate("github.com/Azure/azure-sdk-for-go");
+  const goCandidate = downloadFromNativeVersion(go, goName, "v1.2.3", {
+    Version: "v1.2.3",
+    Time: "2026-01-02T03:04:05Z",
+  });
+  assert.equal(goCandidate.format, "zip");
+  assert.equal(
+    goCandidate.url,
+    "https://proxy.golang.org/github.com/!azure/azure-sdk-for-go/@v/v1.2.3.zip",
+  );
+  assert.equal(goCandidate.published_at, "2026-01-02T03:04:05.000Z");
+  assert.equal(
+    downloadFromNativeVersion(go, goName, "v1.2.3", {
+      Version: "v1.2.4",
+      Time: "2026-01-02T03:04:05Z",
+    }),
+    null,
+  );
+
   const hackage = publicNativeHostFromOrg("hackage");
   const hackageCandidate = downloadFromNativeVersion(hackage, "aeson", "2.2.3.0", {
     "2.2.3.0": true,
@@ -472,6 +585,7 @@ test("version candidates stay inside the Rust tar.gz/zip artifact contract", () 
     pypiCandidate,
     mavenCandidate,
     nugetCandidate,
+    goCandidate,
     hackageCandidate,
     jsrCandidate,
   ]) {
