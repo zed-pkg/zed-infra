@@ -18,6 +18,8 @@ import {
 const NAME = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$/;
 const SAFE_NATIVE_VERSION = /^[0-9A-Za-z][0-9A-Za-z.!_+~-]{0,127}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
+const GO_PATH_SEGMENT = /^[A-Za-z0-9._~-]+$/;
+const GO_FIRST_SEGMENT = /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/;
 export const MAX_NATIVE_METADATA_BYTES = 1024 * 1024;
 
 function activeRegistry(id, metadata, artifactHosts) {
@@ -44,6 +46,9 @@ export const PUBLIC_NATIVE_HOSTS = Object.freeze({
   ]),
   nuget: activeRegistry("nuget", "https://api.nuget.org/v3-flatcontainer", [
     "api.nuget.org",
+  ]),
+  "go-proxy": activeRegistry("go-proxy", "https://proxy.golang.org", [
+    "proxy.golang.org",
   ]),
   hackage: activeRegistry("hackage", "https://hackage.haskell.org/package", [
     "hackage.haskell.org",
@@ -103,6 +108,9 @@ export function isHighLikelihoodPublic(host, name) {
   if (host?.id === "jsr") {
     return Boolean(jsrCompatCoordinate(coordinate));
   }
+  if (host?.id === "go-proxy") {
+    return Boolean(goEscapeModulePath(coordinate));
+  }
   return true;
 }
 
@@ -127,6 +135,13 @@ export function nativePackageMetadataUrl(host, name) {
       return mavenSearchUrl(host, coordinate, null);
     case "nuget":
       return `${host.metadata}/${encodeURIComponent(coordinate.toLowerCase())}/index.json`;
+    case "go-proxy": {
+      const escaped = goEscapeModulePath(coordinate);
+      if (!escaped) {
+        return null;
+      }
+      return `${host.metadata}/${escaped}/@v/list`;
+    }
     case "hackage":
       return `${host.metadata}/${encodeURIComponent(coordinate)}`;
     case "jsr":
@@ -153,12 +168,17 @@ export function nativeVersionMetadataUrl(host, name, version) {
       return mavenSearchUrl(host, coordinate, version);
     case "nuget":
       return `${host.metadata}/${encodeURIComponent(coordinate.toLowerCase())}/index.json`;
+    case "go-proxy": {
+      const escapedPath = goEscapeModulePath(coordinate);
+      const escapedVersion = goEscapeVersion(version);
+      if (!escapedPath || !escapedVersion) {
+        return null;
+      }
+      return `${host.metadata}/${escapedPath}/@v/${escapedVersion}.info`;
+    }
     case "hackage":
       return `${host.metadata}/${encodeURIComponent(coordinate)}`;
     case "jsr":
-      // JSR's documented npm-compatibility endpoint is a package packument.
-      // Reuse it and select body.versions[version] rather than depending on an
-      // undocumented version-path variant of the npm registry API.
       return jsrPackumentUrl(host, coordinate);
     default:
       return null;
@@ -215,6 +235,18 @@ export function nativeTarballUrls(host, name, version, filename) {
       return [
         `https://api.nuget.org/v3-flatcontainer/${encodeURIComponent(id)}/${encodeURIComponent(normalizedVersion)}/${encodeURIComponent(expected)}`,
       ];
+    }
+    case "go-proxy": {
+      const escapedPath = goEscapeModulePath(coordinate);
+      const escapedVersion = goEscapeVersion(version);
+      if (!escapedPath || !escapedVersion) {
+        return [];
+      }
+      const expected = `${escapedVersion}.zip`;
+      if (filename && filename !== expected) {
+        return [];
+      }
+      return [`https://proxy.golang.org/${escapedPath}/@v/${expected}`];
     }
     case "hackage": {
       const expected = `${coordinate}-${version}.tar.gz`;
@@ -301,6 +333,13 @@ export function isAllowedNativeDownloadUrl(host, rawUrl, name, version) {
     return nativeTarballUrls(host, name, version)[0] === url.toString();
   }
 
+  if (host.id === "go-proxy") {
+    if (url.hostname !== "proxy.golang.org") {
+      return false;
+    }
+    return nativeTarballUrls(host, name, version)[0] === url.toString();
+  }
+
   if (host.id === "hackage") {
     if (url.hostname !== "hackage.haskell.org") {
       return false;
@@ -347,6 +386,11 @@ export function isPrivateOrUnpublished(host, body) {
       return !Array.isArray(body.response?.docs) || body.response.docs.length === 0;
     case "nuget":
       return !Array.isArray(body.versions) || body.versions.length === 0;
+    case "go-proxy":
+      return !(
+        (Array.isArray(body.versions) && body.versions.length > 0) ||
+        (typeof body.Version === "string" && isSafeNativeVersion(body.Version))
+      );
     case "hackage":
       return Object.keys(body).filter(isSafeNativeVersion).length === 0;
     default:
@@ -356,9 +400,6 @@ export function isPrivateOrUnpublished(host, body) {
 
 export async function readBoundedJson(response, maxBytes = MAX_NATIVE_METADATA_BYTES) {
   const contentType = response.headers.get("content-type") || "";
-  if (!/^application\/(?:[a-z0-9.+-]*\+)?json(?:\s*;|$)/i.test(contentType)) {
-    return null;
-  }
   const declared = Number(response.headers.get("content-length") || 0);
   if (declared > maxBytes) {
     return null;
@@ -367,11 +408,26 @@ export async function readBoundedJson(response, maxBytes = MAX_NATIVE_METADATA_B
   if (bytes.byteLength > maxBytes) {
     return null;
   }
-  try {
-    return JSON.parse(new TextDecoder().decode(bytes));
-  } catch {
-    return null;
+
+  if (/^application\/(?:[a-z0-9.+-]*\+)?json(?:\s*;|$)/i.test(contentType)) {
+    try {
+      return JSON.parse(new TextDecoder().decode(bytes));
+    } catch {
+      return null;
+    }
   }
+
+  if (isGoVersionListResponse(response, contentType)) {
+    const text = new TextDecoder().decode(bytes);
+    const versions = text
+      .split(/\r?\n/)
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0)
+      .filter(isSafeGoVersion);
+    return { versions };
+  }
+
+  return null;
 }
 
 export function versionsFromNativeBody(host, body, name = null) {
@@ -402,6 +458,10 @@ export function versionsFromNativeBody(host, body, name = null) {
     case "nuget":
       return (body.versions || [])
         .filter(isSafeNativeVersion)
+        .sort(sortVersionsDesc);
+    case "go-proxy":
+      return (body.versions || [])
+        .filter(isSafeGoVersion)
         .sort(sortVersionsDesc);
     case "hackage":
       return Object.keys(body)
@@ -544,6 +604,23 @@ export function downloadFromNativeVersion(host, name, version, body) {
     };
   }
 
+  if (host?.id === "go-proxy") {
+    if (body.Version !== version || !isSafeGoVersion(body.Version)) {
+      return null;
+    }
+    const url = nativeTarballUrls(host, name, version)[0];
+    if (!url || !isAllowedNativeDownloadUrl(host, url, name, version)) {
+      return null;
+    }
+    return {
+      url,
+      sha256: "",
+      size: 0,
+      format: "zip",
+      published_at: safeRfc3339(body.Time),
+    };
+  }
+
   if (host?.id === "hackage") {
     if (!Object.prototype.hasOwnProperty.call(body, version)) {
       return null;
@@ -659,6 +736,9 @@ function publicRepoUrl(host, name, body) {
   }
   if (host.id === "nuget") {
     return `https://www.nuget.org/packages/${encodeURIComponent(coordinate)}`;
+  }
+  if (host.id === "go-proxy") {
+    return `https://${coordinate}`;
   }
   if (host.id === "hackage") {
     return `https://hackage.haskell.org/package/${encodeURIComponent(coordinate)}`;
@@ -800,6 +880,84 @@ function jsrPackumentUrl(host, coordinate) {
   }
   const slug = compat.slice("@jsr/".length);
   return `${host.metadata}/@jsr/${encodeURIComponent(slug)}`;
+}
+
+function goEscapeModulePath(coordinate) {
+  if (typeof coordinate !== "string" || coordinate.includes("!") || coordinate.includes("\\")) {
+    return null;
+  }
+  const parts = coordinate.split("/");
+  if (parts.length < 2 || parts.length > 32 || !GO_FIRST_SEGMENT.test(parts[0]) || !parts[0].includes(".")) {
+    return null;
+  }
+  if (!parts.slice(1).every((part) => GO_PATH_SEGMENT.test(part))) {
+    return null;
+  }
+  return escapeGoUppercase(coordinate);
+}
+
+function goEscapeVersion(version) {
+  if (!isSafeGoVersion(version) || version.includes("!")) {
+    return null;
+  }
+  return escapeGoUppercase(version);
+}
+
+function escapeGoUppercase(value) {
+  let result = "";
+  for (const character of value) {
+    if (character >= "A" && character <= "Z") {
+      result += `!${character.toLowerCase()}`;
+    } else {
+      result += character;
+    }
+  }
+  return result;
+}
+
+function isSafeGoVersion(value) {
+  return (
+    isSafeNativeVersion(value) &&
+    value.startsWith("v") &&
+    !value.includes("!") &&
+    /^[vV][0-9A-Za-z.+~-]+$/.test(value)
+  );
+}
+
+function isGoVersionListResponse(response, contentType) {
+  if (!/^text\/plain(?:\s*;|$)/i.test(contentType)) {
+    return false;
+  }
+  if (typeof response.url !== "string" || !response.url) {
+    return false;
+  }
+  let url;
+  try {
+    url = new URL(response.url);
+  } catch {
+    return false;
+  }
+  return (
+    url.protocol === "https:" &&
+    url.hostname === "proxy.golang.org" &&
+    !url.username &&
+    !url.password &&
+    !url.port &&
+    !url.search &&
+    !url.hash &&
+    url.pathname.endsWith("/@v/list")
+  );
+}
+
+function safeRfc3339(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) {
+    return null;
+  }
+  return new Date(timestamp).toISOString();
 }
 
 function safeDecodedPath(pathname) {
