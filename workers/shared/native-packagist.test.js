@@ -2,114 +2,175 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  expandPackagistVersions,
   isAllowedPackagistDownloadUrl,
   packagistCoordinate,
   packagistDescription,
   packagistDownload,
+  packagistLatest,
   packagistMetadataUrl,
   packagistRepoUrl,
   packagistVersions,
 } from "./native-packagist.js";
 
-const COORDINATE = "acme/widget";
-const SHA = "a".repeat(40);
-const BODY = {
-  package: {
-    name: COORDINATE,
-    description: "A stable Composer package",
-    repository: "https://github.com/acme/widget",
-    versions: {
-      "1.2.3": {
-        name: COORDINATE,
-        version: "1.2.3",
-        time: "2026-09-01T12:00:00+00:00",
-        source: {
-          type: "git",
-          url: "https://github.com/acme/widget.git",
-          reference: SHA,
-        },
-        dist: {
-          type: "zip",
-          url: `https://api.github.com/repos/acme/widget/zipball/${SHA}`,
-          reference: SHA,
-        },
-      },
-      "dev-main": {
-        name: COORDINATE,
-        version: "dev-main",
-        source: {
-          type: "git",
-          url: "https://github.com/acme/widget.git",
-          reference: SHA,
-        },
-        dist: {
-          type: "zip",
-          url: `https://api.github.com/repos/acme/widget/zipball/${SHA}`,
-          reference: SHA,
-        },
-      },
-    },
-  },
-};
+const COORDINATE = "vendor/package";
+const REF_1 = "a".repeat(40);
+const REF_2 = "b".repeat(40);
 
-test("Packagist metadata URL is canonical and coordinate-safe", () => {
-  assert.deepEqual(packagistCoordinate(COORDINATE), ["acme", "widget"]);
+function version({ version, reference, description = "Package description", shasum = "" }) {
+  return {
+    name: COORDINATE,
+    description,
+    version,
+    time: "2026-01-02T03:04:05+00:00",
+    source: {
+      type: "git",
+      url: "https://github.com/upstream/project.git",
+      reference,
+    },
+    dist: {
+      type: "zip",
+      url: `https://api.github.com/repos/upstream/project/zipball/${reference}`,
+      reference,
+      shasum,
+    },
+  };
+}
+
+test("Packagist v2 metadata URL is exact and path-safe", () => {
+  assert.deepEqual(packagistCoordinate(COORDINATE), ["vendor", "package"]);
   assert.equal(
     packagistMetadataUrl(COORDINATE),
-    "https://packagist.org/packages/acme/widget.json",
+    "https://repo.packagist.org/p2/vendor/package.json",
   );
-  for (const value of ["acme", "../widget/pkg", "acme/../widget", "acme/widget/extra", "acme\\widget"]){
-    assert.equal(packagistMetadataUrl(value), null, value);
+  for (const bad of [
+    "vendor",
+    "../vendor/package",
+    "vendor/../package",
+    "vendor/package/extra",
+    "vendor\\package",
+  ]) {
+    assert.equal(packagistMetadataUrl(bad), null, bad);
   }
 });
 
-test("Packagist activates only stable exact GitHub-backed ZIP releases", () => {
-  assert.deepEqual(packagistVersions(BODY, COORDINATE), ["1.2.3"]);
-  assert.equal(packagistDescription(BODY), "A stable Composer package");
-  assert.equal(packagistRepoUrl(BODY, COORDINATE), "https://github.com/acme/widget");
+test("Composer 2 minified metadata expands with shallow inheritance and __unset", () => {
+  const first = version({ version: "2.0.0", reference: REF_2, description: "Newest" });
+  const body = {
+    minified: "composer/2.0",
+    packages: {
+      [COORDINATE]: [
+        first,
+        {
+          version: "1.0.0",
+          source: { ...first.source, reference: REF_1 },
+          dist: {
+            ...first.dist,
+            url: `https://api.github.com/repos/upstream/project/zipball/${REF_1}`,
+            reference: REF_1,
+          },
+          description: "__unset",
+        },
+      ],
+    },
+  };
+  const expanded = expandPackagistVersions(body, COORDINATE);
+  assert.equal(expanded.length, 2);
+  assert.equal(expanded[0].description, "Newest");
+  assert.equal(expanded[1].description, undefined);
+  assert.equal(expanded[1].name, COORDINATE);
+  assert.equal(expanded[1].source.reference, REF_1);
+  assert.equal(expanded[1].dist.reference, REF_1);
+  assert.deepEqual(packagistVersions(body, COORDINATE), ["2.0.0", "1.0.0"]);
+  assert.equal(packagistLatest(body, COORDINATE, ["2.0.0", "1.0.0"]), "2.0.0");
+  assert.equal(packagistDescription(body, COORDINATE), "Newest");
+  assert.equal(packagistRepoUrl(body, COORDINATE), "https://github.com/upstream/project");
+});
 
-  const download = packagistDownload(BODY, COORDINATE, "1.2.3");
+test("Packagist download binds package metadata source dist and immutable reference", () => {
+  const body = {
+    packages: {
+      [COORDINATE]: [version({ version: "2.0.0", reference: REF_2 })],
+    },
+  };
+  const download = packagistDownload(body, COORDINATE, "2.0.0");
   assert.deepEqual(download, {
-    url: `https://codeload.github.com/acme/widget/legacy.zip/${SHA}`,
+    url: `https://codeload.github.com/upstream/project/zip/${REF_2}`,
     sha256: "",
     size: 0,
     format: "zip",
-    published_at: "2026-09-01T12:00:00.000Z",
-    reference: SHA,
+    published_at: "2026-01-02T03:04:05.000Z",
+    validation: {
+      kind: "packagist-github-zip",
+      owner: "upstream",
+      repo: "project",
+      reference: REF_2,
+    },
   });
-  assert.equal(packagistDownload(BODY, COORDINATE, "dev-main"), null);
+  assert.equal(isAllowedPackagistDownloadUrl(download.url, download), true);
 });
 
-test("Packagist fails closed on identity, format, source, and reference mismatches", () => {
-  const row = BODY.package.versions["1.2.3"];
-  const cases = [
-    { ...BODY, package: { ...BODY.package, name: "other/widget" } },
-    { ...BODY, package: { ...BODY.package, repository: "https://github.com/other/widget" } },
-    { ...BODY, package: { ...BODY.package, versions: { "1.2.3": { ...row, dist: { ...row.dist, type: "tar" } } } } },
-    { ...BODY, package: { ...BODY.package, versions: { "1.2.3": { ...row, source: { ...row.source, url: "https://github.com/other/widget.git" } } } } },
-    { ...BODY, package: { ...BODY.package, versions: { "1.2.3": { ...row, source: { ...row.source, reference: "b".repeat(40) } } } } },
-    { ...BODY, package: { ...BODY.package, versions: { "1.2.3": { ...row, dist: { ...row.dist, url: "https://evil.test/widget.zip" } } } } },
+test("Packagist rejects wrong package identity repository reference and alternate dist representations", () => {
+  const good = version({ version: "2.0.0", reference: REF_2 });
+  const badRows = [
+    { ...good, name: "other/package" },
+    { ...good, source: { ...good.source, url: "https://github.com/other/project.git" } },
+    { ...good, source: { ...good.source, reference: REF_1 } },
+    { ...good, dist: { ...good.dist, type: "tar" } },
+    { ...good, dist: { ...good.dist, url: `https://evil.test/upstream/project/${REF_2}.zip` } },
+    { ...good, dist: { ...good.dist, reference: REF_1 } },
+    { ...good, dist: { ...good.dist, shasum: "deadbeef" } },
+    { ...good, source: { ...good.source, url: "http://github.com/upstream/project.git" } },
   ];
-  for (const body of cases) {
-    assert.equal(packagistDownload(body, COORDINATE, "1.2.3"), null);
+  for (const row of badRows) {
+    const body = { packages: { [COORDINATE]: [row] } };
+    assert.equal(packagistDownload(body, COORDINATE, "2.0.0"), null);
+    assert.deepEqual(packagistVersions(body, COORDINATE), []);
   }
 });
 
-test("Packagist codeload validator binds repository and optional exact SHA", () => {
-  const good = `https://codeload.github.com/acme/widget/legacy.zip/${SHA}`;
-  assert.equal(isAllowedPackagistDownloadUrl(good, COORDINATE, "1.2.3", SHA), true);
-  assert.equal(isAllowedPackagistDownloadUrl(good, COORDINATE, "1.2.3"), true);
+test("Packagist codeload validator rejects host path credential and candidate confusion", () => {
+  const body = {
+    packages: {
+      [COORDINATE]: [version({ version: "2.0.0", reference: REF_2 })],
+    },
+  };
+  const candidate = packagistDownload(body, COORDINATE, "2.0.0");
+  const good = candidate.url;
+  assert.equal(isAllowedPackagistDownloadUrl(good, candidate), true);
 
   for (const url of [
-    `http://codeload.github.com/acme/widget/legacy.zip/${SHA}`,
-    `https://codeload.github.com.evil.test/acme/widget/legacy.zip/${SHA}`,
-    `https://codeload.github.com/other/widget/legacy.zip/${SHA}`,
-    `https://codeload.github.com/acme/other/legacy.zip/${SHA}`,
-    `https://codeload.github.com/acme/widget/legacy.zip/${"b".repeat(40)}`,
-    `https://codeload.github.com/acme/widget/legacy.zip/${SHA}?x=1`,
-    `https://user:pass@codeload.github.com/acme/widget/legacy.zip/${SHA}`,
-    `https://api.github.com/repos/acme/widget/zipball/${SHA}`,
+    `http://codeload.github.com/upstream/project/zip/${REF_2}`,
+    `https://codeload.github.com.evil.test/upstream/project/zip/${REF_2}`,
+    `https://codeload.github.com/other/project/zip/${REF_2}`,
+    `https://codeload.github.com/upstream/other/zip/${REF_2}`,
+    `https://codeload.github.com/upstream/project/zip/${REF_1}`,
+    `https://codeload.github.com/upstream/project/zip/${REF_2}?x=1`,
+    `https://user:pass@codeload.github.com/upstream/project/zip/${REF_2}`,
   ]) {
-    assert.equal(isAllowedPackagistDownloadUrl(url, COORDINATE, "1.2.3", SHA), false, url);
+    assert.equal(isAllowedPackagistDownloadUrl(url, candidate), false, url);
   }
+  assert.equal(
+    isAllowedPackagistDownloadUrl(good, {
+      ...candidate,
+      validation: { ...candidate.validation, repo: "other" },
+    }),
+    false,
+  );
+});
+
+test("unknown metadata-minifier versions and dev versions fail closed", () => {
+  const body = {
+    minified: "composer/9.0",
+    packages: { [COORDINATE]: [version({ version: "2.0.0", reference: REF_2 })] },
+  };
+  assert.deepEqual(expandPackagistVersions(body, COORDINATE), []);
+
+  const dev = {
+    packages: {
+      [COORDINATE]: [version({ version: "dev-main", reference: REF_2 })],
+    },
+  };
+  assert.equal(packagistDownload(dev, COORDINATE, "dev-main"), null);
+  assert.deepEqual(packagistVersions(dev, COORDINATE), []);
 });
