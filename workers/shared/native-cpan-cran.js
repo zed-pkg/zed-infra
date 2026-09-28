@@ -47,10 +47,13 @@ export function cpanDownload(body, name, requestedVersion) {
     return null;
   }
   const size = Number(body.size ?? body.stat?.size ?? 0);
+  if (!Number.isSafeInteger(size) || size <= 0) {
+    return null;
+  }
   return {
     url: url.toString(),
     sha256: body.checksum_sha256,
-    size: Number.isSafeInteger(size) && size > 0 ? size : 0,
+    size,
     format: "tar.gz",
     published_at: safeDate(body.date),
   };
