@@ -27,12 +27,13 @@ test("MetaCPAN metadata URLs stay on the canonical API endpoint", () => {
   assert.equal(cpanMetadataUrl("HTTP-Message", "../6.36"), null);
 });
 
-test("MetaCPAN download metadata binds distribution version checksum and archive path", () => {
+test("MetaCPAN download metadata binds distribution version checksum size and archive path", () => {
   const candidate = cpanDownload(
     {
       version: "6.36",
       release: "HTTP-Message-6.36",
       checksum_sha256: "a".repeat(64),
+      size: 12345,
       download_url:
         "https://cpan.metacpan.org/authors/id/O/OA/OALDERS/HTTP-Message-6.36.tar.gz",
       date: "2026-01-02T03:04:05Z",
@@ -43,7 +44,7 @@ test("MetaCPAN download metadata binds distribution version checksum and archive
   assert.deepEqual(candidate, {
     url: "https://cpan.metacpan.org/authors/id/O/OA/OALDERS/HTTP-Message-6.36.tar.gz",
     sha256: "a".repeat(64),
-    size: 0,
+    size: 12345,
     format: "tar.gz",
     published_at: "2026-01-02T03:04:05.000Z",
   });
@@ -53,6 +54,7 @@ test("MetaCPAN download metadata binds distribution version checksum and archive
       version: "6.35",
       release: "HTTP-Message-6.35",
       checksum_sha256: "a".repeat(64),
+      size: 12345,
       download_url:
         "https://cpan.metacpan.org/authors/id/O/OA/OALDERS/HTTP-Message-6.35.tar.gz",
     },
@@ -60,12 +62,14 @@ test("MetaCPAN download metadata binds distribution version checksum and archive
       version: "6.36",
       release: "Other-6.36",
       checksum_sha256: "a".repeat(64),
+      size: 12345,
       download_url: "https://cpan.metacpan.org/authors/id/O/OA/OALDERS/Other-6.36.tar.gz",
     },
     {
       version: "6.36",
       release: "HTTP-Message-6.36",
       checksum_sha256: "bad",
+      size: 12345,
       download_url:
         "https://cpan.metacpan.org/authors/id/O/OA/OALDERS/HTTP-Message-6.36.tar.gz",
     },
@@ -73,12 +77,22 @@ test("MetaCPAN download metadata binds distribution version checksum and archive
       version: "6.36",
       release: "HTTP-Message-6.36",
       checksum_sha256: "a".repeat(64),
+      size: 0,
+      download_url:
+        "https://cpan.metacpan.org/authors/id/O/OA/OALDERS/HTTP-Message-6.36.tar.gz",
+    },
+    {
+      version: "6.36",
+      release: "HTTP-Message-6.36",
+      checksum_sha256: "a".repeat(64),
+      size: 12345,
       download_url: "https://evil.test/HTTP-Message-6.36.tar.gz",
     },
     {
       version: "6.36",
       release: "HTTP-Message-6.36",
       checksum_sha256: "a".repeat(64),
+      size: 12345,
       download_url:
         "https://cpan.metacpan.org/authors/id/O/OA/OALDERS/Other-6.36.tar.gz",
     },
@@ -86,6 +100,7 @@ test("MetaCPAN download metadata binds distribution version checksum and archive
       version: "6.36",
       release: "HTTP-Message-6.36",
       checksum_sha256: "a".repeat(64),
+      size: 12345,
       download_url:
         "https://user:pass@cpan.metacpan.org/authors/id/O/OA/OALDERS/HTTP-Message-6.36.tar.gz",
     },
