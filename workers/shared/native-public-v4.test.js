@@ -14,31 +14,31 @@ import {
   versionsFromNativeBody,
 } from "./native-public-v4.js";
 
-const COORDINATE = "acme/widget";
+const COORDINATE = "vendor/package";
 const NAME = encodeNativeCoordinate(COORDINATE);
 const SHA = "a".repeat(40);
 const BODY = {
-  package: {
-    name: COORDINATE,
-    description: "A stable Composer package",
-    repository: "https://github.com/acme/widget",
-    versions: {
-      "1.2.3": {
+  minified: "composer/2.0",
+  packages: {
+    [COORDINATE]: [
+      {
         name: COORDINATE,
         version: "1.2.3",
+        description: "A stable Composer package",
         time: "2026-09-01T12:00:00+00:00",
         source: {
           type: "git",
-          url: "https://github.com/acme/widget.git",
+          url: "https://github.com/upstream/project.git",
           reference: SHA,
         },
         dist: {
           type: "zip",
-          url: `https://api.github.com/repos/acme/widget/zipball/${SHA}`,
+          url: `https://api.github.com/repos/upstream/project/zipball/${SHA}`,
           reference: SHA,
+          shasum: "",
         },
       },
-    },
+    ],
   },
 };
 
@@ -65,11 +65,11 @@ test("v4 Packagist metadata and package normalization are identity-bound", () =>
   const host = publicNativeHostFromOrg("packagist");
   assert.equal(
     nativePackageMetadataUrl(host, NAME),
-    "https://packagist.org/packages/acme/widget.json",
+    "https://repo.packagist.org/p2/vendor/package.json",
   );
   assert.equal(
     nativeVersionMetadataUrl(host, NAME, "1.2.3"),
-    "https://packagist.org/packages/acme/widget.json",
+    "https://repo.packagist.org/p2/vendor/package.json",
   );
   assert.equal(nativeVersionMetadataUrl(host, NAME, "dev-main"), null);
   assert.equal(isPrivateOrUnpublished(host, BODY), false);
@@ -78,18 +78,23 @@ test("v4 Packagist metadata and package normalization are identity-bound", () =>
   const metadata = toPackageMetadata(host, "packagist", NAME, BODY);
   assert.equal(metadata.latest, "1.2.3");
   assert.equal(metadata.description, "A stable Composer package");
-  assert.equal(metadata.repo_url, "https://github.com/acme/widget");
+  assert.equal(metadata.repo_url, "https://github.com/upstream/project");
 });
 
-test("v4 Packagist candidate carries commit provenance into URL validation", () => {
+test("v4 Packagist candidate carries immutable repo/reference context into URL validation", () => {
   const host = publicNativeHostFromOrg("packagist");
   const candidate = downloadFromNativeVersion(host, NAME, "1.2.3", BODY);
-  assert.equal(candidate?.reference, SHA);
   assert.equal(candidate?.format, "zip");
   assert.equal(
     candidate?.url,
-    `https://codeload.github.com/acme/widget/legacy.zip/${SHA}`,
+    `https://codeload.github.com/upstream/project/zip/${SHA}`,
   );
+  assert.deepEqual(candidate?.validation, {
+    kind: "packagist-github-zip",
+    owner: "upstream",
+    repo: "project",
+    reference: SHA,
+  });
   assert.equal(
     isAllowedNativeDownloadUrl(host, candidate.url, NAME, "1.2.3", candidate),
     true,
@@ -97,11 +102,35 @@ test("v4 Packagist candidate carries commit provenance into URL validation", () 
   assert.equal(
     isAllowedNativeDownloadUrl(
       host,
-      `https://codeload.github.com/acme/widget/legacy.zip/${"b".repeat(40)}`,
+      `https://codeload.github.com/upstream/project/zip/${"b".repeat(40)}`,
       NAME,
       "1.2.3",
       candidate,
     ),
     false,
   );
+  assert.equal(
+    isAllowedNativeDownloadUrl(
+      host,
+      candidate.url,
+      NAME,
+      "1.2.3",
+      { ...candidate, validation: { ...candidate.validation, repo: "other" } },
+    ),
+    false,
+  );
+});
+
+test("v4 rejects wrong package keys even when the outer JSON is valid Composer metadata", () => {
+  const host = publicNativeHostFromOrg("packagist");
+  const wrong = {
+    packages: {
+      "other/package": BODY.packages[COORDINATE],
+    },
+  };
+  assert.equal(isPrivateOrUnpublished(host, wrong), false);
+  assert.deepEqual(versionsFromNativeBody(host, wrong, NAME), []);
+  const metadata = toPackageMetadata(host, "packagist", NAME, wrong);
+  assert.deepEqual(metadata.versions, []);
+  assert.equal(metadata.latest, null);
 });
