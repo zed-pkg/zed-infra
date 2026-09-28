@@ -1,0 +1,1 @@
+The original native-public.test.js blob is preserved under workers/shared/core-tests/native-public.test.js during the CPAN/CRAN dispatcher promotion.
