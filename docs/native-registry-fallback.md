@@ -25,11 +25,11 @@ Catalog membership is not network authorization. The catalog gives Zed a stable 
 | PyPI | yes | active | JSON API; sdist only; SHA-256 required and filename bound to metadata |
 | Maven Central | yes | active | Solr/GAV metadata + deterministic JAR path; JAR maps to `zip` and is edge-hashed when SHA-256 is absent |
 | NuGet | yes | active | v3 flat container; canonical index version + `.nupkg` mapped to `zip` |
+| Go Module Proxy | yes | active | exact `@v/list` text parser, `.info` JSON, official `!lowercase` path/version escaping, deterministic `.zip`; bounded edge hashing |
 | Hackage | yes | active | package JSON version map + canonical `.tar.gz`; artifact is edge-hashed |
-| JSR | yes | active | official npm-compatibility registry; scoped JSR packages map to immutable `.tgz` artifacts |
+| JSR | yes | active | official npm-compatibility registry; scoped JSR packages map to revision-bound immutable `.tgz` artifacts |
 | Packagist | yes | fail-closed | Composer metadata minification and repository-bound GitHub/CDN dist validation still required |
 | RubyGems | yes | fail-closed | `.gem` container semantics need an explicit artifact contract |
-| Go Module Proxy | yes | fail-closed | `@v/list` is bounded `text/plain`; `.info/.mod/.zip` parser path and Go path escaping still required |
 | Hex | yes | fail-closed | release metadata/tarball semantics need dedicated artifact-format support |
 | ConanCenter | yes | fail-closed | recipe/package-ID protocol required |
 | Clojars | yes | fail-closed | Maven-compatible coordinate/artifact adapter requires audited Clojars metadata mapping |
@@ -45,6 +45,19 @@ Catalog membership is not network authorization. The catalog gives Zed a stable 
 
 The fail-closed entries are intentional. Adding an upstream hostname to the catalog must never make that hostname reachable from user-controlled package coordinates.
 
+## Go proxy degraded-mode limits
+
+The Go module proxy adapter follows the public GOPROXY wire protocol rather than treating Go as an npm-like registry:
+
+- package discovery uses the bounded `text/plain` `$module/@v/list` endpoint;
+- the text parser is enabled only when the response URL is exact HTTPS `proxy.golang.org`, has no userinfo, port, query, or fragment, and ends in `/@v/list`;
+- exact-version metadata uses `$module/@v/$version.info` JSON and must identify the requested version exactly;
+- module paths and versions use Go's official uppercase escaping (`A` becomes `!a`);
+- downloads use the deterministic `$module/@v/$version.zip` path and remain pinned to the same module/version;
+- the ZIP is mapped truthfully to Zed's `zip` wire format and SHA-256 is computed at the edge when the native proxy does not supply one.
+
+The edge hashing path intentionally keeps Zed's existing 32 MiB degraded-mode artifact bound. The public Go module protocol can represent larger modules, so this fallback is deliberately a bounded emergency path rather than a claim of complete GOPROXY equivalence.
+
 ## Security invariants
 
 Public fallback reads follow these rules:
@@ -56,6 +69,7 @@ Public fallback reads follow these rules:
 - package coordinates are validated per ecosystem;
 - multi-segment/scoped coordinates are transported as reversible `z1_` base64url path segments;
 - metadata bodies are content-type checked and size bounded;
+- any non-JSON parser is enabled only for the exact registry host/path/content-type that requires it;
 - redirects are manual and revalidated at every hop;
 - artifact paths are protocol-specific, not merely host-specific;
 - artifacts with no trusted upstream SHA-256 are bounded and hashed at the edge before metadata is returned;
@@ -66,13 +80,13 @@ Public fallback reads follow these rules:
 
 The current Rust `ArtifactFormat` wire contract exposes `tar.gz` and `zip`. An adapter may activate only when its install artifact maps truthfully to one of those formats or when the wire contract is expanded first.
 
-That is why Maven JARs can be represented as `zip`, Hackage and JSR archives can be represented as `tar.gz`, while RubyGems `.gem`, Hex package containers, conda `.conda`/`.tar.bz2`, and OCI manifests/layers remain fail-closed. The edge must not relabel an incompatible package solely to make it pass deserialization.
+That is why Maven JARs and Go module ZIPs can be represented as `zip`, and Hackage and JSR archives can be represented as `tar.gz`, while RubyGems `.gem`, Hex package containers, conda `.conda`/`.tar.bz2`, and OCI manifests/layers remain fail-closed. The edge must not relabel an incompatible package solely to make it pass deserialization.
 
 ## Independent CI witness
 
-The source repository's Actions budget is not treated as proof of correctness. The native-registry fallback branch is also exercised from `zed-pkg-test/security-adversarial-e2e`, a public test-organization repository with an independent GitHub Actions budget. That workflow checks out the exact zed-infra branch, installs the locked Worker runtime, audits dependencies, runs the full Worker test suite, then explicitly reruns the native-registry catalog, security, and adapter contracts.
+The source repository's Actions budget is not treated as proof of correctness. The native-registry fallback branch is also exercised from `zed-pkg-test/security-adversarial-e2e`, a public test-organization repository with an independent GitHub Actions budget. The witness checks out an exact zed-infra commit SHA and asserts that checkout before testing. Its fast job audits the locked Worker dependencies and runs the native-registry catalog, security, and adapter contracts independently from the longer full Worker suite.
 
-A source-repository cancellation caused by Actions-minute exhaustion is therefore not interpreted as a test failure. Conversely, an actual failing assertion in either repository remains a real blocker.
+A source-repository cancellation caused by Actions-minute exhaustion is therefore not interpreted as a test failure. Conversely, an actual failing assertion in either repository remains a real blocker. The exact source SHA in the witness must be advanced whenever PR 108 changes before its green result can be used as merge evidence.
 
 ## Publish boundary
 
@@ -98,4 +112,4 @@ Before moving an ecosystem from fail-closed to active, add tests for all of the 
 10. truthful mapping into the existing Rust `ArtifactFormat` and `VersionMetadata` wire contract;
 11. malformed metadata and wrong-package/wrong-version negative cases;
 12. integration through the registry proxy without bypassing R2-first/GitHub-last ordering;
-13. an independent test-org Actions run so source-org minute exhaustion cannot create a false negative.
+13. an independent test-org Actions run pinned to the exact source SHA so source-org minute exhaustion cannot create a false negative.
