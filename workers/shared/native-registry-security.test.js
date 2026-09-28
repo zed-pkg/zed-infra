@@ -41,6 +41,7 @@ const REQUIRED_REGISTRIES = [
 ];
 
 const ACTIVE_REGISTRIES = [
+  "clojars",
   "cpan",
   "cran",
   "crates-io",
@@ -58,7 +59,6 @@ const INACTIVE_REGISTRIES = [
   "rubygems",
   "hex",
   "conan",
-  "clojars",
   "luarocks",
   "opam",
   "julia",
@@ -132,6 +132,7 @@ test("multi-part coordinates round-trip without becoming path syntax", () => {
   const cases = [
     ["npm", "@scope/package"],
     ["maven", "org.example:artifact"],
+    ["clojars", "org.clojars.example:artifact"],
     ["packagist", "vendor/package"],
     ["go-proxy", "github.com/owner/module/v2"],
     ["terraform", "hashicorp/aws/provider"],
@@ -182,6 +183,7 @@ test("active registries resolve only through their catalog identities", () => {
   }
 
   assert.equal(publicNativeHostFromOrg("maven-central")?.id, "maven");
+  assert.equal(publicNativeHostFromOrg("clojure")?.id, "clojars");
   assert.equal(publicNativeHostFromOrg("golang")?.id, "go-proxy");
   assert.equal(publicNativeHostFromOrg("cabal")?.id, "hackage");
   assert.equal(publicNativeHostFromOrg("deno")?.id, "jsr");
