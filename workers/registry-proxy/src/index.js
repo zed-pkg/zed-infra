@@ -328,7 +328,7 @@ async function completeNativeDownload(host, name, version, candidate, env) {
 
   let current = candidate.url;
   for (let redirects = 0; redirects <= 3; redirects += 1) {
-    if (!isAllowedNativeDownloadUrl(host, current, name, version)) return null;
+    if (!isAllowedNativeDownloadUrl(host, current, name, version, candidate)) return null;
     let response;
     try {
       response = await fetch(current, {

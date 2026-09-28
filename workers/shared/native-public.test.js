@@ -1,159 +1,208 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { encodeNativeCoordinate } from "./native-registry-catalog.js";
 import {
   downloadFromNativeVersion,
   isAllowedNativeDownloadUrl,
-  isHighLikelihoodPublic,
   isPrivateOrUnpublished,
-  nativeHeaders,
   nativePackageMetadataUrl,
-  nativeTarballUrls,
   nativeVersionMetadataUrl,
+  publicNativeFallbackIds,
   publicNativeHostFromOrg,
   readBoundedJson,
-  toPackageMetadata,
-  versionsFromNativeBody,
 } from "./native-public.js";
 
-test("only the explicitly audited public registries are recognized", () => {
-  assert.equal(publicNativeHostFromOrg("npm").id, "npm");
-  assert.equal(publicNativeHostFromOrg("npmjs.com").id, "npm");
-  assert.equal(publicNativeHostFromOrg("crates-io").id, "crates-io");
-  assert.equal(publicNativeHostFromOrg("cargo").id, "crates-io");
-  for (const token of ["pypi", "rubygems", "hex", "nuget", "test-pypi", "artifactory"]) {
+test("production native dispatcher exposes exactly twelve audited adapters", () => {
+  assert.deepEqual(publicNativeFallbackIds().sort(), [
+    "clojars",
+    "cpan",
+    "cran",
+    "crates-io",
+    "go-proxy",
+    "hackage",
+    "jsr",
+    "maven",
+    "npm",
+    "nuget",
+    "packagist",
+    "pypi",
+  ]);
+  assert.equal(publicNativeHostFromOrg("clojars")?.id, "clojars");
+  assert.equal(publicNativeHostFromOrg("cpan")?.id, "cpan");
+  assert.equal(publicNativeHostFromOrg("cran")?.id, "cran");
+  assert.equal(publicNativeHostFromOrg("packagist")?.id, "packagist");
+  assert.equal(publicNativeHostFromOrg("composer")?.id, "packagist");
+  for (const token of [
+    "rubygems",
+    "hex",
+    "conan",
+    "luarocks",
+    "opam",
+    "julia",
+    "conda-forge",
+    "cocoapods",
+    "terraform",
+    "docker",
+  ]) {
     assert.equal(publicNativeHostFromOrg(token), null, token);
   }
 });
 
-test("a safe coordinate is not confused with proof that a package is public", () => {
-  const npm = publicNativeHostFromOrg("npm");
-  assert.equal(isHighLikelihoodPublic(npm, "lodash"), true);
-  assert.equal(isHighLikelihoodPublic(npm, "private-sdk"), true);
-  assert.equal(isHighLikelihoodPublic(npm, "../etc/passwd"), false);
-  assert.equal(isHighLikelihoodPublic(npm, "scope/name"), false);
-  assert.equal(nativeHeaders().Authorization, undefined);
-  assert.equal(nativeHeaders().authorization, undefined);
-});
-
-test("anonymous metadata still rejects private and unpublished bodies", () => {
-  const npm = publicNativeHostFromOrg("npm");
+test("production Clojars adapter binds stable Maven identity and JAR path", () => {
+  const host = publicNativeHostFromOrg("clojars");
+  const name = encodeNativeCoordinate("org.clojars.dantheman:test");
+  const body = {
+    latest_version: "0.0.3-SNAPSHOT",
+    latest_release: "0.0.2",
+    jar_name: "test",
+    group_name: "org.clojars.dantheman",
+    recent_versions: [
+      { version: "0.0.3-SNAPSHOT" },
+      { version: "0.0.2" },
+    ],
+  };
   assert.equal(
-    isPrivateOrUnpublished(npm, { private: true, versions: { "1.0.0": {} } }),
-    true,
+    nativePackageMetadataUrl(host, name),
+    "https://clojars.org/api/artifacts/org.clojars.dantheman/test",
   );
-  assert.equal(isPrivateOrUnpublished(npm, { unpublished: { time: "2020-01-01" } }), true);
+  assert.equal(nativeVersionMetadataUrl(host, name, "0.0.3-SNAPSHOT"), null);
+  assert.equal(isPrivateOrUnpublished(host, body), false);
+  const download = downloadFromNativeVersion(host, name, "0.0.2", body);
+  assert.deepEqual(download, {
+    url: "https://repo.clojars.org/org/clojars/dantheman/test/0.0.2/test-0.0.2.jar",
+    sha256: "",
+    size: 0,
+    format: "zip",
+  });
+  assert.equal(isAllowedNativeDownloadUrl(host, download.url, name, "0.0.2"), true);
   assert.equal(
-    isPrivateOrUnpublished(npm, {
-      name: "lodash",
-      versions: { "4.17.21": { dist: { tarball: "https://registry.npmjs.org/x" } } },
-    }),
+    isAllowedNativeDownloadUrl(
+      host,
+      "https://repo.clojars.org/org/clojars/dantheman/other/0.0.2/other-0.0.2.jar",
+      name,
+      "0.0.2",
+    ),
     false,
   );
 });
 
-test("metadata and tarball URLs are fixed to canonical public hosts", () => {
-  const npm = publicNativeHostFromOrg("npm");
-  assert.equal(nativePackageMetadataUrl(npm, "lodash"), "https://registry.npmjs.org/lodash");
+test("production CPAN adapter requires exact trusted digest and size metadata", () => {
+  const host = publicNativeHostFromOrg("cpan");
+  const body = {
+    version: "6.36",
+    release: "HTTP-Message-6.36",
+    checksum_sha256: "a".repeat(64),
+    size: 12345,
+    download_url:
+      "https://cpan.metacpan.org/authors/id/O/OA/OALDERS/HTTP-Message-6.36.tar.gz",
+  };
   assert.equal(
-    nativeVersionMetadataUrl(npm, "lodash", "4.17.21"),
-    "https://registry.npmjs.org/lodash/4.17.21",
+    nativeVersionMetadataUrl(host, "HTTP-Message", "6.36"),
+    "https://fastapi.metacpan.org/v1/download_url/HTTP-Message?version=6.36",
   );
-  assert.deepEqual(nativeTarballUrls(npm, "lodash", "4.17.21", "lodash-4.17.21.tgz"), [
-    "https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz",
-  ]);
-  assert.deepEqual(nativeTarballUrls(npm, "lodash", "4.17.21", "other.tgz"), []);
-
-  const crates = publicNativeHostFromOrg("crates-io");
+  assert.equal(isPrivateOrUnpublished(host, body), false);
+  assert.equal(isPrivateOrUnpublished(host, { ...body, size: 0 }), true);
+  const download = downloadFromNativeVersion(host, "HTTP-Message", "6.36", body);
+  assert.equal(download?.sha256, "a".repeat(64));
+  assert.equal(download?.size, 12345);
   assert.equal(
-    nativePackageMetadataUrl(crates, "serde"),
-    "https://crates.io/api/v1/crates/serde",
-  );
-  assert.deepEqual(nativeTarballUrls(crates, "serde", "1.0.0", "serde-1.0.0.crate"), [
-    "https://static.crates.io/crates/serde/serde-1.0.0.crate",
-  ]);
-});
-
-test("untrusted metadata cannot redirect downloads off the allowlist", () => {
-  const npm = publicNativeHostFromOrg("npm");
-  assert.equal(
-    isAllowedNativeDownloadUrl(
-      npm,
-      "https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz",
-      "lodash",
-      "4.17.21",
-    ),
+    isAllowedNativeDownloadUrl(host, download.url, "HTTP-Message", "6.36"),
     true,
   );
-  for (const url of [
-    "http://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz",
-    "https://evil.test/lodash-4.17.21.tgz",
-    "https://registry.npmjs.org/other/-/other-4.17.21.tgz",
-    "https://user:pass@registry.npmjs.org/lodash/-/lodash-4.17.21.tgz",
-  ]) {
-    assert.equal(isAllowedNativeDownloadUrl(npm, url, "lodash", "4.17.21"), false, url);
-  }
   assert.equal(
-    downloadFromNativeVersion(npm, "lodash", "4.17.21", {
-      dist: { tarball: "https://evil.test/payload.tgz" },
-    }),
-    null,
+    isAllowedNativeDownloadUrl(
+      host,
+      "https://cpan.metacpan.org/authors/id/O/OA/OALDERS/Other-6.36.tar.gz",
+      "HTTP-Message",
+      "6.36",
+    ),
+    false,
   );
 });
 
-test("metadata bodies are JSON-only and bounded", async () => {
-  const good = new Response(JSON.stringify({ ok: true }), {
-    headers: { "content-type": "application/json", "content-length": "11" },
+test("production CRAN adapter parses only exact DESCRIPTION endpoints", async () => {
+  const host = publicNativeHostFromOrg("cran");
+  assert.equal(
+    nativePackageMetadataUrl(host, "jsonlite"),
+    "https://cran.r-project.org/web/packages/jsonlite/DESCRIPTION",
+  );
+  const response = new Response(
+    "Package: jsonlite\nVersion: 2.0.0\nDescription: JSON parser\n",
+    { headers: { "content-type": "text/plain; charset=utf-8" } },
+  );
+  Object.defineProperty(response, "url", {
+    value: "https://cran.r-project.org/web/packages/jsonlite/DESCRIPTION",
   });
-  assert.deepEqual(await readBoundedJson(good), { ok: true });
-
-  const html = new Response("<html>", { headers: { "content-type": "text/html" } });
-  assert.equal(await readBoundedJson(html), null);
-
-  const oversized = new Response("{}", {
-    headers: { "content-type": "application/json", "content-length": "2000000" },
+  const body = await readBoundedJson(response);
+  assert.deepEqual(body, {
+    Package: "jsonlite",
+    Version: "2.0.0",
+    Description: "JSON parser",
   });
-  assert.equal(await readBoundedJson(oversized), null);
+  const download = downloadFromNativeVersion(host, "jsonlite", "2.0.0", body);
+  assert.deepEqual(download, {
+    url: "https://cran.r-project.org/src/contrib/jsonlite_2.0.0.tar.gz",
+    sha256: "",
+    size: 0,
+    format: "tar.gz",
+  });
+  assert.equal(
+    isAllowedNativeDownloadUrl(host, download.url, "jsonlite", "2.0.0"),
+    true,
+  );
 });
 
-test("native package metadata maps only visible versions", () => {
-  const npm = publicNativeHostFromOrg("npm");
-  const meta = toPackageMetadata(npm, "npm", "left-pad", {
-    description: "pad",
-    versions: { "1.0.0": {}, "1.3.0": {} },
-  });
-  assert.equal(meta.native_host, "npm");
-  assert.deepEqual(versionsFromNativeBody(npm, { versions: { "1.0.0": {}, "1.3.0": {} } }), [
-    "1.3.0",
-    "1.0.0",
-  ]);
-  assert.equal(meta.latest, "1.3.0");
-
-  const crates = publicNativeHostFromOrg("crates-io");
-  assert.deepEqual(
-    versionsFromNativeBody(crates, {
-      versions: [
-        { num: "2.0.0", yanked: true },
-        { num: "1.0.0", yanked: false },
+test("production Packagist adapter binds stable package identity to an immutable GitHub commit", () => {
+  const host = publicNativeHostFromOrg("packagist");
+  const coordinate = "vendor/package";
+  const name = encodeNativeCoordinate(coordinate);
+  const reference = "a".repeat(40);
+  const body = {
+    minified: "composer/2.0",
+    packages: {
+      [coordinate]: [
+        {
+          name: coordinate,
+          version: "1.2.3",
+          source: {
+            type: "git",
+            url: "https://github.com/upstream/project.git",
+            reference,
+          },
+          dist: {
+            type: "zip",
+            url: `https://api.github.com/repos/upstream/project/zipball/${reference}`,
+            reference,
+            shasum: "",
+          },
+        },
       ],
-    }),
-    ["1.0.0"],
-  );
-  assert.deepEqual(
-    downloadFromNativeVersion(crates, "serde", "1.0.0", {
-      version: {
-        num: "1.0.0",
-        checksum: "a".repeat(64),
-        crate_size: 1234,
-        dl_path: "/api/v1/crates/serde/1.0.0/download",
-        yanked: false,
-      },
-    }),
-    {
-      url: "https://crates.io/api/v1/crates/serde/1.0.0/download",
-      sha256: "a".repeat(64),
-      size: 1234,
-      format: "crate",
     },
+  };
+  assert.equal(
+    nativePackageMetadataUrl(host, name),
+    "https://repo.packagist.org/p2/vendor/package.json",
+  );
+  assert.equal(nativeVersionMetadataUrl(host, name, "dev-main"), null);
+  const download = downloadFromNativeVersion(host, name, "1.2.3", body);
+  assert.equal(download?.format, "zip");
+  assert.equal(
+    download?.url,
+    `https://codeload.github.com/upstream/project/zip/${reference}`,
+  );
+  assert.equal(
+    isAllowedNativeDownloadUrl(host, download.url, name, "1.2.3", download),
+    true,
+  );
+  assert.equal(
+    isAllowedNativeDownloadUrl(
+      host,
+      `https://codeload.github.com/upstream/project/zip/${"b".repeat(40)}`,
+      name,
+      "1.2.3",
+      download,
+    ),
+    false,
   );
 });
