@@ -1,13 +1,9 @@
 /**
  * Anonymous, public-only native registry adapters.
  *
- * The registry catalog is deliberately larger than the active adapter set.
- * A catalog entry defines names and host confinement; it does not authorize a
- * protocol. An ecosystem becomes active here only after its metadata shape,
- * artifact path, redirect behavior, body bounds, and negative paths have tests.
- *
- * Package coordinates are never authorization signals. Public status is
- * established only by an anonymous response from a canonical public endpoint.
+ * Catalog membership is not network authorization. A registry is active only
+ * after its metadata shape, package-coordinate grammar, artifact path, redirect
+ * behavior, body bounds, and wire-format mapping are covered by tests.
  */
 
 import { USER_AGENT } from "./github-fallback.js";
@@ -36,11 +32,6 @@ function activeRegistry(id, metadata, artifactHosts) {
   });
 }
 
-/**
- * Only these ecosystems currently have audited edge protocol adapters.
- * The remaining catalog entries stay fail-closed until their protocol-specific
- * adapter is implemented and tested.
- */
 export const PUBLIC_NATIVE_HOSTS = Object.freeze({
   npm: activeRegistry("npm", "https://registry.npmjs.org", ["registry.npmjs.org"]),
   "crates-io": activeRegistry("crates-io", "https://crates.io/api/v1", [
@@ -48,9 +39,16 @@ export const PUBLIC_NATIVE_HOSTS = Object.freeze({
     "static.crates.io",
   ]),
   pypi: activeRegistry("pypi", "https://pypi.org/pypi", ["files.pythonhosted.org"]),
+  maven: activeRegistry("maven", "https://search.maven.org/solrsearch/select", [
+    "repo1.maven.org",
+  ]),
   nuget: activeRegistry("nuget", "https://api.nuget.org/v3-flatcontainer", [
     "api.nuget.org",
   ]),
+  hackage: activeRegistry("hackage", "https://hackage.haskell.org/package", [
+    "hackage.haskell.org",
+  ]),
+  jsr: activeRegistry("jsr", "https://npm.jsr.io", ["npm.jsr.io"]),
 });
 
 export function publicNativeFallbackIds() {
@@ -97,10 +95,6 @@ function isSafeNativeVersion(version) {
   );
 }
 
-/**
- * This predicate only establishes that a coordinate is safe to ask about.
- * The anonymous upstream response establishes that it is actually public.
- */
 export function isHighLikelihoodPublic(host, name) {
   return Boolean(host && nativeCoordinate(host, name));
 }
@@ -114,6 +108,7 @@ export function nativePackageMetadataUrl(host, name) {
   if (!coordinate) {
     return null;
   }
+
   switch (host.id) {
     case "npm":
       return `${host.metadata}/${encodeURIComponent(coordinate)}`;
@@ -121,8 +116,19 @@ export function nativePackageMetadataUrl(host, name) {
       return `${host.metadata}/crates/${encodeURIComponent(coordinate)}`;
     case "pypi":
       return `${host.metadata}/${encodeURIComponent(coordinate)}/json`;
+    case "maven":
+      return mavenSearchUrl(host, coordinate, null);
     case "nuget":
       return `${host.metadata}/${encodeURIComponent(coordinate.toLowerCase())}/index.json`;
+    case "hackage":
+      return `${host.metadata}/${encodeURIComponent(coordinate)}`;
+    case "jsr": {
+      const compat = jsrCompatCoordinate(coordinate);
+      if (!compat) {
+        return null;
+      }
+      return `${host.metadata}/${encodeURIComponent(compat)}`;
+    }
     default:
       return null;
   }
@@ -133,6 +139,7 @@ export function nativeVersionMetadataUrl(host, name, version) {
   if (!coordinate || !isSafeNativeVersion(version)) {
     return null;
   }
+
   switch (host.id) {
     case "npm":
       return `${host.metadata}/${encodeURIComponent(coordinate)}/${encodeURIComponent(version)}`;
@@ -140,11 +147,19 @@ export function nativeVersionMetadataUrl(host, name, version) {
       return `${host.metadata}/crates/${encodeURIComponent(coordinate)}/${encodeURIComponent(version)}`;
     case "pypi":
       return `${host.metadata}/${encodeURIComponent(coordinate)}/${encodeURIComponent(version)}/json`;
+    case "maven":
+      return mavenSearchUrl(host, coordinate, version);
     case "nuget":
-      // The flat-container index is the canonical anonymous proof that this
-      // exact normalized version exists. The package bytes have a deterministic
-      // URL derived from the same lowercased coordinate/version pair.
       return `${host.metadata}/${encodeURIComponent(coordinate.toLowerCase())}/index.json`;
+    case "hackage":
+      return `${host.metadata}/${encodeURIComponent(coordinate)}`;
+    case "jsr": {
+      const compat = jsrCompatCoordinate(coordinate);
+      if (!compat) {
+        return null;
+      }
+      return `${host.metadata}/${encodeURIComponent(compat)}/${encodeURIComponent(version)}`;
+    }
     default:
       return null;
   }
@@ -155,6 +170,7 @@ export function nativeTarballUrls(host, name, version, filename) {
   if (!coordinate || !isSafeNativeVersion(version)) {
     return [];
   }
+
   switch (host.id) {
     case "npm": {
       const baseName = coordinate.split("/").at(-1);
@@ -175,6 +191,20 @@ export function nativeTarballUrls(host, name, version, filename) {
         `https://static.crates.io/crates/${encodeURIComponent(coordinate)}/${encodeURIComponent(expected)}`,
       ];
     }
+    case "maven": {
+      const parts = mavenCoordinate(coordinate);
+      if (!parts) {
+        return [];
+      }
+      const [group, artifact] = parts;
+      const expected = `${artifact}-${version}.jar`;
+      if (filename && filename !== expected) {
+        return [];
+      }
+      return [
+        `https://repo1.maven.org/maven2/${mavenGroupPath(group)}/${encodeURIComponent(artifact)}/${encodeURIComponent(version)}/${encodeURIComponent(expected)}`,
+      ];
+    }
     case "nuget": {
       const id = coordinate.toLowerCase();
       const normalizedVersion = version.toLowerCase();
@@ -184,6 +214,15 @@ export function nativeTarballUrls(host, name, version, filename) {
       }
       return [
         `https://api.nuget.org/v3-flatcontainer/${encodeURIComponent(id)}/${encodeURIComponent(normalizedVersion)}/${encodeURIComponent(expected)}`,
+      ];
+    }
+    case "hackage": {
+      const expected = `${coordinate}-${version}.tar.gz`;
+      if (filename && filename !== expected) {
+        return [];
+      }
+      return [
+        `https://hackage.haskell.org/package/${encodeURIComponent(coordinate)}-${encodeURIComponent(version)}/${encodeURIComponent(expected)}`,
       ];
     }
     default:
@@ -206,6 +245,7 @@ export function isAllowedNativeDownloadUrl(host, rawUrl, name, version) {
   } catch {
     return false;
   }
+
   if (!host.artifactHosts.includes(url.hostname.toLowerCase())) {
     return false;
   }
@@ -218,10 +258,8 @@ export function isAllowedNativeDownloadUrl(host, rawUrl, name, version) {
       return false;
     }
     const baseName = coordinate.split("/").at(-1);
-    let decodedPath;
-    try {
-      decodedPath = decodeURIComponent(url.pathname);
-    } catch {
+    const decodedPath = safeDecodedPath(url.pathname);
+    if (!decodedPath) {
       return false;
     }
     return decodedPath === `/${coordinate}/-/${baseName}-${version}.tgz`;
@@ -242,18 +280,45 @@ export function isAllowedNativeDownloadUrl(host, rawUrl, name, version) {
     if (url.hostname !== "files.pythonhosted.org" || !url.pathname.startsWith("/packages/")) {
       return false;
     }
-    const filename = url.pathname.split("/").at(-1) || "";
-    return filename.endsWith(".tar.gz") || filename.endsWith(".zip");
+    const filename = safeDecodedFilename(url.pathname);
+    if (!filename || (!filename.endsWith(".tar.gz") && !filename.endsWith(".zip"))) {
+      return false;
+    }
+    return pypiFilenameMatches(filename, coordinate, version);
+  }
+
+  if (host.id === "maven") {
+    if (url.hostname !== "repo1.maven.org") {
+      return false;
+    }
+    return nativeTarballUrls(host, name, version)[0] === url.toString();
   }
 
   if (host.id === "nuget") {
     if (url.hostname !== "api.nuget.org") {
       return false;
     }
-    const id = coordinate.toLowerCase();
-    const normalizedVersion = version.toLowerCase();
-    const expected = `/v3-flatcontainer/${encodeURIComponent(id)}/${encodeURIComponent(normalizedVersion)}/${encodeURIComponent(id)}.${encodeURIComponent(normalizedVersion)}.nupkg`;
-    return url.pathname === expected;
+    return nativeTarballUrls(host, name, version)[0] === url.toString();
+  }
+
+  if (host.id === "hackage") {
+    if (url.hostname !== "hackage.haskell.org") {
+      return false;
+    }
+    return nativeTarballUrls(host, name, version)[0] === url.toString();
+  }
+
+  if (host.id === "jsr") {
+    if (url.hostname !== "npm.jsr.io") {
+      return false;
+    }
+    const compat = jsrCompatCoordinate(coordinate);
+    const decodedPath = safeDecodedPath(url.pathname);
+    if (!compat || !decodedPath || !decodedPath.endsWith(".tgz")) {
+      return false;
+    }
+    const slug = compat.split("/").at(-1);
+    return decodedPath.includes(slug);
   }
 
   return false;
@@ -266,19 +331,24 @@ export function isPrivateOrUnpublished(host, body) {
   if (typeof body.error === "string" && /not found|unpublished|private/i.test(body.error)) {
     return true;
   }
-  if (host?.id === "npm") {
-    return Boolean(body._unpublished || (!body.versions && !body.version && !body.dist));
+
+  switch (host?.id) {
+    case "npm":
+    case "jsr":
+      return Boolean(body._unpublished || (!body.versions && !body.version && !body.dist));
+    case "crates-io":
+      return !body.crate && !body.version && !body.versions;
+    case "pypi":
+      return !body.info || (!body.releases && !Array.isArray(body.urls));
+    case "maven":
+      return !Array.isArray(body.response?.docs) || body.response.docs.length === 0;
+    case "nuget":
+      return !Array.isArray(body.versions) || body.versions.length === 0;
+    case "hackage":
+      return Object.keys(body).filter(isSafeNativeVersion).length === 0;
+    default:
+      return true;
   }
-  if (host?.id === "crates-io") {
-    return !body.crate && !body.version && !body.versions;
-  }
-  if (host?.id === "pypi") {
-    return !body.info || (!body.releases && !Array.isArray(body.urls));
-  }
-  if (host?.id === "nuget") {
-    return !Array.isArray(body.versions) || body.versions.length === 0;
-  }
-  return true;
 }
 
 export async function readBoundedJson(response, maxBytes = MAX_NATIVE_METADATA_BYTES) {
@@ -301,18 +371,20 @@ export async function readBoundedJson(response, maxBytes = MAX_NATIVE_METADATA_B
   }
 }
 
-export function versionsFromNativeBody(host, body) {
+export function versionsFromNativeBody(host, body, name = null) {
   if (!body || typeof body !== "object") {
     return [];
   }
+
   switch (host?.id) {
     case "npm":
-      return Object.keys(body.versions || {}).sort(sortVersionsDesc);
+    case "jsr":
+      return Object.keys(body.versions || {}).filter(isSafeNativeVersion).sort(sortVersionsDesc);
     case "crates-io":
       return (body.versions || [])
         .filter((row) => !row.yanked)
         .map((row) => row.num || row.vers)
-        .filter(Boolean)
+        .filter(isSafeNativeVersion)
         .sort(sortVersionsDesc);
     case "pypi":
       return Object.entries(body.releases || {})
@@ -320,8 +392,16 @@ export function versionsFromNativeBody(host, body) {
         .map(([version]) => version)
         .filter(isSafeNativeVersion)
         .sort(sortVersionsDesc);
+    case "maven":
+      return mavenVersions(body, name)
+        .filter(isSafeNativeVersion)
+        .sort(sortVersionsDesc);
     case "nuget":
       return (body.versions || [])
+        .filter(isSafeNativeVersion)
+        .sort(sortVersionsDesc);
+    case "hackage":
+      return Object.keys(body)
         .filter(isSafeNativeVersion)
         .sort(sortVersionsDesc);
     default:
@@ -335,7 +415,7 @@ export function downloadFromNativeVersion(host, name, version, body) {
     return null;
   }
 
-  if (host?.id === "npm") {
+  if (host?.id === "npm" || host?.id === "jsr") {
     const dist = body.dist || body.versions?.[version]?.dist;
     if (!dist?.tarball || !isAllowedNativeDownloadUrl(host, dist.tarball, name, version)) {
       return null;
@@ -343,9 +423,6 @@ export function downloadFromNativeVersion(host, name, version, body) {
     return {
       url: dist.tarball,
       sha256: integrityToSha256(dist.integrity),
-      // npm's `unpackedSize` is not the tarball Content-Length. Returning it
-      // as the artifact size makes otherwise-correct digest verification fail.
-      // Leave size unknown so the edge hashes/counts the downloaded bytes.
       size: 0,
       format: "tar.gz",
     };
@@ -366,8 +443,6 @@ export function downloadFromNativeVersion(host, name, version, body) {
       url,
       sha256: SHA256.test(row.checksum || "") ? row.checksum : "",
       size: Number.isSafeInteger(row.crate_size) && row.crate_size > 0 ? row.crate_size : 0,
-      // `.crate` files are gzip-compressed tar archives. The Rust wire contract
-      // has only `tar.gz` and `zip`; emitting `crate` cannot deserialize.
       format: "tar.gz",
     };
   }
@@ -383,6 +458,10 @@ export function downloadFromNativeVersion(host, name, version, body) {
     if (!file?.url || !isAllowedNativeDownloadUrl(host, file.url, name, version)) {
       return null;
     }
+    const urlFilename = safeDecodedFilename(new URL(file.url).pathname);
+    if (!urlFilename || urlFilename !== file.filename) {
+      return null;
+    }
     const sha256 = file.digests?.sha256 || file.sha256_digest || "";
     if (!SHA256.test(sha256)) {
       return null;
@@ -392,14 +471,25 @@ export function downloadFromNativeVersion(host, name, version, body) {
       url: file.url,
       sha256,
       size: Number.isSafeInteger(size) && size > 0 ? size : 0,
-      format: file.filename?.endsWith(".zip") ? "zip" : "tar.gz",
+      format: file.filename.endsWith(".zip") ? "zip" : "tar.gz",
       published_at: file.upload_time_iso_8601 || file.upload_time || null,
     };
   }
 
-  if (host?.id === "nuget") {
-    const normalizedVersion = version.toLowerCase();
-    if (!(body.versions || []).some((candidate) => candidate.toLowerCase() === normalizedVersion)) {
+  if (host?.id === "maven") {
+    const parts = mavenCoordinate(coordinate);
+    if (!parts) {
+      return null;
+    }
+    const [group, artifact] = parts;
+    const exact = (body.response?.docs || []).find(
+      (row) =>
+        row?.g === group &&
+        row?.a === artifact &&
+        row?.v === version &&
+        row?.p === "jar",
+    );
+    if (!exact) {
       return null;
     }
     const url = nativeTarballUrls(host, name, version)[0];
@@ -411,6 +501,46 @@ export function downloadFromNativeVersion(host, name, version, body) {
       sha256: "",
       size: 0,
       format: "zip",
+      published_at: Number.isFinite(exact.timestamp)
+        ? new Date(exact.timestamp).toISOString()
+        : null,
+    };
+  }
+
+  if (host?.id === "nuget") {
+    const normalizedVersion = version.toLowerCase();
+    const canonicalVersion = (body.versions || []).find(
+      (candidate) =>
+        typeof candidate === "string" && candidate.toLowerCase() === normalizedVersion,
+    );
+    if (!canonicalVersion) {
+      return null;
+    }
+    const url = nativeTarballUrls(host, name, canonicalVersion)[0];
+    if (!url || !isAllowedNativeDownloadUrl(host, url, name, canonicalVersion)) {
+      return null;
+    }
+    return {
+      url,
+      sha256: "",
+      size: 0,
+      format: "zip",
+    };
+  }
+
+  if (host?.id === "hackage") {
+    if (!Object.prototype.hasOwnProperty.call(body, version)) {
+      return null;
+    }
+    const url = nativeTarballUrls(host, name, version)[0];
+    if (!url || !isAllowedNativeDownloadUrl(host, url, name, version)) {
+      return null;
+    }
+    return {
+      url,
+      sha256: "",
+      size: 0,
+      format: "tar.gz",
     };
   }
 
@@ -418,7 +548,7 @@ export function downloadFromNativeVersion(host, name, version, body) {
 }
 
 export function toPackageMetadata(host, org, name, body) {
-  const versions = versionsFromNativeBody(host, body);
+  const versions = versionsFromNativeBody(host, body, name);
   return {
     org,
     name,
@@ -446,9 +576,6 @@ export function toVersionMetadata(host, org, name, version, body, download) {
     published_at:
       download.published_at || body.time?.[version] || body.version?.created_at || "1970-01-01T00:00:00Z",
     yanked: Boolean(body.yanked || body.version?.yanked),
-    // The Rust wire contract has no native-registry MirrorKind. The canonical
-    // native URL is already `download_url`; advertising a made-up mirror kind
-    // would make the otherwise-valid VersionMetadata fail deserialization.
     mirrors: [],
     native_host: host.id,
   };
@@ -463,7 +590,7 @@ function packageDescription(host, body) {
 
 function nativeLatestVersion(host, body, versions) {
   const candidates = [];
-  if (host?.id === "npm") {
+  if (host?.id === "npm" || host?.id === "jsr") {
     candidates.push(body["dist-tags"]?.latest);
   }
   if (host?.id === "crates-io") {
@@ -497,6 +624,7 @@ function publicRepoUrl(host, name, body) {
       return safe;
     }
   }
+
   if (host.id === "npm") {
     return `https://www.npmjs.com/package/${encodeURIComponent(coordinate)}`;
   }
@@ -506,8 +634,21 @@ function publicRepoUrl(host, name, body) {
   if (host.id === "pypi") {
     return `https://pypi.org/project/${encodeURIComponent(coordinate)}/`;
   }
+  if (host.id === "maven") {
+    const parts = mavenCoordinate(coordinate);
+    if (!parts) {
+      return null;
+    }
+    return `https://central.sonatype.com/artifact/${encodeURIComponent(parts[0])}/${encodeURIComponent(parts[1])}`;
+  }
   if (host.id === "nuget") {
     return `https://www.nuget.org/packages/${encodeURIComponent(coordinate)}`;
+  }
+  if (host.id === "hackage") {
+    return `https://hackage.haskell.org/package/${encodeURIComponent(coordinate)}`;
+  }
+  if (host.id === "jsr") {
+    return `https://jsr.io/${coordinate.split("/").map(encodeURIComponent).join("/")}`;
   }
   return null;
 }
@@ -546,6 +687,22 @@ function pypiFormatRank(file) {
   return file.filename?.endsWith(".tar.gz") ? 0 : 1;
 }
 
+function pypiFilenameMatches(filename, coordinate, version) {
+  const extension = filename.endsWith(".tar.gz") ? ".tar.gz" : filename.endsWith(".zip") ? ".zip" : "";
+  if (!extension) {
+    return false;
+  }
+  const stem = filename.slice(0, -extension.length);
+  const normalizedStem = normalizePythonToken(stem);
+  const normalizedName = normalizePythonToken(coordinate);
+  const normalizedVersion = normalizePythonToken(version);
+  return normalizedStem === `${normalizedName}-${normalizedVersion}`;
+}
+
+function normalizePythonToken(value) {
+  return String(value).trim().toLowerCase().replace(/[-_.]+/g, "-");
+}
+
 function integrityToSha256(integrity) {
   if (typeof integrity !== "string") {
     return "";
@@ -561,6 +718,79 @@ function integrityToSha256(integrity) {
   } catch {
     return "";
   }
+}
+
+function mavenCoordinate(coordinate) {
+  const parts = coordinate.split(":");
+  if (parts.length !== 2 || !parts[0] || !parts[1]) {
+    return null;
+  }
+  return parts;
+}
+
+function mavenGroupPath(group) {
+  return group.split(".").map(encodeURIComponent).join("/");
+}
+
+function mavenSearchUrl(host, coordinate, version) {
+  const parts = mavenCoordinate(coordinate);
+  if (!parts) {
+    return null;
+  }
+  const [group, artifact] = parts;
+  const queryParts = [`g:\"${group}\"`, `a:\"${artifact}\"`];
+  if (version) {
+    queryParts.push(`v:\"${version}\"`, "p:\"jar\"");
+  }
+  const url = new URL(host.metadata);
+  url.searchParams.set("q", queryParts.join(" AND "));
+  url.searchParams.set("core", "gav");
+  url.searchParams.set("rows", "200");
+  url.searchParams.set("wt", "json");
+  return url.toString();
+}
+
+function mavenVersions(body, name) {
+  const coordinate = typeof name === "string" ? nativeCoordinate(PUBLIC_NATIVE_HOSTS.maven, name) : null;
+  const expected = coordinate ? mavenCoordinate(coordinate) : null;
+  return (body.response?.docs || [])
+    .filter((row) => {
+      if (!row || row.p !== "jar" || typeof row.v !== "string") {
+        return false;
+      }
+      if (!expected) {
+        return true;
+      }
+      return row.g === expected[0] && row.a === expected[1];
+    })
+    .map((row) => row.v);
+}
+
+function jsrCompatCoordinate(coordinate) {
+  if (typeof coordinate !== "string" || !coordinate.startsWith("@")) {
+    return null;
+  }
+  const parts = coordinate.slice(1).split("/");
+  if (parts.length !== 2 || !parts[0] || !parts[1]) {
+    return null;
+  }
+  return `@jsr/${parts[0]}__${parts[1]}`;
+}
+
+function safeDecodedPath(pathname) {
+  try {
+    return decodeURIComponent(pathname);
+  } catch {
+    return null;
+  }
+}
+
+function safeDecodedFilename(pathname) {
+  const path = safeDecodedPath(pathname);
+  if (!path) {
+    return null;
+  }
+  return path.split("/").at(-1) || null;
 }
 
 function sortVersionsDesc(a, b) {
