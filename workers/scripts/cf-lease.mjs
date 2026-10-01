@@ -220,11 +220,18 @@ async function deleteLease(token, worker, holder, accountId = ACCOUNT_ID, ns = L
   return { released: true };
 }
 
-function holderId(env) {
-  return (
-    env.ZED_CF_LEASE_HOLDER ||
-    `${env.USER || "agent"}@${env.HOSTNAME || "localhost"}:${process.pid}`
-  );
+export function holderId(env) {
+  // `acquire` and `release` are separate node processes, so the holder must
+  // identify the *deploy*, not one process. A PID here can never match across
+  // the pair: release refuses its own lease, every deploy fails after having
+  // already succeeded, and the abandoned lease then blocks the next attempt
+  // until it expires.
+  if (env.ZED_CF_LEASE_HOLDER) return env.ZED_CF_LEASE_HOLDER;
+  if (env.GITHUB_RUN_ID) {
+    const repository = env.GITHUB_REPOSITORY || "zed-pkg/zed-infra";
+    return `gha:${repository}#${env.GITHUB_RUN_ID}.${env.GITHUB_RUN_ATTEMPT || "1"}`;
+  }
+  return `${env.USER || "agent"}@${env.HOSTNAME || "localhost"}`;
 }
 
 async function cmdSnapshot(args, env, io = console) {

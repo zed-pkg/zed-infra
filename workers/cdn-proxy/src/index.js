@@ -10,6 +10,7 @@ import {
   nativeTarballUrls,
   publicNativeHostFromOrg,
 } from "../../shared/native-public.js";
+import { requirePublicObject, NonPublicObjectError } from "../../shared/public-visibility.js";
 
 const ARTIFACT_KEY = /^artifacts\/[0-9a-f]{64}\.(tar\.gz|zip)$/;
 const METADATA_KEY =
@@ -89,6 +90,20 @@ async function getR2(env, key, request) {
     return null;
   }
   if (!object) return null;
+  try {
+    requirePublicObject(object);
+  } catch (error) {
+    if (!(error instanceof NonPublicObjectError)) {
+      throw error;
+    }
+    // Apply before HEAD/range/conditional handling or copying object headers.
+    // A digest proves byte identity, never permission to disclose those bytes.
+    if (object.body && typeof object.body.cancel === "function") {
+      await object.body.cancel();
+    }
+    const response = problem(404, "not_found", "no such public object");
+    return new Response(request.method === "HEAD" ? null : response.body, response);
+  }
 
   const headers = securityHeaders();
   if (typeof object.writeHttpMetadata === "function") object.writeHttpMetadata(headers);

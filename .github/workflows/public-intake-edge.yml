@@ -38,6 +38,13 @@ jobs:
         with:
           node-version: "22"
 
+      # `npm test` includes runtime tests that boot the Workers in workerd, so
+      # the locked test runtime has to be present. Without this the suite fails
+      # on `Cannot find package 'miniflare'` before it tests anything, which is
+      # what this job has done on every run since the runtime tests were added.
+      - name: Install the locked Worker test runtime
+        run: npm ci --ignore-scripts --prefix workers
+
       - name: Run the complete Worker contract suite
         run: npm test --prefix workers
 
