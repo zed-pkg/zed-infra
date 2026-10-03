@@ -22,6 +22,7 @@ deliberately stay dashboard-managed.
 | `api.zpkg.net` | API server root | `zed-api-server` on k8s (port 8080) |
 | `registry.zpkg.net` | Registry REST API | Same root as `api.zpkg.net` today; later a sub-path of the API server (ingress path route or edge rewrite — DNS unchanged) |
 | `web.zpkg.net` | Read-only registry UI | `zed-web-server` on k8s (port 8081) |
+| `cdn.zpkg.net` | Public package artifacts | Cloudflare R2 custom domain on `zed-pkg-artifacts`. Proxied at the edge; **does not use the k8s origin**. Registry / Pages / cluster outages do not take this hostname down. |
 | `api./registry./web.<cloud>.zpkg.net` | Per-cloud canary/debug | `k8s/overlays/{aws,hetzner}` in the app repos |
 | `origin-hetzner.zpkg.net`, `origin-aws.zpkg.net` | Origin A records, never proxied | Cluster edge nodes (ORESoftware/k8s-cluster) |
 
@@ -29,11 +30,15 @@ Defaults that already point here: `zed-cli` ships with
 `registry.zpkg.net` (zed-cli#228), and `zed-interfaces`
 `DEFAULT_REGISTRY_URL` is `https://registry.zpkg.net`
 (`src/rust/registry.rs` after the polyglot layout move).
+`DEFAULT_R2_PUBLIC_BASE` is `https://cdn.zpkg.net` — that hostname is the
+R2 custom domain above, not a rewrite of the registry origin.
 
 ## Status — the zone is APPLIED (2026-08-08)
 
-All 16 records in this module are live and the drift check reports the zone
-in sync. Verified serving: `https://zpkg.net` (marketing site, GitHub Pages),
+All 16 DNS records in the drift table are live and the drift check reports the
+zone in sync. `cdn.zpkg.net` is declared as `cloudflare_r2_custom_domain.cdn`
+and is allowlisted in the drift script: it is absent until that resource is
+applied, then Cloudflare owns the proxied CNAME. Verified serving: `https://zpkg.net` (marketing site, GitHub Pages),
 `https://registry.zpkg.net/healthz`, `https://api.zpkg.net/healthz`,
 `https://web.zpkg.net/healthz`. A full publish → install → `--frozen`
 reinstall round-trip through `registry.zpkg.net` passed with byte-identical
@@ -146,6 +151,8 @@ curl -sI https://zpkg.net | head -3
 curl -s https://web.zpkg.net/healthz
 curl -s https://api.zpkg.net/healthz        # only after DEN-534/535 promotion
 curl -s https://registry.zpkg.net/healthz   # same root as api.zpkg.net today
+# After cloudflare_r2_custom_domain.cdn is applied:
+curl -sI https://cdn.zpkg.net/ | head -5    # 404 on missing key is success; not an origin error
 ```
 
 As of 2026-08-07 the Hetzner edge (95.217.171.250) did not answer on 80/443
