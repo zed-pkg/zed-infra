@@ -1,0 +1,44 @@
+name: Regenerate Worker lockfile
+
+on:
+  push:
+    branches:
+      - fix/v3-outage-epoch-fences
+    paths:
+      - "workers/package.json"
+      - ".github/workflows/regenerate-workers-lock.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  lockfile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out exact branch head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: fix/v3-outage-epoch-fences
+          persist-credentials: true
+      - name: Set up Node
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: "24.19.0"
+      - name: Regenerate lockfile without lifecycle scripts
+        working-directory: workers
+        run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+      - name: Commit deterministic lockfile
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- workers/package-lock.json; then
+            echo "lockfile already current"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add workers/package-lock.json
+          git commit -m "chore(workers): regenerate Miniflare lockfile"
+          git push origin HEAD:fix/v3-outage-epoch-fences
