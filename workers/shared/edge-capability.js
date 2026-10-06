@@ -11,6 +11,7 @@
 
 export const EDGE_CAPABILITY_VERSION = 1;
 export const EDGE_CAPABILITY_VERSION_V2 = 2;
+export const EDGE_CAPABILITY_VERSION_V3 = 3;
 export const EDGE_CAPABILITY_AUDIENCE = "zed-edge-fallback";
 export const EDGE_CAPABILITY_MAX_TTL_SECONDS = 300;
 export const EDGE_CAPABILITY_CLOCK_SKEW_SECONDS = 30;
@@ -46,6 +47,14 @@ const CLAIM_KEYS_V2 = new Set([
   "parent_jti",
 ]);
 
+const CLAIM_KEYS_V3 = new Set([
+  ...CLAIM_KEYS_V2,
+  "assurance",
+  "session_epoch",
+  "policy_epoch",
+  "revocation_checked_at",
+]);
+
 const GRANT_KEYS = new Set([
   "provider",
   "operation",
@@ -58,7 +67,7 @@ const GRANT_KEYS = new Set([
 const PROVIDERS = new Set(["github", "npm", "cargo-registry"]);
 
 /**
- * Verify a compact ES256 JWT and validate the v1/v2 edge capability claims.
+ * Verify a compact ES256 JWT and validate the v1/v2/v3 edge capability claims.
  *
  * JWKS is supplied by deployment/runtime configuration. This function never
  * performs network I/O, so an already-issued capability remains verifiable
@@ -72,6 +81,15 @@ const PROVIDERS = new Set(["github", "npm", "cargo-registry"]);
  *   nowEpochSeconds?: number,
  *   maxTtlSeconds?: number,
  *   clockSkewSeconds?: number,
+ *   outage?: {
+ *     startedAtEpochSeconds: number,
+ *     jwksRefreshedAtEpochSeconds: number,
+ *     minimumAssurance: 1 | 2,
+ *     maxCapabilityAgeSeconds: number,
+ *     maxRevocationAgeSeconds: number,
+ *     maxJwksAgeSeconds: number,
+ *     maxOutageSeconds: number,
+ *   },
  * }} options
  * @returns {Promise<EdgeCapabilityClaims>}
  */
@@ -139,13 +157,18 @@ export async function verifyEdgeCapability(token, options) {
     throw new EdgeCapabilityError("invalid_signature", "capability signature verification failed");
   }
 
-  return validateClaims(claims, {
+  const nowEpochSeconds = options.nowEpochSeconds ?? Math.floor(Date.now() / 1000);
+  const verified = validateClaims(claims, {
     issuer: options.issuer,
     audience: options.audience ?? EDGE_CAPABILITY_AUDIENCE,
-    nowEpochSeconds: options.nowEpochSeconds ?? Math.floor(Date.now() / 1000),
+    nowEpochSeconds,
     maxTtlSeconds: options.maxTtlSeconds ?? EDGE_CAPABILITY_MAX_TTL_SECONDS,
     clockSkewSeconds: options.clockSkewSeconds ?? EDGE_CAPABILITY_CLOCK_SKEW_SECONDS,
   });
+  if (verified.zed_edge_capability === EDGE_CAPABILITY_VERSION_V3) {
+    validateOutageAdmission(verified, options.outage, nowEpochSeconds);
+  }
+  return verified;
 }
 
 /**
@@ -219,7 +242,7 @@ export function planProviderRequest(claims, request) {
 
 
 /**
- * Derive the broker context only from a verified v2 capability.
+ * Derive the broker context only from a verified v2/v3 capability.
  *
  * V1 intentionally fails closed here: it does not carry the Shared Auth
  * lineage needed for outage-time revocation/provenance checks.
@@ -231,18 +254,24 @@ export function planProviderRequest(claims, request) {
  *   parentJti: string,
  *   capabilityId: string,
  *   capabilityExpiresAt: number,
+ *   assurance?: 1 | 2,
+ *   sessionEpoch?: number,
+ *   policyEpoch?: number,
+ *   revocationCheckedAt?: number,
  * }}
  */
 export function brokerContextFromCapability(claims) {
   if (
     !claims ||
-    claims.zed_edge_capability !== EDGE_CAPABILITY_VERSION_V2 ||
+    ![EDGE_CAPABILITY_VERSION_V2, EDGE_CAPABILITY_VERSION_V3].includes(
+      claims.zed_edge_capability,
+    ) ||
     typeof claims.sid !== "string" ||
     typeof claims.parent_jti !== "string"
   ) {
     throw new EdgeCapabilityError(
       "lineage_required",
-      "broker-backed private fallback requires a verified v2 capability",
+      "broker-backed private fallback requires a verified v2/v3 capability",
     );
   }
   return Object.freeze({
@@ -251,6 +280,14 @@ export function brokerContextFromCapability(claims) {
     parentJti: claims.parent_jti,
     capabilityId: claims.jti,
     capabilityExpiresAt: claims.exp,
+    ...(claims.zed_edge_capability === EDGE_CAPABILITY_VERSION_V3
+      ? {
+          assurance: claims.assurance,
+          sessionEpoch: claims.session_epoch,
+          policyEpoch: claims.policy_epoch,
+          revocationCheckedAt: claims.revocation_checked_at,
+        }
+      : {}),
   });
 }
 
@@ -269,7 +306,11 @@ function validateClaims(rawClaims, policy) {
   }
   rejectUnknownKeys(
     rawClaims,
-    version === EDGE_CAPABILITY_VERSION_V2 ? CLAIM_KEYS_V2 : CLAIM_KEYS_V1,
+    version === EDGE_CAPABILITY_VERSION_V3
+      ? CLAIM_KEYS_V3
+      : version === EDGE_CAPABILITY_VERSION_V2
+        ? CLAIM_KEYS_V2
+        : CLAIM_KEYS_V1,
     "claims",
   );
   if (rawClaims.iss !== policy.issuer) {
@@ -292,9 +333,12 @@ function validateClaims(rawClaims, policy) {
 
   let sid;
   let parentJti;
-  if (version === EDGE_CAPABILITY_VERSION_V2) {
+  if (
+    version === EDGE_CAPABILITY_VERSION_V2 ||
+    version === EDGE_CAPABILITY_VERSION_V3
+  ) {
     if (typeof rawClaims.sid !== "string" || !LINEAGE_ID.test(rawClaims.sid)) {
-      throw new EdgeCapabilityError("invalid_lineage", "v2 capability sid is missing or invalid");
+      throw new EdgeCapabilityError("invalid_lineage", "v2/v3 capability sid is missing or invalid");
     }
     if (
       typeof rawClaims.parent_jti !== "string" ||
@@ -302,7 +346,7 @@ function validateClaims(rawClaims, policy) {
     ) {
       throw new EdgeCapabilityError(
         "invalid_lineage",
-        "v2 capability parent_jti is missing or invalid",
+        "v2/v3 capability parent_jti is missing or invalid",
       );
     }
     sid = rawClaims.sid;
@@ -328,6 +372,29 @@ function validateClaims(rawClaims, policy) {
     throw new EdgeCapabilityError("expired", "capability has expired");
   }
 
+  let assurance;
+  let sessionEpoch;
+  let policyEpoch;
+  let revocationCheckedAt;
+  if (version === EDGE_CAPABILITY_VERSION_V3) {
+    assurance = integerClaim(rawClaims.assurance, "assurance");
+    if (assurance !== 1 && assurance !== 2) {
+      throw new EdgeCapabilityError("invalid_assurance", "v3 assurance must be 1 or 2");
+    }
+    sessionEpoch = integerClaim(rawClaims.session_epoch, "session_epoch");
+    policyEpoch = integerClaim(rawClaims.policy_epoch, "policy_epoch");
+    revocationCheckedAt = integerClaim(
+      rawClaims.revocation_checked_at,
+      "revocation_checked_at",
+    );
+    if (revocationCheckedAt > iat) {
+      throw new EdgeCapabilityError(
+        "invalid_revocation_checkpoint",
+        "v3 revocation checkpoint cannot be newer than issuance",
+      );
+    }
+  }
+
   if (!Array.isArray(rawClaims.grants) || rawClaims.grants.length < 1 || rawClaims.grants.length > MAX_GRANTS) {
     throw new EdgeCapabilityError("invalid_grants", "capability must contain 1..16 grants");
   }
@@ -340,7 +407,16 @@ function validateClaims(rawClaims, policy) {
     sub: rawClaims.sub,
     ...(version === EDGE_CAPABILITY_VERSION_V2
       ? { sid, parent_jti: parentJti }
-      : {}),
+      : version === EDGE_CAPABILITY_VERSION_V3
+        ? {
+            sid,
+            parent_jti: parentJti,
+            assurance,
+            session_epoch: sessionEpoch,
+            policy_epoch: policyEpoch,
+            revocation_checked_at: revocationCheckedAt,
+          }
+        : {}),
     iat,
     nbf,
     exp,
@@ -592,7 +668,100 @@ function decodeBase64Url(value, name) {
 
 
 function isSupportedCapabilityVersion(value) {
-  return value === EDGE_CAPABILITY_VERSION || value === EDGE_CAPABILITY_VERSION_V2;
+  return (
+    value === EDGE_CAPABILITY_VERSION ||
+    value === EDGE_CAPABILITY_VERSION_V2 ||
+    value === EDGE_CAPABILITY_VERSION_V3
+  );
+}
+
+/**
+ * V3 is an outage-only capability. Signed claims supply provenance; outage
+ * duration and JWKS freshness remain trusted verifier-local facts.
+ *
+ * @param {EdgeCapabilityClaims} claims
+ * @param {unknown} rawPolicy
+ * @param {number} now
+ */
+function validateOutageAdmission(claims, rawPolicy, now) {
+  if (!isRecord(rawPolicy)) {
+    throw new EdgeCapabilityError(
+      "outage_context_required",
+      "v3 capability requires trusted outage admission context",
+    );
+  }
+
+  const startedAt = boundedOutageInteger(rawPolicy.startedAtEpochSeconds, "startedAtEpochSeconds");
+  const jwksRefreshedAt = boundedOutageInteger(
+    rawPolicy.jwksRefreshedAtEpochSeconds,
+    "jwksRefreshedAtEpochSeconds",
+  );
+  const minimumAssurance = boundedOutageInteger(
+    rawPolicy.minimumAssurance,
+    "minimumAssurance",
+  );
+  if (minimumAssurance !== 1 && minimumAssurance !== 2) {
+    throw new EdgeCapabilityError("invalid_outage_policy", "minimum assurance must be 1 or 2");
+  }
+
+  const maxCapabilityAge = outageWindow(
+    rawPolicy.maxCapabilityAgeSeconds,
+    "maxCapabilityAgeSeconds",
+  );
+  const maxRevocationAge = outageWindow(
+    rawPolicy.maxRevocationAgeSeconds,
+    "maxRevocationAgeSeconds",
+  );
+  const maxJwksAge = outageWindow(rawPolicy.maxJwksAgeSeconds, "maxJwksAgeSeconds");
+  const maxOutage = outageWindow(rawPolicy.maxOutageSeconds, "maxOutageSeconds");
+
+  if (
+    claims.assurance < minimumAssurance ||
+    now < claims.iat ||
+    now >= claims.exp ||
+    startedAt > now ||
+    jwksRefreshedAt > now
+  ) {
+    throw new EdgeCapabilityError(
+      "outage_policy_rejected",
+      "v3 capability does not satisfy outage admission policy",
+    );
+  }
+
+  const capabilityAge = now - claims.iat;
+  const revocationAge = now - claims.revocation_checked_at;
+  const jwksAge = now - jwksRefreshedAt;
+  const outageAge = now - startedAt;
+  if (
+    revocationAge < 0 ||
+    capabilityAge > maxCapabilityAge ||
+    revocationAge > maxRevocationAge ||
+    jwksAge > maxJwksAge ||
+    outageAge > maxOutage
+  ) {
+    throw new EdgeCapabilityError(
+      "outage_policy_rejected",
+      "v3 capability freshness exceeds outage policy",
+    );
+  }
+}
+
+function boundedOutageInteger(value, name) {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new EdgeCapabilityError("invalid_outage_policy", `${name} must be a non-negative integer`);
+  }
+  return value;
+}
+
+function outageWindow(value, name) {
+  const seconds = boundedOutageInteger(value, name);
+  if (seconds > EDGE_CAPABILITY_MAX_TTL_SECONDS) {
+    throw new EdgeCapabilityError(
+      "invalid_outage_policy",
+      `${name} cannot exceed the capability lifetime bound`,
+    );
+  }
+  return seconds;
 }
 
 function integerClaim(value, name) {
@@ -641,12 +810,16 @@ export class EdgeCapabilityError extends Error {
 
 /**
  * @typedef {{
- *   zed_edge_capability: 1 | 2,
+ *   zed_edge_capability: 1 | 2 | 3,
  *   iss: string,
  *   aud: string,
  *   sub: string,
  *   sid?: string,
  *   parent_jti?: string,
+ *   assurance?: 1 | 2,
+ *   session_epoch?: number,
+ *   policy_epoch?: number,
+ *   revocation_checked_at?: number,
  *   iat: number,
  *   nbf: number,
  *   exp: number,
