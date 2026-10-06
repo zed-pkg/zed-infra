@@ -102,6 +102,8 @@ function outage(overrides = {}) {
     startedAtEpochSeconds: NOW - 30,
     jwksRefreshedAtEpochSeconds: NOW - 25,
     minimumAssurance: 2,
+    minimumSessionEpoch: 7,
+    minimumPolicyEpoch: 4,
     maxCapabilityAgeSeconds: 60,
     maxRevocationAgeSeconds: 60,
     maxJwksAgeSeconds: 60,
@@ -498,9 +500,12 @@ test("v3 is inert without trusted outage context", async () => {
   );
 });
 
-test("v3 fails closed on assurance, revocation, JWKS, capability, and outage staleness", async () => {
+test("v3 fails closed on assurance, epochs, nbf, revocation, JWKS, capability, and outage staleness", async () => {
   const cases = [
     [v3Claims({ assurance: 1 }), outage(), "outage_policy_rejected"],
+    [v3Claims({ session_epoch: 6 }), outage(), "outage_policy_rejected"],
+    [v3Claims({ policy_epoch: 3 }), outage(), "outage_policy_rejected"],
+    [v3Claims({ nbf: NOW + 1 }), outage(), "outage_policy_rejected"],
     [v3Claims({ revocation_checked_at: NOW - 120 }), outage(), "outage_policy_rejected"],
     [v3Claims(), outage({ jwksRefreshedAtEpochSeconds: NOW - 120 }), "outage_policy_rejected"],
     [
@@ -519,6 +524,8 @@ test("v3 fails closed on assurance, revocation, JWKS, capability, and outage sta
 test("v3 rejects invalid local outage policy instead of silently widening it", async () => {
   for (const policy of [
     outage({ minimumAssurance: 0 }),
+    outage({ minimumSessionEpoch: -1 }),
+    outage({ minimumPolicyEpoch: -1 }),
     outage({ maxCapabilityAgeSeconds: 301 }),
     outage({ maxRevocationAgeSeconds: 301 }),
     outage({ maxJwksAgeSeconds: 301 }),
