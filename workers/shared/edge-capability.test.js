@@ -84,6 +84,41 @@ async function verify(claims = baseClaims()) {
   });
 }
 
+function v3Claims(overrides = {}) {
+  return baseClaims({
+    zed_edge_capability: 3,
+    sid: "session:abc-123",
+    parent_jti: "parent-token-0001",
+    assurance: 2,
+    session_epoch: 7,
+    policy_epoch: 4,
+    revocation_checked_at: NOW - 20,
+    ...overrides,
+  });
+}
+
+function outage(overrides = {}) {
+  return {
+    startedAtEpochSeconds: NOW - 30,
+    jwksRefreshedAtEpochSeconds: NOW - 25,
+    minimumAssurance: 2,
+    maxCapabilityAgeSeconds: 60,
+    maxRevocationAgeSeconds: 60,
+    maxJwksAgeSeconds: 60,
+    maxOutageSeconds: 60,
+    ...overrides,
+  };
+}
+
+async function verifyV3(claims = v3Claims(), outagePolicy = outage()) {
+  return verifyEdgeCapability(await sign(claims), {
+    issuer: ISSUER,
+    jwks: jwks(),
+    nowEpochSeconds: NOW,
+    outage: outagePolicy,
+  });
+}
+
 async function expectCode(promise, code) {
   await assert.rejects(promise, (error) => {
     assert.ok(error instanceof EdgeCapabilityError);
@@ -421,4 +456,111 @@ test("v1 remains closed-world and cannot smuggle v2 lineage fields", async () =>
     ),
     "unknown_field",
   );
+});
+
+
+test("v3 requires bounded verifier-local outage admission and preserves signed provenance", async () => {
+  const claims = await verifyV3();
+  assert.equal(claims.zed_edge_capability, 3);
+  assert.equal(claims.assurance, 2);
+  assert.equal(claims.session_epoch, 7);
+  assert.equal(claims.policy_epoch, 4);
+  assert.equal(claims.revocation_checked_at, NOW - 20);
+  assert.deepEqual(brokerContextFromCapability(claims), {
+    principal: "user:test",
+    sessionLineage: "session:abc-123",
+    parentJti: "parent-token-0001",
+    capabilityId: "capability-0001",
+    capabilityExpiresAt: NOW + 120,
+    assurance: 2,
+    sessionEpoch: 7,
+    policyEpoch: 4,
+    revocationCheckedAt: NOW - 20,
+  });
+
+  const plan = planProviderRequest(claims, {
+    provider: "github",
+    package: "acme/private-lib",
+    resource: "acme/private-lib",
+    url: "https://api.github.com/repos/acme/private-lib/releases",
+  });
+  assert.equal(plan.credentialRef, "github-app:zed-pkg:installation-42");
+});
+
+test("v3 is inert without trusted outage context", async () => {
+  await expectCode(
+    verifyEdgeCapability(await sign(v3Claims()), {
+      issuer: ISSUER,
+      jwks: jwks(),
+      nowEpochSeconds: NOW,
+    }),
+    "outage_context_required",
+  );
+});
+
+test("v3 fails closed on assurance, revocation, JWKS, capability, and outage staleness", async () => {
+  const cases = [
+    [v3Claims({ assurance: 1 }), outage(), "outage_policy_rejected"],
+    [v3Claims({ revocation_checked_at: NOW - 120 }), outage(), "outage_policy_rejected"],
+    [v3Claims(), outage({ jwksRefreshedAtEpochSeconds: NOW - 120 }), "outage_policy_rejected"],
+    [
+      v3Claims({ iat: NOW - 120, nbf: NOW - 120, revocation_checked_at: NOW - 125 }),
+      outage({ maxCapabilityAgeSeconds: 60, maxRevocationAgeSeconds: 180 }),
+      "outage_policy_rejected",
+    ],
+    [v3Claims(), outage({ startedAtEpochSeconds: NOW - 120 }), "outage_policy_rejected"],
+  ];
+
+  for (const [claims, policy, code] of cases) {
+    await expectCode(verifyV3(claims, policy), code);
+  }
+});
+
+test("v3 rejects invalid local outage policy instead of silently widening it", async () => {
+  for (const policy of [
+    outage({ minimumAssurance: 0 }),
+    outage({ maxCapabilityAgeSeconds: 301 }),
+    outage({ maxRevocationAgeSeconds: 301 }),
+    outage({ maxJwksAgeSeconds: 301 }),
+    outage({ maxOutageSeconds: 301 }),
+    outage({ startedAtEpochSeconds: NOW + 1 }),
+    outage({ jwksRefreshedAtEpochSeconds: NOW + 1 }),
+  ]) {
+    await assert.rejects(
+      verifyV3(v3Claims(), policy),
+      (error) =>
+        error instanceof EdgeCapabilityError &&
+        ["invalid_outage_policy", "outage_policy_rejected"].includes(error.code),
+    );
+  }
+});
+
+test("v3 revocation checkpoint is signed provenance and cannot postdate issuance", async () => {
+  await expectCode(
+    verifyV3(v3Claims({ revocation_checked_at: NOW })),
+    "invalid_revocation_checkpoint",
+  );
+});
+
+test("v3 cannot self-assert verifier-local JWKS or outage freshness", async () => {
+  for (const field of [
+    { jwks_refreshed_at: NOW },
+    { outage_started_at: NOW },
+    { max_outage_seconds: 300 },
+  ]) {
+    await expectCode(
+      verifyV3(v3Claims(field)),
+      "unknown_field",
+    );
+  }
+});
+
+test("v1 and v2 remain verifiable without outage context", async () => {
+  assert.equal((await verify()).zed_edge_capability, 1);
+  const v2 = await verify(baseClaims({
+    zed_edge_capability: 2,
+    sid: "session:abc-123",
+    parent_jti: "parent-token-0001",
+  }));
+  assert.equal(v2.zed_edge_capability, 2);
 });
