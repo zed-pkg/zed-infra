@@ -272,8 +272,11 @@ function validateGithubCredential(raw, plan, context, now, requestedTtl) {
       "broker credential is stale or not currently valid",
     );
   }
-  if (raw.expires_at - now > requestedTtl + BROKER_FRESHNESS_SKEW_SECONDS) {
-    throw new CredentialBrokerError("ttl_widened", "broker credential exceeds requested lifetime");
+  if (
+    raw.expires_at > context.capabilityExpiresAt ||
+    raw.expires_at - now > requestedTtl + BROKER_FRESHNESS_SKEW_SECONDS
+  ) {
+    throw new CredentialBrokerError("ttl_widened", "broker credential exceeds requested or capability lifetime");
   }
 
   const permissions = raw.permissions;
