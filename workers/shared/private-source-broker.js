@@ -1,11 +1,24 @@
 const MAX_RESPONSE_BYTES = 32 * 1024;
 const ALLOWED_PROVIDERS = new Set(["github", "npm", "cargo-registry"]);
 const MAX_TTL_SECONDS = 300;
+const RESPONSE_KEYS = new Set([
+  "schema",
+  "provider",
+  "kind",
+  "token",
+  "expiresAt",
+  "resource",
+]);
 
 function boundedString(value, label, max = 512) {
   if (typeof value !== "string" || value.length === 0 || value.length > max) {
     throw new Error(`invalid ${label}`);
   }
+  return value;
+}
+
+function nonNegativeInteger(value, label) {
+  if (!Number.isSafeInteger(value) || value < 0) throw new Error(`invalid ${label}`);
   return value;
 }
 
@@ -35,7 +48,9 @@ function validateResource(provider, resource) {
 }
 
 export function brokerRequestFromCapability(capability, provider, resource) {
-  if (!capability || typeof capability !== "object") throw new Error("invalid capability");
+  if (!capability || Array.isArray(capability) || typeof capability !== "object") {
+    throw new Error("invalid capability");
+  }
   if (!ALLOWED_PROVIDERS.has(provider)) throw new Error("unsupported provider");
   if (capability.source?.provider !== provider) throw new Error("provider mismatch");
 
@@ -61,16 +76,25 @@ export function brokerRequestFromCapability(capability, provider, resource) {
     throw new Error("resource mismatch");
   }
 
+  const proof = capability.proof;
+  if (!proof || Array.isArray(proof) || typeof proof !== "object") {
+    throw new Error("invalid capability proof");
+  }
+  const authEpoch = nonNegativeInteger(proof.authEpoch, "authEpoch");
+  const policyEpoch = nonNegativeInteger(proof.policyEpoch, "policyEpoch");
+  const expiresAt = nonNegativeInteger(capability.exp, "capability expiry");
+  if (expiresAt === 0) throw new Error("invalid capability expiry");
+
   return Object.freeze({
     schema: "zed.private-source-credential-request.v1",
     provider,
     resource: checkedResource,
     principal: boundedString(capability.subject, "principal"),
-    sessionId: boundedString(capability.proof?.sessionId, "sessionId"),
+    sessionId: boundedString(proof.sessionId, "sessionId"),
     capabilityId: boundedString(capability.jti, "capabilityId"),
-    authEpoch: capability.proof?.authEpoch,
-    policyEpoch: capability.proof?.policyEpoch,
-    expiresAt: capability.exp,
+    authEpoch,
+    policyEpoch,
+    expiresAt,
   });
 }
 
@@ -78,9 +102,13 @@ export async function requestProviderCredential(binding, request, options = {}) 
   if (!binding || typeof binding.fetch !== "function") {
     throw new Error("credential broker unavailable");
   }
+  validateBrokerRequest(request);
   const now = Number.isSafeInteger(options.now)
     ? options.now
     : Math.floor(Date.now() / 1000);
+  if (now < 0) throw new Error("invalid current time");
+  if (request.expiresAt <= now) throw new Error("capability expired");
+
   const body = JSON.stringify(request);
   let response;
   try {
@@ -89,6 +117,7 @@ export async function requestProviderCredential(binding, request, options = {}) 
       headers: {
         "content-type": "application/json",
         accept: "application/json",
+        "cache-control": "no-store",
       },
       body,
     });
@@ -97,14 +126,23 @@ export async function requestProviderCredential(binding, request, options = {}) 
   }
 
   if (!response.ok) throw new Error("credential broker denied request");
+  if (!hasNoStore(response.headers.get("cache-control"))) {
+    throw new Error("credential broker response must be no-store");
+  }
+  const contentType = response.headers.get("content-type") || "";
+  if (!/^application\/(?:[a-z0-9.+-]*\+)?json(?:\s*;|$)/i.test(contentType)) {
+    throw new Error("credential broker response must be JSON");
+  }
   const declared = Number(response.headers.get("content-length") || 0);
-  if (declared > MAX_RESPONSE_BYTES) throw new Error("credential broker response too large");
+  if (!Number.isFinite(declared) || declared < 0 || declared > MAX_RESPONSE_BYTES) {
+    throw new Error("credential broker response too large");
+  }
   const bytes = new Uint8Array(await response.arrayBuffer());
   if (bytes.byteLength > MAX_RESPONSE_BYTES) throw new Error("credential broker response too large");
 
   let value;
   try {
-    value = JSON.parse(new TextDecoder().decode(bytes));
+    value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
   } catch {
     throw new Error("credential broker response malformed");
   }
@@ -112,9 +150,31 @@ export async function requestProviderCredential(binding, request, options = {}) 
   return Object.freeze(credential);
 }
 
+function validateBrokerRequest(request) {
+  if (!request || Array.isArray(request) || typeof request !== "object") {
+    throw new Error("invalid broker request");
+  }
+  if (request.schema !== "zed.private-source-credential-request.v1") {
+    throw new Error("invalid broker request schema");
+  }
+  if (!ALLOWED_PROVIDERS.has(request.provider)) throw new Error("unsupported provider");
+  validateResource(request.provider, request.resource);
+  boundedString(request.principal, "principal");
+  boundedString(request.sessionId, "sessionId");
+  boundedString(request.capabilityId, "capabilityId");
+  nonNegativeInteger(request.authEpoch, "authEpoch");
+  nonNegativeInteger(request.policyEpoch, "policyEpoch");
+  if (nonNegativeInteger(request.expiresAt, "capability expiry") === 0) {
+    throw new Error("invalid capability expiry");
+  }
+}
+
 function validateCredential(value, request, now) {
   if (!value || Array.isArray(value) || typeof value !== "object") {
     throw new Error("credential broker response malformed");
+  }
+  for (const key of Object.keys(value)) {
+    if (!RESPONSE_KEYS.has(key)) throw new Error("credential broker response has unknown field");
   }
   if (value.schema !== "zed.private-source-credential.v1") {
     throw new Error("credential broker schema mismatch");
@@ -123,7 +183,12 @@ function validateCredential(value, request, now) {
 
   const token = boundedString(value.token, "credential token", 8192);
   const expiresAt = value.expiresAt;
-  if (!Number.isSafeInteger(expiresAt) || expiresAt <= now || expiresAt > now + MAX_TTL_SECONDS) {
+  if (
+    !Number.isSafeInteger(expiresAt) ||
+    expiresAt <= now ||
+    expiresAt > now + MAX_TTL_SECONDS ||
+    expiresAt > request.expiresAt
+  ) {
     throw new Error("credential expiry outside policy");
   }
   const resource = validateResource(value.provider, value.resource);
@@ -158,4 +223,9 @@ export function upstreamAuthorizationHeaders(credential) {
   });
   headers.set("authorization", `Bearer ${credential.token}`);
   return headers;
+}
+
+function hasNoStore(value) {
+  return typeof value === "string"
+    && value.split(",").some((directive) => directive.trim().toLowerCase() === "no-store");
 }
