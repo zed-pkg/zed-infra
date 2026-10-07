@@ -5,12 +5,16 @@ on:
     paths:
       - "workers/shared/edge-capability.js"
       - "workers/shared/edge-capability.test.js"
+      - "workers/shared/provider-credential-broker.js"
+      - "workers/shared/provider-credential-broker.test.js"
       - ".github/workflows/edge-capability-v3.yml"
   push:
     branches: [main]
     paths:
       - "workers/shared/edge-capability.js"
       - "workers/shared/edge-capability.test.js"
+      - "workers/shared/provider-credential-broker.js"
+      - "workers/shared/provider-credential-broker.test.js"
       - ".github/workflows/edge-capability-v3.yml"
   workflow_dispatch:
 
@@ -46,8 +50,12 @@ jobs:
         with:
           node-version: "24.19.0"
 
-      - name: Syntax-check verifier
-        run: node --check workers/shared/edge-capability.js
+      - name: Syntax-check verifier and credential broker
+        run: |
+          node --check workers/shared/edge-capability.js
+          node --check workers/shared/provider-credential-broker.js
 
-      - name: Execute v1/v2/v3 verifier regressions
-        run: node --test workers/shared/edge-capability.test.js
+      - name: Execute v1/v2/v3 verifier and broker downgrade regressions
+        run: |
+          node --test workers/shared/edge-capability.test.js
+          node --test workers/shared/provider-credential-broker.test.js
