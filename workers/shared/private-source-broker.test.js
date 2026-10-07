@@ -23,6 +23,31 @@ const capability = Object.freeze({
   },
 });
 
+function brokerResponse(value, headers = {}) {
+  const payload = JSON.stringify(value);
+  return new Response(payload, {
+    status: 200,
+    headers: {
+      "content-type": "application/json",
+      "content-length": String(new TextEncoder().encode(payload).byteLength),
+      "cache-control": "private, no-store",
+      ...headers,
+    },
+  });
+}
+
+function githubCredential(overrides = {}) {
+  return {
+    schema: "zed.private-source-credential.v1",
+    provider: "github",
+    kind: "github-app-installation",
+    token: "short-lived-installation-token",
+    expiresAt: 1_800_000_120,
+    resource: { owner: "acme", repo: "private-lib" },
+    ...overrides,
+  };
+}
+
 test("broker requests are derived from exact authorized source identity", () => {
   assert.deepEqual(
     brokerRequestFromCapability(capability, "github", {
@@ -58,6 +83,23 @@ test("broker requests are derived from exact authorized source identity", () => 
   );
 });
 
+test("capability provenance must carry bounded epochs and expiry before broker I/O", () => {
+  for (const mutation of [
+    { proof: { ...capability.proof, authEpoch: -1 } },
+    { proof: { ...capability.proof, policyEpoch: 1.5 } },
+    { exp: Number.MAX_SAFE_INTEGER + 1 },
+    { proof: null },
+  ]) {
+    assert.throws(
+      () => brokerRequestFromCapability({ ...capability, ...mutation }, "github", {
+        owner: "acme",
+        repo: "private-lib",
+      }),
+      /invalid/,
+    );
+  }
+});
+
 test("GitHub broker response must be a short-lived exact installation credential", async () => {
   const request = brokerRequestFromCapability(capability, "github", {
     owner: "acme",
@@ -67,21 +109,8 @@ test("GitHub broker response must be a short-lived exact installation credential
     async fetch(_url, init) {
       const received = JSON.parse(init.body);
       assert.deepEqual(received, request);
-      const payload = JSON.stringify({
-        schema: "zed.private-source-credential.v1",
-        provider: "github",
-        kind: "github-app-installation",
-        token: "short-lived-installation-token",
-        expiresAt: 1_800_000_120,
-        resource: { owner: "acme", repo: "private-lib" },
-      });
-      return new Response(payload, {
-        status: 200,
-        headers: {
-          "content-type": "application/json",
-          "content-length": String(new TextEncoder().encode(payload).byteLength),
-        },
-      });
+      assert.equal(init.headers["cache-control"], "no-store");
+      return brokerResponse(githubCredential());
     },
   };
   const credential = await requestProviderCredential(binding, request, {
@@ -94,7 +123,7 @@ test("GitHub broker response must be a short-lived exact installation credential
   assert.equal(headers.get("cache-control"), "private, no-store");
 });
 
-test("broker credentials cannot widen resource, lifetime, or provider kind", async () => {
+test("broker credentials cannot widen resource, lifetime, capability lifetime, or provider kind", async () => {
   const request = brokerRequestFromCapability(capability, "github", {
     owner: "acme",
     repo: "private-lib",
@@ -102,20 +131,12 @@ test("broker credentials cannot widen resource, lifetime, or provider kind", asy
   for (const mutation of [
     { resource: { owner: "acme", repo: "other" } },
     { expiresAt: 1_800_001_000 },
+    { expiresAt: 1_800_000_201 },
     { kind: "generic-bearer" },
   ]) {
     const binding = {
       async fetch() {
-        const payload = JSON.stringify({
-          schema: "zed.private-source-credential.v1",
-          provider: "github",
-          kind: "github-app-installation",
-          token: "token",
-          expiresAt: 1_800_000_120,
-          resource: { owner: "acme", repo: "private-lib" },
-          ...mutation,
-        });
-        return new Response(payload, { status: 200 });
+        return brokerResponse(githubCredential(mutation));
       },
     };
     await assert.rejects(
@@ -123,6 +144,32 @@ test("broker credentials cannot widen resource, lifetime, or provider kind", asy
       /credential/,
     );
   }
+});
+
+test("broker responses are no-store, JSON, closed-world, and bounded", async () => {
+  const request = brokerRequestFromCapability(capability, "github", {
+    owner: "acme",
+    repo: "private-lib",
+  });
+
+  await assert.rejects(
+    () => requestProviderCredential({
+      fetch: async () => brokerResponse(githubCredential(), { "cache-control": "private, max-age=60" }),
+    }, request, { now: 1_800_000_000 }),
+    /no-store/,
+  );
+  await assert.rejects(
+    () => requestProviderCredential({
+      fetch: async () => brokerResponse(githubCredential(), { "content-type": "text/plain" }),
+    }, request, { now: 1_800_000_000 }),
+    /must be JSON/,
+  );
+  await assert.rejects(
+    () => requestProviderCredential({
+      fetch: async () => brokerResponse(githubCredential({ debug_token: "must-not-escape" })),
+    }, request, { now: 1_800_000_000 }),
+    /unknown field/,
+  );
 });
 
 test("the broker never accepts unavailable, denied, malformed, or oversized replies", async () => {
@@ -139,7 +186,11 @@ test("the broker never accepts unavailable, denied, malformed, or oversized repl
     /denied/,
   );
   await assert.rejects(
-    () => requestProviderCredential({ fetch: async () => new Response("not-json") }, request),
+    () => requestProviderCredential({
+      fetch: async () => new Response("not-json", {
+        headers: { "cache-control": "no-store", "content-type": "application/json" },
+      }),
+    }, request, { now: 1_800_000_000 }),
     /malformed/,
   );
 });
