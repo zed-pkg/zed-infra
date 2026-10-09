@@ -85,6 +85,8 @@ const PROVIDERS = new Set(["github", "npm", "cargo-registry"]);
  *     startedAtEpochSeconds: number,
  *     jwksRefreshedAtEpochSeconds: number,
  *     minimumAssurance: 1 | 2,
+ *     minimumSessionEpoch: number,
+ *     minimumPolicyEpoch: number,
  *     maxCapabilityAgeSeconds: number,
  *     maxRevocationAgeSeconds: number,
  *     maxJwksAgeSeconds: number,
@@ -700,6 +702,14 @@ function validateOutageAdmission(claims, rawPolicy, now) {
     rawPolicy.minimumAssurance,
     "minimumAssurance",
   );
+  const minimumSessionEpoch = boundedOutageInteger(
+    rawPolicy.minimumSessionEpoch,
+    "minimumSessionEpoch",
+  );
+  const minimumPolicyEpoch = boundedOutageInteger(
+    rawPolicy.minimumPolicyEpoch,
+    "minimumPolicyEpoch",
+  );
   if (minimumAssurance !== 1 && minimumAssurance !== 2) {
     throw new EdgeCapabilityError("invalid_outage_policy", "minimum assurance must be 1 or 2");
   }
@@ -717,7 +727,10 @@ function validateOutageAdmission(claims, rawPolicy, now) {
 
   if (
     claims.assurance < minimumAssurance ||
+    claims.session_epoch < minimumSessionEpoch ||
+    claims.policy_epoch < minimumPolicyEpoch ||
     now < claims.iat ||
+    now < claims.nbf ||
     now >= claims.exp ||
     startedAt > now ||
     jwksRefreshedAt > now

@@ -50,6 +50,10 @@ const RESPONSE_KEYS = new Set([
  *   parentJti: string,
  *   capabilityId: string,
  *   capabilityExpiresAt: number,
+ *   assurance?: 1 | 2,
+ *   sessionEpoch?: number,
+ *   policyEpoch?: number,
+ *   revocationCheckedAt?: number,
  *   requestedTtlSeconds?: number,
  *   nowEpochSeconds?: number,
  * }} context
@@ -195,6 +199,33 @@ function validateContext(context) {
   if (!Number.isSafeInteger(context.capabilityExpiresAt) || context.capabilityExpiresAt < 0) {
     throw new CredentialBrokerError("invalid_context", "capability expiry is invalid");
   }
+
+  const v3Fields = [
+    context.assurance,
+    context.sessionEpoch,
+    context.policyEpoch,
+    context.revocationCheckedAt,
+  ];
+  if (v3Fields.some((value) => value !== undefined)) {
+    if (
+      ![1, 2].includes(context.assurance)
+      || !Number.isSafeInteger(context.sessionEpoch)
+      || context.sessionEpoch < 0
+      || !Number.isSafeInteger(context.policyEpoch)
+      || context.policyEpoch < 0
+      || !Number.isSafeInteger(context.revocationCheckedAt)
+      || context.revocationCheckedAt < 0
+    ) {
+      throw new CredentialBrokerError(
+        "invalid_context",
+        "v3 broker provenance must be complete and well formed",
+      );
+    }
+    throw new CredentialBrokerError(
+      "v3_broker_protocol_required",
+      "v3 capability provenance cannot be downgraded to the v1 credential-broker request",
+    );
+  }
 }
 
 function validateGithubCredential(raw, plan, context, now, requestedTtl) {
@@ -241,8 +272,11 @@ function validateGithubCredential(raw, plan, context, now, requestedTtl) {
       "broker credential is stale or not currently valid",
     );
   }
-  if (raw.expires_at - now > requestedTtl + BROKER_FRESHNESS_SKEW_SECONDS) {
-    throw new CredentialBrokerError("ttl_widened", "broker credential exceeds requested lifetime");
+  if (
+    raw.expires_at > context.capabilityExpiresAt ||
+    raw.expires_at - now > requestedTtl + BROKER_FRESHNESS_SKEW_SECONDS
+  ) {
+    throw new CredentialBrokerError("ttl_widened", "broker credential exceeds requested or capability lifetime");
   }
 
   const permissions = raw.permissions;

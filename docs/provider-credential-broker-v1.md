@@ -70,3 +70,17 @@ The Worker derives broker identity only from the verified capability:
 V1 remains readable for compatibility but cannot enter the credential-broker
 path because it lacks `sid` and `parent_jti`. These identifiers are distinct
 and must never be substituted for one another.
+
+
+## V3 capability downgrade fence
+
+Broker protocol v1 does not carry the v3 assurance, session epoch, policy epoch,
+or revocation-checkpoint provenance. The client therefore rejects a v3 broker
+context before any broker I/O instead of silently stripping those fields and
+requesting a v1 credential.
+
+Enabling broker-backed v3 fallback requires a separately versioned broker
+protocol whose request and response both bind the complete v3 provenance and
+whose broker-side authorization enforces the same local epoch/freshness policy.
+Until that protocol exists, v2 remains the newest capability admitted to the
+v1 credential-broker path.

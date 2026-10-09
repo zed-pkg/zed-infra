@@ -260,6 +260,43 @@ test("rejects inverted broker credential lifetime", async () => {
   );
 });
 
+test("v3 provenance cannot be silently downgraded to broker v1", async () => {
+  let called = false;
+  await expectCode(
+    requestProviderCredential(
+      broker(async () => {
+        called = true;
+        return response(validCredential());
+      }),
+      plan(),
+      context({
+        assurance: 2,
+        sessionEpoch: 7,
+        policyEpoch: 4,
+        revocationCheckedAt: NOW - 20,
+      }),
+    ),
+    "v3_broker_protocol_required",
+  );
+  assert.equal(called, false);
+});
+
+test("partial v3 provenance is rejected as malformed before broker I/O", async () => {
+  let called = false;
+  await expectCode(
+    requestProviderCredential(
+      broker(async () => {
+        called = true;
+        return response(validCredential());
+      }),
+      plan(),
+      context({ assurance: 2 }),
+    ),
+    "invalid_context",
+  );
+  assert.equal(called, false);
+});
+
 test("requires parent delegated-token lineage before contacting the broker", async () => {
   let called = false;
   await expectCode(
