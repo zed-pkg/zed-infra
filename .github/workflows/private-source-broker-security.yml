@@ -1,0 +1,53 @@
+name: Private source broker security
+
+on:
+  pull_request:
+    paths:
+      - "workers/shared/private-source-broker.js"
+      - "workers/shared/private-source-broker.test.js"
+      - ".github/workflows/private-source-broker-security.yml"
+  push:
+    branches: [main]
+    paths:
+      - "workers/shared/private-source-broker.js"
+      - "workers/shared/private-source-broker.test.js"
+      - ".github/workflows/private-source-broker-security.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: private-source-broker-security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  broker-security:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out exact source head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          show-progress: false
+
+      - name: Verify exact source revision
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+
+      - name: Set up bounded Node runtime
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: "24.19.0"
+
+      - name: Syntax-check private-source broker
+        run: node --check workers/shared/private-source-broker.js
+
+      - name: Execute broker security regressions
+        run: node --test workers/shared/private-source-broker.test.js
