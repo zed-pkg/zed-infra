@@ -571,3 +571,41 @@ test("v1 and v2 remain verifiable without outage context", async () => {
   }));
   assert.equal(v2.zed_edge_capability, 2);
 });
+
+test("duplicate eligible signing kid fails closed regardless of JWKS order", async () => {
+  const token = await sign(baseClaims());
+  const alternatePair = await crypto.subtle.generateKey(
+    { name: "ECDSA", namedCurve: "P-256" },
+    true,
+    ["sign", "verify"],
+  );
+  const alternate = {
+    ...await crypto.subtle.exportKey("jwk", alternatePair.publicKey),
+    kid: publicJwk.kid,
+    alg: "ES256",
+    use: "sig",
+  };
+  for (const keys of [[publicJwk, alternate], [alternate, publicJwk]]) {
+    await expectCode(verifyEdgeCapability(token, {
+      issuer: ISSUER,
+      jwks: { keys },
+      nowEpochSeconds: NOW,
+    }), "ambiguous_jwks_kid");
+  }
+
+  // Non-signing/incorrect-curve peers are not competing trust anchors.
+  const ignored = { ...alternate, use: "enc" };
+  const verified = await verifyEdgeCapability(token, {
+    issuer: ISSUER, jwks: { keys: [ignored, publicJwk] }, nowEpochSeconds: NOW,
+  });
+  assert.equal(verified.sub, "user:test");
+
+  await expectCode(verifyEdgeCapability(token, {
+    issuer: ISSUER, jwks: { keys: [alternate] }, nowEpochSeconds: NOW,
+  }), "invalid_signature");
+  await expectCode(verifyEdgeCapability(token, {
+    issuer: ISSUER,
+    jwks: { keys: [{ ...publicJwk, x: "not-a-valid-coordinate" }] },
+    nowEpochSeconds: NOW,
+  }), "invalid_jwk");
+});
