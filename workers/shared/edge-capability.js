@@ -122,7 +122,9 @@ export async function verifyEdgeCapability(token, options) {
   }
 
   const jwks = parseJwks(options.jwks);
-  const jwk = jwks.keys.find(
+  // Reject ambiguous trust anchors independent of JWKS array ordering.
+  // Only verification-eligible keys participate in the uniqueness constraint.
+  const matchingKeys = jwks.keys.filter(
     (candidate) =>
       candidate &&
       candidate.kid === header.kid &&
@@ -131,9 +133,13 @@ export async function verifyEdgeCapability(token, options) {
       (!candidate.alg || candidate.alg === "ES256") &&
       (!candidate.use || candidate.use === "sig"),
   );
-  if (!jwk) {
+  if (matchingKeys.length === 0) {
     throw new EdgeCapabilityError("unknown_kid", "no pinned verification key matches the JWT kid");
   }
+  if (matchingKeys.length > 1) {
+    throw new EdgeCapabilityError("ambiguous_jwks_kid", "pinned JWKS has duplicate eligible signing keys");
+  }
+  const jwk = matchingKeys[0];
 
   let key;
   try {
