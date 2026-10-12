@@ -103,6 +103,26 @@ export async function verifyEdgeCapability(token, options) {
     throw new TypeError("issuer is required");
   }
 
+  // Caller-supplied policy may narrow but never widen the signed contract.
+  // Validate before decoding claims so invalid verifier configuration fails closed.
+  const maxTtlSeconds = options.maxTtlSeconds === undefined
+    ? EDGE_CAPABILITY_MAX_TTL_SECONDS : options.maxTtlSeconds;
+  const clockSkewSeconds = options.clockSkewSeconds === undefined
+    ? EDGE_CAPABILITY_CLOCK_SKEW_SECONDS : options.clockSkewSeconds;
+  if (
+    !Number.isSafeInteger(maxTtlSeconds) ||
+    maxTtlSeconds < 1 ||
+    maxTtlSeconds > EDGE_CAPABILITY_MAX_TTL_SECONDS ||
+    !Number.isSafeInteger(clockSkewSeconds) ||
+    clockSkewSeconds < 0 ||
+    clockSkewSeconds > EDGE_CAPABILITY_CLOCK_SKEW_SECONDS
+  ) {
+    throw new EdgeCapabilityError(
+      "invalid_verifier_policy",
+      "verifier lifetime/skew policy exceeds the edge capability contract",
+    );
+  }
+
   const parts = token.split(".");
   if (parts.length !== 3 || parts.some((part) => part.length === 0)) {
     throw new EdgeCapabilityError("invalid_token", "capability must have three JWT segments");
@@ -164,8 +184,8 @@ export async function verifyEdgeCapability(token, options) {
     issuer: options.issuer,
     audience: options.audience ?? EDGE_CAPABILITY_AUDIENCE,
     nowEpochSeconds,
-    maxTtlSeconds: options.maxTtlSeconds ?? EDGE_CAPABILITY_MAX_TTL_SECONDS,
-    clockSkewSeconds: options.clockSkewSeconds ?? EDGE_CAPABILITY_CLOCK_SKEW_SECONDS,
+    maxTtlSeconds,
+    clockSkewSeconds,
   });
   if (verified.zed_edge_capability === EDGE_CAPABILITY_VERSION_V3) {
     validateOutageAdmission(verified, options.outage, nowEpochSeconds);

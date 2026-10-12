@@ -571,3 +571,56 @@ test("v1 and v2 remain verifiable without outage context", async () => {
   }));
   assert.equal(v2.zed_edge_capability, 2);
 });
+
+test("v1/v2/v3 reject widening or invalid verifier policy before claim processing", async () => {
+  const versions = [
+    baseClaims(),
+    baseClaims({ zed_edge_capability: 2, sid: "session:abc-123", parent_jti: "parent-token-0001" }),
+    v3Claims(),
+  ];
+  for (const claims of versions) {
+    const token = await sign(claims);
+    for (const policy of [
+      { maxTtlSeconds: 301 }, { clockSkewSeconds: 31 },
+      { maxTtlSeconds: 0 }, { clockSkewSeconds: -1 },
+      { maxTtlSeconds: 2.5 }, { clockSkewSeconds: Infinity },
+      { maxTtlSeconds: null }, { clockSkewSeconds: "30" },
+      { maxTtlSeconds: Number.MAX_SAFE_INTEGER + 1 },
+    ]) {
+      await expectCode(verifyEdgeCapability(token, {
+        issuer: ISSUER, jwks: jwks(), nowEpochSeconds: NOW,
+        ...(claims.zed_edge_capability === 3 ? { outage: outage() } : {}),
+        ...policy,
+      }), "invalid_verifier_policy");
+    }
+  }
+});
+
+test("tightening v1/v2 verifier policy is allowed but never expands validity", async () => {
+  for (const claims of [
+    baseClaims(),
+    baseClaims({ zed_edge_capability: 2, sid: "session:abc-123", parent_jti: "parent-token-0001" }),
+  ]) {
+    const token = await sign(claims);
+    await expectCode(verifyEdgeCapability(token, {
+      issuer: ISSUER, jwks: jwks(), nowEpochSeconds: NOW,
+      maxTtlSeconds: 100, clockSkewSeconds: 0,
+    }), "invalid_lifetime");
+    const valid = await verifyEdgeCapability(token, {
+      issuer: ISSUER, jwks: jwks(), nowEpochSeconds: NOW,
+      maxTtlSeconds: 300, clockSkewSeconds: 0,
+    });
+    assert.equal(valid.sub, "user:test");
+  }
+});
+
+test("v3 outage nbf/exp remain exact regardless of permitted skew", async () => {
+  for (const claims of [
+    v3Claims({ nbf: NOW + 1 }), v3Claims({ exp: NOW }),
+  ]) {
+    await expectCode(verifyEdgeCapability(await sign(claims), {
+      issuer: ISSUER, jwks: jwks(), nowEpochSeconds: NOW,
+      clockSkewSeconds: 30, outage: outage(),
+    }), "outage_policy_rejected");
+  }
+});
