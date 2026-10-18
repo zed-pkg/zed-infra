@@ -602,3 +602,23 @@ test("ignores ineligible same-kid keys without changing verified signing authori
   });
   assert.equal(claims.sub, "user:test");
 });
+
+test("rejects duplicated signing authority for an unrelated kid in trusted snapshot", async () => {
+  const token = await sign(baseClaims());
+  const otherPair = await crypto.subtle.generateKey(
+    { name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"],
+  );
+  const alternate = await crypto.subtle.exportKey("jwk", otherPair.publicKey);
+  Object.assign(alternate, { kid: "other-signing-key", alg: "ES256", use: "sig" });
+  for (const keys of [
+    [publicJwk, alternate, { ...alternate }],
+    [{ ...alternate }, alternate, publicJwk],
+  ]) {
+    await expectCode(
+      verifyEdgeCapability(token, {
+        issuer: ISSUER, jwks: { keys }, nowEpochSeconds: NOW,
+      }),
+      "ambiguous_kid",
+    );
+  }
+});
