@@ -122,7 +122,9 @@ export async function verifyEdgeCapability(token, options) {
   }
 
   const jwks = parseJwks(options.jwks);
-  const jwk = jwks.keys.find(
+  // Reject ambiguous eligible signing authorities independently of array order.
+  // Ineligible keys cannot change which P-256/ES256 signing key is trusted.
+  const eligible = jwks.keys.filter(
     (candidate) =>
       candidate &&
       candidate.kid === header.kid &&
@@ -131,9 +133,13 @@ export async function verifyEdgeCapability(token, options) {
       (!candidate.alg || candidate.alg === "ES256") &&
       (!candidate.use || candidate.use === "sig"),
   );
-  if (!jwk) {
+  if (eligible.length === 0) {
     throw new EdgeCapabilityError("unknown_kid", "no pinned verification key matches the JWT kid");
   }
+  if (eligible.length > 1) {
+    throw new EdgeCapabilityError("ambiguous_kid", "multiple eligible verification keys share the JWT kid");
+  }
+  const [jwk] = eligible;
 
   let key;
   try {
