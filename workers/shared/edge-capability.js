@@ -228,7 +228,7 @@ export function planProviderRequest(claims, request) {
     );
   }
 
-  assertProviderDestination(grant, url);
+  assertProviderDestination(grant, url, request.url);
 
   return Object.freeze({
     provider: grant.provider,
@@ -540,8 +540,9 @@ function validateProviderResource(provider, resource, origin) {
 /**
  * @param {EdgeCapabilityGrant} grant
  * @param {URL} url
+ * @param {string} rawUrl
  */
-function assertProviderDestination(grant, url) {
+function assertProviderDestination(grant, url, rawUrl) {
   switch (grant.provider) {
     case "github": {
       const [owner, repo] = grant.resource.split("/");
@@ -598,9 +599,13 @@ function assertProviderDestination(grant, url) {
       // Contract v1 admits only Cargo's resource-bound crate download form.
       // Private registries can have custom paths; do not guess those layouts
       // and never fall back to an origin-only credential authorization.
+      // WHATWG URL normalizes dot segments; require the transmitted raw path
+      // to match the validated path so traversal cannot be silently erased.
+      const rawPath = new RegExp("^https://[^/?#]+(/[^?#]*)?").exec(rawUrl)?.[1] ?? "/";
       const match = new RegExp("^/api/v1/crates/([^/]+)/([^/]+)/download$").exec(url.pathname);
       if (
         !match ||
+        rawPath !== url.pathname ||
         match[1] !== grant.resource ||
         !new RegExp("^[0-9]+([.][0-9]+){2}(-[0-9A-Za-z.-]+)?([+][0-9A-Za-z.-]+)?$").test(match[2]) ||
         url.search ||
