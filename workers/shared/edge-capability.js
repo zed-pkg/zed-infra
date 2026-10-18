@@ -401,6 +401,20 @@ function validateClaims(rawClaims, policy) {
     throw new EdgeCapabilityError("invalid_grants", "capability must contain 1..16 grants");
   }
   const grants = rawClaims.grants.map(validateGrant);
+  // Provider planning selects by this exact authorization tuple. Duplicate
+  // entries would make the selected credential_ref (or origin) order-dependent.
+  // JSON tuple encoding avoids collisions from separators inside coordinates.
+  const grantKeys = new Set();
+  for (const grant of grants) {
+    const key = JSON.stringify([grant.provider, grant.package, grant.resource]);
+    if (grantKeys.has(key)) {
+      throw new EdgeCapabilityError(
+        "duplicate_grant",
+        "capability has ambiguous grants for the same provider/package/resource",
+      );
+    }
+    grantKeys.add(key);
+  }
 
   return Object.freeze({
     zed_edge_capability: version,
