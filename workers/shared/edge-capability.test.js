@@ -282,6 +282,84 @@ test("npm grants are scoped to one private package on registry.npmjs.org", async
   );
 });
 
+test("rejects duplicate grant authority irrespective of credential ref, origin, or capability version", async () => {
+  const githubGrant = baseClaims().grants[0];
+  const duplicateGithub = { ...githubGrant, credential_ref: "github-app:other:installation-99" };
+  const cargoGrant = {
+    provider: "cargo-registry",
+    operation: "read",
+    package: "acme/private-rust",
+    resource: "private_rust",
+    origin: "https://cargo.acme.example",
+    credential_ref: "cargo-registry:acme",
+  };
+  const duplicateCargo = {
+    ...cargoGrant,
+    origin: "https://cargo.other.example",
+    credential_ref: "cargo-registry:other",
+  };
+  for (const grants of [
+    [githubGrant, { ...githubGrant }],
+    [githubGrant, duplicateGithub],
+    [cargoGrant, duplicateCargo],
+  ]) {
+    await expectCode(verify(baseClaims({ grants })), "duplicate_grant");
+    await expectCode(verify(baseClaims({
+      zed_edge_capability: 2,
+      sid: "session:abc-123",
+      parent_jti: "parent-token-0001",
+      grants,
+    })), "duplicate_grant");
+    await expectCode(verifyV3(v3Claims({ grants })), "duplicate_grant");
+  }
+
+  const distinct = await verify(baseClaims({
+    grants: [githubGrant, { ...githubGrant, resource: "acme/other-lib" }],
+  }));
+  assert.equal(distinct.grants.length, 2);
+});
+
+test("Cargo fallback rejects same-origin cross-crate and ambiguous paths", async () => {
+  const claims = await verify(baseClaims({
+    grants: [{
+      provider: "cargo-registry",
+      operation: "read",
+      package: "acme/private-rust",
+      resource: "private_rust",
+      origin: "https://cargo.acme.example",
+      credential_ref: "cargo-registry:acme",
+    }],
+  }));
+  const request = (url) => planProviderRequest(claims, {
+    provider: "cargo-registry",
+    package: "acme/private-rust",
+    resource: "private_rust",
+    url,
+  });
+  for (const url of [
+    "https://cargo.acme.example/api/v1/crates/other_crate/1.2.3/download",
+    "https://cargo.acme.example/api/v1/crates/private_rust",
+    "https://cargo.acme.example/api/v1/crates/private_rust/1.2.3/download?crate=other",
+    "https://cargo.acme.example/api/v1/crates/private%5Frust/1.2.3/download",
+    "https://cargo.acme.example/api/v1/crates/other_crate/../private_rust/1.2.3/download",
+    "https://cargo.acme.example/api/v1/crates/private_rust/%31.2.3/download",
+    "https://cargo.acme.example/api/v1/crates/private_rust/1.2.3/download/extra",
+    "https://cargo.acme.example/admin",
+  ]) {
+    assert.throws(request.bind(null, url), (error) =>
+      error instanceof EdgeCapabilityError && error.code === "provider_destination_mismatch",
+      url);
+  }
+  assert.equal(
+    request("https://cargo.acme.example/api/v1/crates/private_rust/1.2.3/download").resource,
+    "private_rust",
+  );
+  assert.equal(
+    request("https://cargo.acme.example/api/v1/crates/private_rust/1.2.3-alpha.1/download").resource,
+    "private_rust",
+  );
+});
+
 test("private Cargo grants require an exact credential-free HTTPS registry origin", async () => {
   const claims = await verify(
     baseClaims({
