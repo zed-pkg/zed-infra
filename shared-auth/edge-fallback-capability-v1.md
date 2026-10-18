@@ -87,7 +87,25 @@ browser bearer token as the npm credential.
 
 crates.io is public-only and is not modeled as a private-registry authority.
 A private Cargo grant contains one crate name plus one exact credential-free
-HTTPS registry origin. The request planner refuses every other origin.
+HTTPS registry origin.
+
+**Private download route v1** is narrowly specified as
+`GET https://<exact-registry-origin>/api/v1/crates/<exact-grant.resource>/<version>/download`,
+with the version beginning in an ASCII digit and otherwise containing only
+ASCII letters, digits, dot, plus, and hyphen. The planner validates the original
+URL spelling *before* URL normalization and rejects percent escapes, dot-segment
+traversal, queries, fragments, alternate paths, alternate crate coordinates,
+and other registry origins. No generic same-host private-registry access is
+authorized. This route is an explicit candidate contract based on the existing
+Worker regression fixture, not a claim of support for every private Cargo
+registry's download URL template.
+
+Registries with other download layouts need a separately reviewed/versioned
+route contract and new positive and negative fixtures. The credential broker
+**must independently enforce** the same crate/resource binding: origin
+confinement by itself is insufficient when broker credentials cover multiple
+crates. Do not enable private Cargo fallback until broker enforcement and
+integration tests have been certified.
 
 Authenticated private Git sources belong to the GitHub/Git provider family,
 not to the crates.io public fallback path.
