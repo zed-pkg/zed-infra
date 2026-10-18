@@ -23,6 +23,9 @@ const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const GITHUB_REPOSITORY = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const NPM_SCOPED_PACKAGE = /^@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*$/;
 const CARGO_CRATE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
+// Strict, versioned private Cargo download form; no encoded path aliases,
+// traversal, queries, fragments or arbitrary broker destinations.
+const PRIVATE_CARGO_DOWNLOAD_V1 = /^\/api\/v1\/crates\/([A-Za-z0-9][A-Za-z0-9_-]{0,127})\/([0-9][A-Za-z0-9.+-]{0,127})\/download$/;
 const CREDENTIAL_REF = /^[A-Za-z0-9][A-Za-z0-9:._/-]{0,191}$/;
 const JTI = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,191}$/;
 const LINEAGE_ID = /^[A-Za-z0-9][A-Za-z0-9:._/-]{0,255}$/;
@@ -228,7 +231,7 @@ export function planProviderRequest(claims, request) {
     );
   }
 
-  assertProviderDestination(grant, url);
+  assertProviderDestination(grant, url, request.url);
 
   return Object.freeze({
     provider: grant.provider,
@@ -523,8 +526,9 @@ function validateProviderResource(provider, resource, origin) {
 /**
  * @param {EdgeCapabilityGrant} grant
  * @param {URL} url
+ * @param {string} rawUrl
  */
-function assertProviderDestination(grant, url) {
+function assertProviderDestination(grant, url, rawUrl) {
   switch (grant.provider) {
     case "github": {
       const [owner, repo] = grant.resource.split("/");
@@ -571,14 +575,31 @@ function assertProviderDestination(grant, url) {
       }
       return;
     }
-    case "cargo-registry":
-      if (!grant.origin || url.origin !== grant.origin) {
+    case "cargo-registry": {
+      // URL() normalizes dot segments, so validate the *original* path before
+      // any canonicalization can hide traversal or encoded crate aliases.
+      const rawPath =
+        typeof rawUrl === "string" && grant.origin &&
+        rawUrl.startsWith(`${grant.origin}/`)
+          ? rawUrl.slice(grant.origin.length)
+          : "";
+      const download = PRIVATE_CARGO_DOWNLOAD_V1.exec(rawPath);
+      if (
+        !grant.origin ||
+        url.origin !== grant.origin ||
+        !download ||
+        download[1] !== grant.resource ||
+        url.pathname !== rawPath ||
+        url.search ||
+        url.hash
+      ) {
         throw new EdgeCapabilityError(
           "provider_destination_mismatch",
-          "Cargo URL is outside the authorized private registry origin",
+          "Cargo fallback requires the exact authorized crate in private-download-v1",
         );
       }
       return;
+    }
     default:
       throw new EdgeCapabilityError("invalid_provider", "grant provider is unsupported");
   }
