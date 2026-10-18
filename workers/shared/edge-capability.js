@@ -598,11 +598,11 @@ function assertProviderDestination(grant, url) {
       // Contract v1 admits only Cargo's resource-bound crate download form.
       // Private registries can have custom paths; do not guess those layouts
       // and never fall back to an origin-only credential authorization.
-      const match = /^\\/api\\/v1\\/crates\\/([^/]+)\\/([^/]+)\\/download$/.exec(url.pathname);
+      const match = new RegExp("^/api/v1/crates/([^/]+)/([^/]+)/download$").exec(url.pathname);
       if (
         !match ||
         match[1] !== grant.resource ||
-        !/^[0-9]+(?:\\.[0-9]+){2}(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$/.test(match[2]) ||
+        !new RegExp("^[0-9]+([.][0-9]+){2}(-[0-9A-Za-z.-]+)?([+][0-9A-Za-z.-]+)?$").test(match[2]) ||
         url.search ||
         url.hash
       ) {
