@@ -318,6 +318,54 @@ test("private Cargo grants require an exact credential-free HTTPS registry origi
   );
 });
 
+test("private Cargo download v1 binds the exact crate and rejects URL aliases", async () => {
+  const claims = await verify(baseClaims({
+    grants: [{
+      provider: "cargo-registry",
+      operation: "read",
+      package: "acme/private-rust",
+      resource: "private_rust",
+      origin: "https://cargo.acme.example",
+      credential_ref: "cargo-registry:acme",
+    }],
+  }));
+
+  const plan = planProviderRequest(claims, {
+    provider: "cargo-registry",
+    package: "acme/private-rust",
+    resource: "private_rust",
+    url: "https://cargo.acme.example/api/v1/crates/private_rust/1.2.3-rc.1/download",
+  });
+  assert.equal(plan.resource, "private_rust");
+
+  const forbidden = [
+    "https://cargo.acme.example/api/v1/crates/other_crate/1.2.3/download",
+    "https://cargo.acme.example/api/v1/crates/private_rust_extra/1.2.3/download",
+    "https://cargo.acme.example/api/v1/crates/%70rivate_rust/1.2.3/download",
+    "https://cargo.acme.example/api/v1/crates/other_crate/../private_rust/1.2.3/download",
+    "https://cargo.acme.example/api/v1/crates/%2e%2e/private_rust/1.2.3/download",
+    "https://cargo.acme.example/api/v1/crates/private_rust/1.2.3/%64ownload",
+    "https://cargo.acme.example/api/v1/crates/private_rust/1.2.3/download?crate=other_crate",
+    "https://cargo.acme.example/api/v1/crates/private_rust/1.2.3/download#fragment",
+    "https://cargo.acme.example/api/v1/crates/private_rust/1.2.3/download/extra",
+    "https://cargo.acme.example/api/v1/crates/private_rust/1.2.3",
+    "https://cargo.acme.example/api/v1/crates/private_rust/latest/download",
+  ];
+  for (const url of forbidden) {
+    assert.throws(
+      () => planProviderRequest(claims, {
+        provider: "cargo-registry",
+        package: "acme/private-rust",
+        resource: "private_rust",
+        url,
+      }),
+      (error) => error instanceof EdgeCapabilityError
+        && error.code === "provider_destination_mismatch",
+      `Expected Cargo destination to be denied: ${url}`,
+    );
+  }
+});
+
 test("provider, package, and resource must all match one grant", async () => {
   const claims = await verify();
   assert.throws(
