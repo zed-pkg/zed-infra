@@ -69,8 +69,13 @@ writeFileSync(generatedUrl, generated, { encoding: "utf8", mode: 0o600 });
 try {
   const result = spawnSync(
     process.execPath,
-    ["--test", fileURLToPath(generatedUrl), fileURLToPath(new URL("origin-websocket.test.mjs", here))],
-    { stdio: "inherit", timeout: 180_000, killSignal: "SIGKILL" },
+    [
+      "--test",
+      "--test-reporter=tap",
+      fileURLToPath(generatedUrl),
+      fileURLToPath(new URL("origin-websocket.test.mjs", here)),
+    ],
+    { stdio: "inherit", timeout: 60_000, killSignal: "SIGKILL" },
   );
   if (result.error) throw result.error;
   process.exitCode = result.status ?? 1;
