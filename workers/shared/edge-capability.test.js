@@ -185,6 +185,64 @@ test("rejects overlong lifetimes and any write grant", async () => {
   );
 });
 
+test("rejects ambiguous duplicate authorization tuples for v1, v2, and v3", async () => {
+  const grant = baseClaims().grants[0];
+  const alternate = {
+    ...grant,
+    credential_ref: "github-app:zed-pkg:installation-99",
+  };
+  const versions = [
+    baseClaims(),
+    baseClaims({
+      zed_edge_capability: 2,
+      sid: "session:abc-123",
+      parent_jti: "parent-token-0001",
+    }),
+    v3Claims(),
+  ];
+
+  for (const base of versions) {
+    for (const grants of [
+      [grant, alternate],
+      [alternate, grant],
+      [grant, { ...grant }],
+    ]) {
+      const claims = { ...base, grants };
+      const result =
+        base.zed_edge_capability === 3 ? verifyV3(claims) : verify(claims);
+      await expectCode(result, "duplicate_grant");
+    }
+  }
+});
+
+test("rejects duplicate Cargo crate tuples even with different origins", async () => {
+  const grant = {
+    provider: "cargo-registry",
+    operation: "read",
+    package: "acme/private-rust",
+    resource: "private_rust",
+    origin: "https://registry-one.example",
+    credential_ref: "cargo-registry:one",
+  };
+  await expectCode(
+    verify(baseClaims({
+      grants: [
+        grant,
+        { ...grant, origin: "https://registry-two.example", credential_ref: "cargo-registry:two" },
+      ],
+    })),
+    "duplicate_grant",
+  );
+});
+
+test("permits distinct authorization tuples under the same provider", async () => {
+  const grant = baseClaims().grants[0];
+  const verified = await verify(baseClaims({
+    grants: [grant, { ...grant, resource: "acme/other-private-lib" }],
+  }));
+  assert.equal(verified.grants.length, 2);
+});
+
 test("rejects secret-bearing or otherwise unversioned grant fields", async () => {
   await expectCode(
     verify(
@@ -280,43 +338,6 @@ test("npm grants are scoped to one private package on registry.npmjs.org", async
       }),
     (error) => error instanceof EdgeCapabilityError && error.code === "provider_destination_mismatch",
   );
-});
-
-test("rejects duplicate grant authority irrespective of credential ref, origin, or capability version", async () => {
-  const githubGrant = baseClaims().grants[0];
-  const duplicateGithub = { ...githubGrant, credential_ref: "github-app:other:installation-99" };
-  const cargoGrant = {
-    provider: "cargo-registry",
-    operation: "read",
-    package: "acme/private-rust",
-    resource: "private_rust",
-    origin: "https://cargo.acme.example",
-    credential_ref: "cargo-registry:acme",
-  };
-  const duplicateCargo = {
-    ...cargoGrant,
-    origin: "https://cargo.other.example",
-    credential_ref: "cargo-registry:other",
-  };
-  for (const grants of [
-    [githubGrant, { ...githubGrant }],
-    [githubGrant, duplicateGithub],
-    [cargoGrant, duplicateCargo],
-  ]) {
-    await expectCode(verify(baseClaims({ grants })), "duplicate_grant");
-    await expectCode(verify(baseClaims({
-      zed_edge_capability: 2,
-      sid: "session:abc-123",
-      parent_jti: "parent-token-0001",
-      grants,
-    })), "duplicate_grant");
-    await expectCode(verifyV3(v3Claims({ grants })), "duplicate_grant");
-  }
-
-  const distinct = await verify(baseClaims({
-    grants: [githubGrant, { ...githubGrant, resource: "acme/other-lib" }],
-  }));
-  assert.equal(distinct.grants.length, 2);
 });
 
 test("Cargo fallback rejects same-origin cross-crate and ambiguous paths", async () => {
@@ -648,4 +669,108 @@ test("v1 and v2 remain verifiable without outage context", async () => {
     parent_jti: "parent-token-0001",
   }));
   assert.equal(v2.zed_edge_capability, 2);
+});
+
+test("verifier-local TTL and skew never exceed the signed v1/v2/v3 ceilings", async () => {
+  for (const claims of [
+    baseClaims(),
+    baseClaims({ zed_edge_capability: 2, sid: "session:abc-123", parent_jti: "parent-token-0001" }),
+    v3Claims(),
+  ]) {
+    const token = await sign(claims);
+    for (const overrides of [
+      { maxTtlSeconds: 301 },
+      { clockSkewSeconds: 31 },
+      { maxTtlSeconds: 0 },
+      { clockSkewSeconds: -1 },
+      { maxTtlSeconds: 1.5 },
+      { clockSkewSeconds: Number.POSITIVE_INFINITY },
+      { maxTtlSeconds: "300" },
+      { clockSkewSeconds: NaN },
+    ]) {
+      await expectCode(
+        verifyEdgeCapability(token, {
+          issuer: ISSUER,
+          jwks: jwks(),
+          nowEpochSeconds: NOW,
+          ...overrides,
+          ...(claims.zed_edge_capability === 3 ? { outage: outage() } : {}),
+        }),
+        "invalid_verifier_policy",
+      );
+    }
+  }
+});
+
+test("bounded local verifier policy may tighten lifetime and skew", async () => {
+  const shortToken = await sign(baseClaims({ iat: NOW - 10, nbf: NOW - 10, exp: NOW + 20 }));
+  const accepted = await verifyEdgeCapability(shortToken, {
+    issuer: ISSUER,
+    jwks: jwks(),
+    nowEpochSeconds: NOW,
+    maxTtlSeconds: 30,
+    clockSkewSeconds: 0,
+  });
+  assert.equal(accepted.exp, NOW + 20);
+  await expectCode(
+    verifyEdgeCapability(shortToken, {
+      issuer: ISSUER,
+      jwks: jwks(),
+      nowEpochSeconds: NOW,
+      maxTtlSeconds: 29,
+      clockSkewSeconds: 0,
+    }),
+    "invalid_lifetime",
+  );
+});
+
+test("rejects duplicate eligible JWKS kid regardless of snapshot ordering", async () => {
+  const token = await sign(baseClaims());
+  const otherPair = await crypto.subtle.generateKey(
+    { name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"],
+  );
+  const alternate = await crypto.subtle.exportKey("jwk", otherPair.publicKey);
+  Object.assign(alternate, { kid: publicJwk.kid, alg: "ES256", use: "sig" });
+
+  for (const keys of [[publicJwk, alternate], [alternate, publicJwk]]) {
+    await expectCode(
+      verifyEdgeCapability(token, {
+        issuer: ISSUER, jwks: { keys }, nowEpochSeconds: NOW,
+      }),
+      "ambiguous_kid",
+    );
+  }
+});
+
+test("ignores ineligible same-kid keys without changing verified signing authority", async () => {
+  const token = await sign(baseClaims());
+  const nonSigning = { ...publicJwk, use: "enc" };
+  const wrongCurve = { ...publicJwk, crv: "P-384" };
+  const wrongAlgorithm = { ...publicJwk, alg: "ES384" };
+  const claims = await verifyEdgeCapability(token, {
+    issuer: ISSUER,
+    jwks: { keys: [nonSigning, wrongCurve, publicJwk, wrongAlgorithm] },
+    nowEpochSeconds: NOW,
+  });
+  assert.equal(claims.sub, "user:test");
+});
+
+test("rejects duplicated signing authority for an unrelated kid in trusted snapshot", async () => {
+  const token = await sign(baseClaims());
+  const otherPair = await crypto.subtle.generateKey(
+    { name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"],
+  );
+  const alternate = await crypto.subtle.exportKey("jwk", otherPair.publicKey);
+  Object.assign(alternate, { kid: "other-signing-key", alg: "ES256", use: "sig" });
+  for (const keys of [
+    [publicJwk, alternate, { ...alternate }],
+    [{ ...alternate }, alternate, publicJwk],
+  ]) {
+    await expectCode(
+      verifyEdgeCapability(token, {
+        issuer: ISSUER, jwks: { keys }, nowEpochSeconds: NOW,
+      }),
+      "ambiguous_kid",
+    );
+  }
 });
