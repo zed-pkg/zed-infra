@@ -629,3 +629,107 @@ test("v1 and v2 remain verifiable without outage context", async () => {
   }));
   assert.equal(v2.zed_edge_capability, 2);
 });
+
+test("verifier-local TTL and skew never exceed the signed v1/v2/v3 ceilings", async () => {
+  for (const claims of [
+    baseClaims(),
+    baseClaims({ zed_edge_capability: 2, sid: "session:abc-123", parent_jti: "parent-token-0001" }),
+    v3Claims(),
+  ]) {
+    const token = await sign(claims);
+    for (const overrides of [
+      { maxTtlSeconds: 301 },
+      { clockSkewSeconds: 31 },
+      { maxTtlSeconds: 0 },
+      { clockSkewSeconds: -1 },
+      { maxTtlSeconds: 1.5 },
+      { clockSkewSeconds: Number.POSITIVE_INFINITY },
+      { maxTtlSeconds: "300" },
+      { clockSkewSeconds: NaN },
+    ]) {
+      await expectCode(
+        verifyEdgeCapability(token, {
+          issuer: ISSUER,
+          jwks: jwks(),
+          nowEpochSeconds: NOW,
+          ...overrides,
+          ...(claims.zed_edge_capability === 3 ? { outage: outage() } : {}),
+        }),
+        "invalid_verifier_policy",
+      );
+    }
+  }
+});
+
+test("bounded local verifier policy may tighten lifetime and skew", async () => {
+  const shortToken = await sign(baseClaims({ iat: NOW - 10, nbf: NOW - 10, exp: NOW + 20 }));
+  const accepted = await verifyEdgeCapability(shortToken, {
+    issuer: ISSUER,
+    jwks: jwks(),
+    nowEpochSeconds: NOW,
+    maxTtlSeconds: 30,
+    clockSkewSeconds: 0,
+  });
+  assert.equal(accepted.exp, NOW + 20);
+  await expectCode(
+    verifyEdgeCapability(shortToken, {
+      issuer: ISSUER,
+      jwks: jwks(),
+      nowEpochSeconds: NOW,
+      maxTtlSeconds: 29,
+      clockSkewSeconds: 0,
+    }),
+    "invalid_lifetime",
+  );
+});
+
+test("rejects duplicate eligible JWKS kid regardless of snapshot ordering", async () => {
+  const token = await sign(baseClaims());
+  const otherPair = await crypto.subtle.generateKey(
+    { name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"],
+  );
+  const alternate = await crypto.subtle.exportKey("jwk", otherPair.publicKey);
+  Object.assign(alternate, { kid: publicJwk.kid, alg: "ES256", use: "sig" });
+
+  for (const keys of [[publicJwk, alternate], [alternate, publicJwk]]) {
+    await expectCode(
+      verifyEdgeCapability(token, {
+        issuer: ISSUER, jwks: { keys }, nowEpochSeconds: NOW,
+      }),
+      "ambiguous_kid",
+    );
+  }
+});
+
+test("ignores ineligible same-kid keys without changing verified signing authority", async () => {
+  const token = await sign(baseClaims());
+  const nonSigning = { ...publicJwk, use: "enc" };
+  const wrongCurve = { ...publicJwk, crv: "P-384" };
+  const wrongAlgorithm = { ...publicJwk, alg: "ES384" };
+  const claims = await verifyEdgeCapability(token, {
+    issuer: ISSUER,
+    jwks: { keys: [nonSigning, wrongCurve, publicJwk, wrongAlgorithm] },
+    nowEpochSeconds: NOW,
+  });
+  assert.equal(claims.sub, "user:test");
+});
+
+test("rejects duplicated signing authority for an unrelated kid in trusted snapshot", async () => {
+  const token = await sign(baseClaims());
+  const otherPair = await crypto.subtle.generateKey(
+    { name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"],
+  );
+  const alternate = await crypto.subtle.exportKey("jwk", otherPair.publicKey);
+  Object.assign(alternate, { kid: "other-signing-key", alg: "ES256", use: "sig" });
+  for (const keys of [
+    [publicJwk, alternate, { ...alternate }],
+    [{ ...alternate }, alternate, publicJwk],
+  ]) {
+    await expectCode(
+      verifyEdgeCapability(token, {
+        issuer: ISSUER, jwks: { keys }, nowEpochSeconds: NOW,
+      }),
+      "ambiguous_kid",
+    );
+  }
+});
