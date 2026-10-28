@@ -7,6 +7,13 @@ const sourceUrl = new URL("edge-publish.test.mjs", here);
 const generatedUrl = new URL(".edge-publish.generated.test.mjs", here);
 const source = readFileSync(sourceUrl, "utf8");
 
+const v4Import = 'import { Miniflare, Log, LogLevel, convertV4MiniflareOptions } from "miniflare";';
+const v5Import = 'import { Miniflare, Log, LogLevel } from "miniflare";';
+const v4Open = `  const mf = new Miniflare(\n    convertV4MiniflareOptions({`;
+const v5Open = `  const mf = new Miniflare({`;
+const v4Close = `      log: new Log(LogLevel.ERROR),\n    }),\n  );`;
+const v5Close = `      log: new Log(LogLevel.ERROR),\n    },\n  );`;
+
 const registryModules = `          modules: [
             "registry-proxy/src/index.js",
             "shared/github-fallback.js",
@@ -39,9 +46,23 @@ if (!source.includes(registryModules) || !source.includes(cdnModules)) {
   throw new Error("edge-publish Miniflare harness shape drifted; update the graph-crawl launcher explicitly");
 }
 
-const generated = source.replace(registryModules, registryGraph).replace(cdnModules, cdnGraph);
-if (generated.includes(registryModules) || generated.includes(cdnModules)) {
-  throw new Error("edge-publish Miniflare module-list replacement was incomplete");
+if (!source.includes(v4Import) || !source.includes(v4Open) || !source.includes(v4Close)) {
+  throw new Error("edge-publish Miniflare v4 wrapper drifted; update the graph-crawl launcher explicitly");
+}
+
+const generated = source
+  .replace(v4Import, v5Import)
+  .replace(v4Open, v5Open)
+  .replace(v4Close, v5Close)
+  .replace(registryModules, registryGraph)
+  .replace(cdnModules, cdnGraph);
+
+if (
+  generated.includes(registryModules) ||
+  generated.includes(cdnModules) ||
+  generated.includes("convertV4MiniflareOptions")
+) {
+  throw new Error("edge-publish Miniflare v5 graph-crawl replacement was incomplete");
 }
 
 writeFileSync(generatedUrl, generated, { encoding: "utf8", mode: 0o600 });
