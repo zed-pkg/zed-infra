@@ -103,6 +103,24 @@ export async function verifyEdgeCapability(token, options) {
     throw new TypeError("issuer is required");
   }
 
+  // Local verifier settings may only narrow, never widen, the signed contract.
+  // Validate *before* parsing JWT authority claims or importing verification keys.
+  const maxTtlSeconds = options.maxTtlSeconds ?? EDGE_CAPABILITY_MAX_TTL_SECONDS;
+  const clockSkewSeconds = options.clockSkewSeconds ?? EDGE_CAPABILITY_CLOCK_SKEW_SECONDS;
+  if (
+    !Number.isSafeInteger(maxTtlSeconds) ||
+    maxTtlSeconds < 1 ||
+    maxTtlSeconds > EDGE_CAPABILITY_MAX_TTL_SECONDS ||
+    !Number.isSafeInteger(clockSkewSeconds) ||
+    clockSkewSeconds < 0 ||
+    clockSkewSeconds > EDGE_CAPABILITY_CLOCK_SKEW_SECONDS
+  ) {
+    throw new EdgeCapabilityError(
+      "invalid_verifier_policy",
+      "verifier TTL/skew overrides must not expand the signed capability contract",
+    );
+  }
+
   const parts = token.split(".");
   if (parts.length !== 3 || parts.some((part) => part.length === 0)) {
     throw new EdgeCapabilityError("invalid_token", "capability must have three JWT segments");
@@ -122,18 +140,33 @@ export async function verifyEdgeCapability(token, options) {
   }
 
   const jwks = parseJwks(options.jwks);
-  const jwk = jwks.keys.find(
+  // Reject ambiguous eligible signing authorities independently of array order.
+  // Ineligible keys cannot change which P-256/ES256 signing key is trusted.
+  const usable = jwks.keys.filter(
     (candidate) =>
       candidate &&
-      candidate.kid === header.kid &&
+      typeof candidate.kid === "string" &&
+      JTI.test(candidate.kid) &&
       candidate.kty === "EC" &&
       candidate.crv === "P-256" &&
       (!candidate.alg || candidate.alg === "ES256") &&
       (!candidate.use || candidate.use === "sig"),
   );
-  if (!jwk) {
+  const eligible = usable.filter((candidate) => candidate.kid === header.kid);
+  if (eligible.length === 0) {
     throw new EdgeCapabilityError("unknown_kid", "no pinned verification key matches the JWT kid");
   }
+  // Snapshot-wide uniqueness matters even if the currently requested kid is
+  // valid: an unrelated duplicate makes the same trust set ambiguous on
+  // subsequent rotation and must never be admitted as healthy.
+  const seen = new Set();
+  for (const candidate of usable) {
+    if (seen.has(candidate.kid)) {
+      throw new EdgeCapabilityError("ambiguous_kid", "multiple eligible verification keys share a JWT kid");
+    }
+    seen.add(candidate.kid);
+  }
+  const [jwk] = eligible;
 
   let key;
   try {
@@ -164,8 +197,8 @@ export async function verifyEdgeCapability(token, options) {
     issuer: options.issuer,
     audience: options.audience ?? EDGE_CAPABILITY_AUDIENCE,
     nowEpochSeconds,
-    maxTtlSeconds: options.maxTtlSeconds ?? EDGE_CAPABILITY_MAX_TTL_SECONDS,
-    clockSkewSeconds: options.clockSkewSeconds ?? EDGE_CAPABILITY_CLOCK_SKEW_SECONDS,
+    maxTtlSeconds,
+    clockSkewSeconds,
   });
   if (verified.zed_edge_capability === EDGE_CAPABILITY_VERSION_V3) {
     validateOutageAdmission(verified, options.outage, nowEpochSeconds);
@@ -401,22 +434,19 @@ function validateClaims(rawClaims, policy) {
     throw new EdgeCapabilityError("invalid_grants", "capability must contain 1..16 grants");
   }
   const grants = rawClaims.grants.map(validateGrant);
-  // Provider request planning selects by this exact tuple. Reject duplicates
-  // before a credential_ref (or a Cargo origin) becomes array-order dependent.
-  // Origin is intentionally excluded: two origins for the same tuple are
-  // ambiguous until the request contract itself carries an origin identity.
-  const grantIdentities = new Set();
+  // Provider planning selects by this exact authorization tuple. Duplicate
+  // entries would make the selected credential_ref (or origin) order-dependent.
+  // JSON tuple encoding avoids collisions from separators inside coordinates.
+  const grantKeys = new Set();
   for (const grant of grants) {
-    const identity = JSON.stringify([
-      grant.provider, grant.operation, grant.package, grant.resource,
-    ]);
-    if (grantIdentities.has(identity)) {
+    const key = JSON.stringify([grant.provider, grant.package, grant.resource]);
+    if (grantKeys.has(key)) {
       throw new EdgeCapabilityError(
         "duplicate_grant",
-        "capability contains more than one grant for the same resource authority",
+        "capability has ambiguous grants for the same provider/package/resource",
       );
     }
-    grantIdentities.add(identity);
+    grantKeys.add(key);
   }
 
   return Object.freeze({
