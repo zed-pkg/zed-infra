@@ -624,3 +624,54 @@ test("bounded local verifier policy may tighten lifetime and skew", async () => 
     "invalid_lifetime",
   );
 });
+
+test("rejects duplicate eligible JWKS kid regardless of snapshot ordering", async () => {
+  const token = await sign(baseClaims());
+  const otherPair = await crypto.subtle.generateKey(
+    { name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"],
+  );
+  const alternate = await crypto.subtle.exportKey("jwk", otherPair.publicKey);
+  Object.assign(alternate, { kid: publicJwk.kid, alg: "ES256", use: "sig" });
+
+  for (const keys of [[publicJwk, alternate], [alternate, publicJwk]]) {
+    await expectCode(
+      verifyEdgeCapability(token, {
+        issuer: ISSUER, jwks: { keys }, nowEpochSeconds: NOW,
+      }),
+      "ambiguous_kid",
+    );
+  }
+});
+
+test("ignores ineligible same-kid keys without changing verified signing authority", async () => {
+  const token = await sign(baseClaims());
+  const nonSigning = { ...publicJwk, use: "enc" };
+  const wrongCurve = { ...publicJwk, crv: "P-384" };
+  const wrongAlgorithm = { ...publicJwk, alg: "ES384" };
+  const claims = await verifyEdgeCapability(token, {
+    issuer: ISSUER,
+    jwks: { keys: [nonSigning, wrongCurve, publicJwk, wrongAlgorithm] },
+    nowEpochSeconds: NOW,
+  });
+  assert.equal(claims.sub, "user:test");
+});
+
+test("rejects duplicated signing authority for an unrelated kid in trusted snapshot", async () => {
+  const token = await sign(baseClaims());
+  const otherPair = await crypto.subtle.generateKey(
+    { name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"],
+  );
+  const alternate = await crypto.subtle.exportKey("jwk", otherPair.publicKey);
+  Object.assign(alternate, { kid: "other-signing-key", alg: "ES256", use: "sig" });
+  for (const keys of [
+    [publicJwk, alternate, { ...alternate }],
+    [{ ...alternate }, alternate, publicJwk],
+  ]) {
+    await expectCode(
+      verifyEdgeCapability(token, {
+        issuer: ISSUER, jwks: { keys }, nowEpochSeconds: NOW,
+      }),
+      "ambiguous_kid",
+    );
+  }
+});
