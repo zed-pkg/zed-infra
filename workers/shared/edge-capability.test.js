@@ -340,6 +340,47 @@ test("npm grants are scoped to one private package on registry.npmjs.org", async
   );
 });
 
+test("Cargo fallback rejects same-origin cross-crate and ambiguous paths", async () => {
+  const claims = await verify(baseClaims({
+    grants: [{
+      provider: "cargo-registry",
+      operation: "read",
+      package: "acme/private-rust",
+      resource: "private_rust",
+      origin: "https://cargo.acme.example",
+      credential_ref: "cargo-registry:acme",
+    }],
+  }));
+  const request = (url) => planProviderRequest(claims, {
+    provider: "cargo-registry",
+    package: "acme/private-rust",
+    resource: "private_rust",
+    url,
+  });
+  for (const url of [
+    "https://cargo.acme.example/api/v1/crates/other_crate/1.2.3/download",
+    "https://cargo.acme.example/api/v1/crates/private_rust",
+    "https://cargo.acme.example/api/v1/crates/private_rust/1.2.3/download?crate=other",
+    "https://cargo.acme.example/api/v1/crates/private%5Frust/1.2.3/download",
+    "https://cargo.acme.example/api/v1/crates/other_crate/../private_rust/1.2.3/download",
+    "https://cargo.acme.example/api/v1/crates/private_rust/%31.2.3/download",
+    "https://cargo.acme.example/api/v1/crates/private_rust/1.2.3/download/extra",
+    "https://cargo.acme.example/admin",
+  ]) {
+    assert.throws(request.bind(null, url), (error) =>
+      error instanceof EdgeCapabilityError && error.code === "provider_destination_mismatch",
+      url);
+  }
+  assert.equal(
+    request("https://cargo.acme.example/api/v1/crates/private_rust/1.2.3/download").resource,
+    "private_rust",
+  );
+  assert.equal(
+    request("https://cargo.acme.example/api/v1/crates/private_rust/1.2.3-alpha.1/download").resource,
+    "private_rust",
+  );
+});
+
 test("private Cargo grants require an exact credential-free HTTPS registry origin", async () => {
   const claims = await verify(
     baseClaims({
