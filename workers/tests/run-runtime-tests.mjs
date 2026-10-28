@@ -70,7 +70,7 @@ try {
   const result = spawnSync(
     process.execPath,
     ["--test", fileURLToPath(generatedUrl), fileURLToPath(new URL("origin-websocket.test.mjs", here))],
-    { stdio: "inherit" },
+    { stdio: "inherit", timeout: 180_000, killSignal: "SIGKILL" },
   );
   if (result.error) throw result.error;
   process.exitCode = result.status ?? 1;
