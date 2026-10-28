@@ -185,6 +185,64 @@ test("rejects overlong lifetimes and any write grant", async () => {
   );
 });
 
+test("rejects ambiguous duplicate authorization tuples for v1, v2, and v3", async () => {
+  const grant = baseClaims().grants[0];
+  const alternate = {
+    ...grant,
+    credential_ref: "github-app:zed-pkg:installation-99",
+  };
+  const versions = [
+    baseClaims(),
+    baseClaims({
+      zed_edge_capability: 2,
+      sid: "session:abc-123",
+      parent_jti: "parent-token-0001",
+    }),
+    v3Claims(),
+  ];
+
+  for (const base of versions) {
+    for (const grants of [
+      [grant, alternate],
+      [alternate, grant],
+      [grant, { ...grant }],
+    ]) {
+      const claims = { ...base, grants };
+      const result =
+        base.zed_edge_capability === 3 ? verifyV3(claims) : verify(claims);
+      await expectCode(result, "duplicate_grant");
+    }
+  }
+});
+
+test("rejects duplicate Cargo crate tuples even with different origins", async () => {
+  const grant = {
+    provider: "cargo-registry",
+    operation: "read",
+    package: "acme/private-rust",
+    resource: "private_rust",
+    origin: "https://registry-one.example",
+    credential_ref: "cargo-registry:one",
+  };
+  await expectCode(
+    verify(baseClaims({
+      grants: [
+        grant,
+        { ...grant, origin: "https://registry-two.example", credential_ref: "cargo-registry:two" },
+      ],
+    })),
+    "duplicate_grant",
+  );
+});
+
+test("permits distinct authorization tuples under the same provider", async () => {
+  const grant = baseClaims().grants[0];
+  const verified = await verify(baseClaims({
+    grants: [grant, { ...grant, resource: "acme/other-private-lib" }],
+  }));
+  assert.equal(verified.grants.length, 2);
+});
+
 test("rejects secret-bearing or otherwise unversioned grant fields", async () => {
   await expectCode(
     verify(
