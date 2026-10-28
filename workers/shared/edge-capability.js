@@ -23,6 +23,9 @@ const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const GITHUB_REPOSITORY = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const NPM_SCOPED_PACKAGE = /^@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*$/;
 const CARGO_CRATE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
+// Strict, versioned private Cargo download form; no encoded path aliases,
+// traversal, queries, fragments or arbitrary broker destinations.
+const PRIVATE_CARGO_DOWNLOAD_V1 = /^\/api\/v1\/crates\/([A-Za-z0-9][A-Za-z0-9_-]{0,127})\/([0-9][A-Za-z0-9.+-]{0,127})\/download$/;
 const CREDENTIAL_REF = /^[A-Za-z0-9][A-Za-z0-9:._/-]{0,191}$/;
 const JTI = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,191}$/;
 const LINEAGE_ID = /^[A-Za-z0-9][A-Za-z0-9:._/-]{0,255}$/;
@@ -620,30 +623,26 @@ function assertProviderDestination(grant, url, rawUrl) {
       return;
     }
     case "cargo-registry": {
-      if (!grant.origin || url.origin !== grant.origin) {
-        throw new EdgeCapabilityError(
-          "provider_destination_mismatch",
-          "Cargo URL is outside the authorized private registry origin",
-        );
-      }
-      // Contract v1 admits only Cargo's resource-bound crate download form.
-      // Private registries can have custom paths; do not guess those layouts
-      // and never fall back to an origin-only credential authorization.
-      // WHATWG URL normalizes dot segments; require the transmitted raw path
-      // to match the validated path so traversal cannot be silently erased.
-      const rawPath = new RegExp("^https://[^/?#]+(/[^?#]*)?").exec(rawUrl)?.[1] ?? "/";
-      const match = new RegExp("^/api/v1/crates/([^/]+)/([^/]+)/download$").exec(url.pathname);
+      // URL() normalizes dot segments, so validate the *original* path before
+      // any canonicalization can hide traversal or encoded crate aliases.
+      const rawPath =
+        typeof rawUrl === "string" && grant.origin &&
+        rawUrl.startsWith(`${grant.origin}/`)
+          ? rawUrl.slice(grant.origin.length)
+          : "";
+      const download = PRIVATE_CARGO_DOWNLOAD_V1.exec(rawPath);
       if (
-        !match ||
-        rawPath !== url.pathname ||
-        match[1] !== grant.resource ||
-        !new RegExp("^[0-9]+([.][0-9]+){2}(-[0-9A-Za-z.-]+)?([+][0-9A-Za-z.-]+)?$").test(match[2]) ||
+        !grant.origin ||
+        url.origin !== grant.origin ||
+        !download ||
+        download[1] !== grant.resource ||
+        url.pathname !== rawPath ||
         url.search ||
         url.hash
       ) {
         throw new EdgeCapabilityError(
           "provider_destination_mismatch",
-          "Cargo URL must be an unambiguous download for the granted crate",
+          "Cargo fallback requires the exact authorized crate in private-download-v1",
         );
       }
       return;
